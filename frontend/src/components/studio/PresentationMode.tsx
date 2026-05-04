@@ -76,6 +76,8 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
   const [showAutoSettings, setShowAutoSettings] = useState(false)
   const autoProgressRef                 = useRef(0)
   const [autoProgress, setAutoProgress] = useState(0)
+  const [transition, setTransition]     = useState<"fade" | "slide" | "zoom" | "none">("fade")
+  const [transDir, setTransDir]         = useState<1 | -1>(1)
   // Drawing tools
   const [drawMode, setDrawMode]         = useState(false)
   const [penColor, setPenColor]         = useState("#FF3B30")
@@ -141,15 +143,16 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
     if (transitioning) return
     const clamped = Math.max(1, Math.min(slideCount, n))
     if (clamped === current) return
-    // record time spent on current slide
+    setTransDir(clamped > current ? 1 : -1)
     setSlideTimes((prev) => ({ ...prev, [current]: (prev[current] ?? 0) + (elapsed - slideStart) }))
     setSlideStart(elapsed)
     setTransitioning(true)
+    const dur = transition === "none" ? 0 : 180
     setTimeout(() => {
       setCurrent(clamped)
       setTransitioning(false)
-    }, 120)
-  }, [current, slideCount, transitioning, elapsed, slideStart])
+    }, dur)
+  }, [current, slideCount, transitioning, elapsed, slideStart, transition])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -199,8 +202,14 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
           width: "100%",
           aspectRatio: "16/9",
           maxHeight: showNotes ? "72vh" : "100vh",
-          transition: "opacity 0.12s, max-height 0.2s",
-          opacity: transitioning ? 0 : 1,
+          transition: transition === "none" ? "max-height 0.2s" :
+                      transition === "fade"  ? "opacity 0.18s ease, max-height 0.2s" :
+                      transition === "slide" ? "transform 0.18s ease, opacity 0.1s, max-height 0.2s" :
+                                              "transform 0.18s ease, opacity 0.12s, max-height 0.2s",
+          opacity: transitioning && transition !== "slide" ? 0 : 1,
+          transform: transitioning
+            ? transition === "slide" ? `translateX(${transDir * 8}%)` : transition === "zoom" ? "scale(0.93)" : "none"
+            : "none",
         }}
         onClick={drawMode ? (e) => e.stopPropagation() : undefined}
       >
@@ -354,6 +363,27 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
       >
         Timer
       </button>
+
+      {/* transition picker */}
+      <div
+        className="absolute top-3 right-[15rem] flex items-center gap-0.5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {(["none", "fade", "slide", "zoom"] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTransition(t)}
+            title={`Transition: ${t}`}
+            className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors ${
+              transition === t
+                ? "text-white/70 border-white/30 bg-white/10"
+                : "text-white/25 border-white/10 hover:text-white/50"
+            }`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
 
       {/* draw mode toggle */}
       <button
