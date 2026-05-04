@@ -271,9 +271,34 @@ interface StyleTabProps {
   onCommit: () => void
 }
 
+function ThemeSwatches({ colors, onPick }: { colors: Record<string, string>; onPick: (hex: string) => void }) {
+  const entries = Object.entries(colors)
+  if (!entries.length) return null
+  return (
+    <div className="flex flex-wrap gap-1 mb-1">
+      {entries.map(([name, hex]) => (
+        <button
+          key={name}
+          title={`${name}: ${hex}`}
+          onClick={() => onPick(hex)}
+          className="w-4 h-4 rounded border border-edge/50 hover:scale-125 transition-transform shrink-0"
+          style={{ background: hex }}
+        />
+      ))}
+    </div>
+  )
+}
+
 function StyleTab({ element, docId, slideN, onCommit }: StyleTabProps) {
   const [style, setStyle] = useState<ElementStyleData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [themeColors, setThemeColors] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    fetchThemeColors(docId)
+      .then((r) => setThemeColors(r.theme_colors))
+      .catch(() => {})
+  }, [docId])
 
   useEffect(() => {
     setLoading(true)
@@ -357,10 +382,13 @@ function StyleTab({ element, docId, slideN, onCommit }: StyleTabProps) {
           </FieldRow>
           {(style.fill_type === "solid" || style.fill_type === "gradient") && (
             <FieldRow label="Color">
-              <ColorInput
-                value={style.fill_color ?? "#FFFFFF"}
-                onChange={(v) => patch({ fill_color: v })}
-              />
+              <div>
+                <ThemeSwatches colors={themeColors} onPick={(v) => patch({ fill_color: v })} />
+                <ColorInput
+                  value={style.fill_color ?? "#FFFFFF"}
+                  onChange={(v) => patch({ fill_color: v })}
+                />
+              </div>
             </FieldRow>
           )}
         </>
@@ -369,10 +397,13 @@ function StyleTab({ element, docId, slideN, onCommit }: StyleTabProps) {
       {/* Line / Border */}
       <SectionHead title="Border" />
       <FieldRow label="Color">
-        <ColorInput
-          value={style.line_color ?? "#000000"}
-          onChange={(v) => patch({ line_color: v })}
-        />
+        <div>
+          <ThemeSwatches colors={themeColors} onPick={(v) => patch({ line_color: v })} />
+          <ColorInput
+            value={style.line_color ?? "#000000"}
+            onChange={(v) => patch({ line_color: v })}
+          />
+        </div>
       </FieldRow>
       <FieldRow label="Width">
         <NumInput
