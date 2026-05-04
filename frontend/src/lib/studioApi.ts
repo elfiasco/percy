@@ -172,6 +172,20 @@ export async function updateElementPosition(
   )
 }
 
+export async function replaceImage(
+  docId: string,
+  slideN: number,
+  elementId: string,
+  file: File,
+): Promise<{ ok: boolean; bytes: number; format: string }> {
+  const form = new FormData()
+  form.append("file", file)
+  return apiFetch(
+    `${BASE}/docs/${docId}/slides/${slideN}/elements/${encodeURIComponent(elementId)}/replace-image`,
+    { method: "POST", body: form },
+  )
+}
+
 export async function searchText(docId: string, q: string): Promise<TextSearchMatch[]> {
   return apiFetch<TextSearchMatch[]>(`${BASE}/docs/${docId}/search-text?q=${encodeURIComponent(q)}`)
 }

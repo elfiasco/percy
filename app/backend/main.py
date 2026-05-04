@@ -3338,6 +3338,49 @@ def update_element_text(doc_id: str, n: int, element_id: str, req: TextUpdateReq
     return _serialize_element_text_content(el, el.element_type)
 
 
+# ── Image replacement ─────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/replace-image")
+async def replace_image(doc_id: str, n: int, element_id: str, file: UploadFile = File(...)):
+    """Replace the image bytes in a BridgeImage element with a newly uploaded file.
+
+    Accepts any image format that PIL can decode (jpg, png, gif, webp, etc.).
+    After updating the model the slide is re-rendered automatically.
+    """
+    el = _find_element(doc_id, n, element_id)
+    if getattr(el, "element_type", "") != "BridgeImage":
+        raise HTTPException(400, f"Element {element_id!r} is not a BridgeImage")
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, "Uploaded file is empty")
+
+    # Detect format from PIL rather than trusting the MIME type
+    try:
+        from PIL import Image as _PIL
+        import io as _io
+        with _PIL.open(_io.BytesIO(raw)) as img:
+            fmt = img.format.lower() if img.format else "png"
+    except Exception:
+        fmt = (file.filename or "").rsplit(".", 1)[-1].lower() or "png"
+
+    _snapshot_doc(doc_id)
+    from percy.bridge.elements import ImageData as _ImageData  # type: ignore[attr-defined]
+    el.image_data = _ImageData(image_bytes=raw, image_format=fmt)
+
+    # Re-render just this slide
+    d = _require(doc_id)
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    try:
+        from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+        _rbs(d["doc"], bridge_dir, slide_numbers=[n])
+    except Exception as exc:
+        log.warning("replace-image: re-render failed (non-fatal): %s", exc)
+
+    log.info("replace-image: replaced image on slide %d element %s (%d bytes, fmt=%s)", n, element_id, len(raw), fmt)
+    return {"ok": True, "bytes": len(raw), "format": fmt}
+
+
 # ── Find & Replace ────────────────────────────────────────────────────────────
 
 def _element_plain_text(el: Any) -> str:
