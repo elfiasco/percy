@@ -362,6 +362,17 @@ export async function ungroupElement(
   })
 }
 
+export interface SlideOutlineEntry {
+  slide_n: number
+  title: string
+  body_preview: string
+  title_el_id: string | null
+}
+
+export async function fetchDocumentOutline(docId: string): Promise<{ slides: SlideOutlineEntry[] }> {
+  return apiFetch(`${BASE}/docs/${docId}/outline`)
+}
+
 export async function generateSlideContent(
   docId: string,
   slideN: number,

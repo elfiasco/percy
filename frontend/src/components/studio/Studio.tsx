@@ -14,6 +14,7 @@ import CommandPalette from "./CommandPalette"
 import SlideSorterModal from "./SlideSorterModal"
 import FindReplacePanel from "./FindReplacePanel"
 import KeyboardShortcutsModal from "./KeyboardShortcutsModal"
+import OutlinePanel from "./OutlinePanel"
 
 interface Props {
   doc: DocInfo
@@ -32,6 +33,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const [localSlideCount, setLocalSlideCount] = useState(doc.slide_count)
   const [savingToCloud, setSavingToCloud]     = useState(false)
   const [generating, setGenerating]           = useState(false)
+  const [outlineOpen, setOutlineOpen]         = useState(false)
   const [shortcutsOpen, setShortcutsOpen]       = useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [slideSorterOpen, setSlideSorterOpen]       = useState(false)
@@ -503,10 +505,21 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         onUngroupElement={selectedElement?.type === "BridgeGroup" ? handleUngroupElement : undefined}
         onGenerateSlide={handleGenerateSlide}
         generating={generating}
+        outlineOpen={outlineOpen}
+        onToggleOutline={() => setOutlineOpen((o) => !o)}
       />
 
       {/* ── main area: slide strip + canvas + properties ── */}
       <div className="flex flex-1 min-h-0 min-w-0 relative">
+        {outlineOpen && (
+          <OutlinePanel
+            docId={doc.doc_id}
+            slideCount={localSlideCount}
+            selectedSlide={selectedSlide}
+            refreshKey={refreshKey}
+            onJumpToSlide={handleSlideSelect}
+          />
+        )}
         <StudioSlideStrip
           docId={doc.doc_id}
           slideCount={localSlideCount}

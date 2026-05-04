@@ -115,6 +115,8 @@ interface Props {
   onUngroupElement?: () => void
   onGenerateSlide?: (prompt: string) => void
   generating?: boolean
+  outlineOpen?: boolean
+  onToggleOutline?: () => void
 }
 
 export default function StudioToolbar({
@@ -136,6 +138,8 @@ export default function StudioToolbar({
   onUngroupElement,
   onGenerateSlide,
   generating,
+  outlineOpen,
+  onToggleOutline,
 }: Props) {
   const [insertOpen, setInsertOpen] = useState(false)
   const [copyToOpen, setCopyToOpen] = useState(false)
@@ -618,6 +622,20 @@ export default function StudioToolbar({
               <span className="inline-block w-2.5 h-2.5 border border-sky-300 border-t-transparent rounded-full animate-spin" />
             )}
             ↑ Cloud
+          </button>
+        )}
+
+        {onToggleOutline && (
+          <button
+            onClick={onToggleOutline}
+            title="Toggle outline panel"
+            className={`w-7 h-7 flex items-center justify-center rounded border text-xs transition-colors ${
+              outlineOpen
+                ? "border-accent/50 text-accent bg-accent/10"
+                : "border-edge text-muted hover:text-slate-200 hover:bg-white/10"
+            }`}
+          >
+            ≡
           </button>
         )}
 

@@ -4812,6 +4812,52 @@ if _CLOUD_API_URL:
                             media_type="application/json")
 
 
+@app.get("/api/docs/{doc_id}/outline")
+def get_document_outline(doc_id: str):
+    """Return slide titles and first-body-text for a quick document outline view."""
+    d = _require(doc_id)
+    doc = d["doc"]
+
+    def _first_text(el: Any) -> str | None:
+        tc = getattr(el, "text_content", None)
+        if tc is None: return None
+        for para in (getattr(tc, "paragraphs", None) or []):
+            for run in (getattr(para, "runs", None) or []):
+                t = getattr(run, "text", None)
+                if t and t.strip():
+                    return t.strip()
+        return None
+
+    slides_outline = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        title_text   = None
+        body_text    = None
+        title_el_id  = None
+        for i, el in enumerate(slide.elements):
+            ident = getattr(el, "identification", None)
+            name  = (getattr(ident, "shape_name", "") or "").lower()
+            if "title" in name and title_text is None:
+                title_text  = _first_text(el)
+                title_el_id = _element_id(el, i)
+            elif title_text is None or body_text is None:
+                t = _first_text(el)
+                if t:
+                    if title_text is None:
+                        title_text  = t
+                        title_el_id = _element_id(el, i)
+                    elif body_text is None:
+                        body_text = t
+
+        slides_outline.append({
+            "slide_n":      slide.slide_number,
+            "title":        title_text or "",
+            "body_preview": body_text or "",
+            "title_el_id":  title_el_id,
+        })
+
+    return {"slides": slides_outline}
+
+
 class GenerateSlideRequest(BaseModel):
     prompt: str
     slide_n: int = 1
