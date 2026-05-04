@@ -204,6 +204,12 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         return
       }
 
+      // Ctrl+Shift+C → copy style (format painter activate)
+      if ((e.key === "c" || e.key === "C") && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+        if (selectedElementRef.current) { e.preventDefault(); handleFormatPaint() }
+        return
+      }
+
       // Ctrl+C → copy element to clipboard
       if ((e.key === "c" || e.key === "C") && (e.ctrlKey || e.metaKey)) {
         const el = selectedElementRef.current

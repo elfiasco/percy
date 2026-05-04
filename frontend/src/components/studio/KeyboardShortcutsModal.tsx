@@ -29,6 +29,7 @@ const SECTIONS = [
       { keys: "Delete / Backspace", desc: "Delete selected element(s)" },
       { keys: "Ctrl+C",             desc: "Copy element to clipboard" },
       { keys: "Ctrl+V",             desc: "Paste element on current slide" },
+      { keys: "Ctrl+Shift+C",       desc: "Format Painter — copy element style" },
       { keys: "Ctrl+D",             desc: "Duplicate selected element(s)" },
       { keys: "Ctrl+Z",             desc: "Undo" },
       { keys: "Ctrl+Y / Ctrl+Shift+Z", desc: "Redo" },
