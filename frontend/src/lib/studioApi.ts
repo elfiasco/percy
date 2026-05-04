@@ -55,6 +55,11 @@ export async function setSlideBackground(docId: string, n: number, color: string
   return apiFetch(`${BASE}/docs/${docId}/slides/${n}/background${params}`, { method: "PATCH" })
 }
 
+export async function setAllSlidesBackground(docId: string, color: string | null): Promise<{ background_color: string | null; slides_updated: number }> {
+  const params = color ? `?color=${encodeURIComponent(color)}` : ""
+  return apiFetch(`${BASE}/docs/${docId}/background-all${params}`, { method: "PATCH" })
+}
+
 export async function getSlideNotes(docId: string, n: number): Promise<{ notes_text: string }> {
   return apiFetch(`${BASE}/docs/${docId}/slides/${n}/notes`)
 }

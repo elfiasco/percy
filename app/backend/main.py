@@ -2940,6 +2940,18 @@ def set_slide_background(doc_id: str, n: int, color: str | None = None):
     return {"background_color": slide.background_color}
 
 
+@app.patch("/api/docs/{doc_id}/background-all")
+def set_all_slides_background(doc_id: str, color: str | None = None):
+    """Set the same background color on every slide in the document."""
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    for slide in d["doc"].slides:
+        slide.background_color = color
+        slide.background_gradient_stops = []
+    log.info("studio: set all-slide background to %s in %s", color, doc_id)
+    return {"background_color": color, "slides_updated": len(d["doc"].slides)}
+
+
 @app.get("/api/docs/{doc_id}/slides/{n}/notes")
 def get_slide_notes(doc_id: str, n: int):
     """Return speaker notes text for a slide."""

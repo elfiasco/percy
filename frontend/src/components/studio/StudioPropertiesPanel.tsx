@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react"
 import type { StudioElement, ElementStyleData } from "../../lib/studioTypes"
-import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, replaceImage, fetchThemeColors, fetchDocStats } from "../../lib/studioApi"
+import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, setAllSlidesBackground, replaceImage, fetchThemeColors, fetchDocStats } from "../../lib/studioApi"
 import type { DocStats } from "../../lib/studioApi"
 import StudioTextPanel from "./StudioTextPanel"
 
@@ -597,6 +597,20 @@ function SlidePropertiesPanel({ docId, slideN, onCommit }: { docId: string; slid
                    hover:bg-white/10 transition-colors disabled:opacity-40"
       >
         Clear Background
+      </button>
+      <button
+        onClick={async () => {
+          setSaving(true)
+          try { await setAllSlidesBackground(docId, bgColor); onCommit() }
+          catch (e) { console.error("set all bg failed:", e) }
+          finally { setSaving(false) }
+        }}
+        disabled={saving}
+        className="mt-1 text-[10px] px-3 py-1 rounded bg-white/5 text-muted/70 border border-edge
+                   hover:bg-white/10 hover:text-muted transition-colors disabled:opacity-40"
+        title="Apply this background color to every slide"
+      >
+        Apply to All Slides
       </button>
 
       {themeColors && Object.keys(themeColors).length > 0 && (
