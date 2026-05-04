@@ -55,6 +55,7 @@ const SECTIONS = [
       { keys: "PageUp / PageDown",  desc: "Previous / next slide" },
       { keys: "?",                  desc: "Show this help" },
       { keys: "F5",                 desc: "Start presentation (fullscreen slideshow)" },
+      { keys: "N (in present)",     desc: "Toggle presenter notes overlay" },
       { keys: "Notes bar",          desc: "Speaker notes (bottom of canvas)" },
     ],
   },

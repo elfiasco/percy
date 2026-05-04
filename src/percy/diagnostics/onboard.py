@@ -1637,6 +1637,18 @@ def _rPr_attr_int(rPr: Any, attr: str) -> int | None:
         return None
 
 
+def _ooxml_baseline_to_fraction(raw: int | None) -> float | None:
+    """Convert OOXML baseline attr (thousandths of %) to bridge fraction.
+
+    OOXML: positive=up (superscript), e.g. 30000 = 30% up.
+    Bridge convention: negative=up, positive=down, unit = fraction of font-size.
+    So: bridge = -(raw / 100000).
+    """
+    if raw is None:
+        return None
+    return -(raw / 100000.0)
+
+
 def _rPr_attr_str(rPr: Any, attr: str) -> str | None:
     if rPr is None:
         return None
@@ -1802,7 +1814,7 @@ def _text_paragraphs_from_frame(text_frame: Any, ctx: _OnboardContext) -> list[T
                 font_color=_font_color(safe_get(lambda r=run: r.font), ctx.theme_colors),
                 font_caps=_run_font_caps(run),
                 char_spacing=_rPr_attr_int(rPr, "spc"),
-                baseline_shift=_rPr_attr_int(rPr, "baseline"),
+                baseline_shift=_ooxml_baseline_to_fraction(_rPr_attr_int(rPr, "baseline")),
                 strikethrough=_rPr_attr_str(rPr, "strike"),
                 hyperlink=_run_hyperlink(run),
             )
@@ -2902,7 +2914,7 @@ def _text_body_insets(shape: Any) -> dict:
 def _text_frame(shape: Any) -> TextFrame:
     font_scale, ln_spc_reduction = _read_norm_autofit(shape)
     return TextFrame(
-        word_wrap=safe_get(lambda: shape.text_frame.word_wrap, True),
+        word_wrap=safe_get(lambda: shape.text_frame.word_wrap) is not False,
         autofit_type=enum_name(safe_get(lambda: shape.text_frame.auto_size)) or "shrink",
         vertical_anchor=_resolve_vertical_anchor(shape),
         font_scale=font_scale,
@@ -2956,7 +2968,7 @@ def _shape_text_frame(shape: Any) -> ShapeTextFrame:
         return ShapeTextFrame()
     _font_scale, _ln_spc = _read_norm_autofit(shape)
     return ShapeTextFrame(
-        word_wrap=safe_get(lambda: shape.text_frame.word_wrap, True),
+        word_wrap=safe_get(lambda: shape.text_frame.word_wrap) is not False,
         autofit_type=enum_name(safe_get(lambda: shape.text_frame.auto_size)),
         vertical_anchor=enum_name(safe_get(lambda: shape.text_frame.vertical_anchor)),
         text_insets={
@@ -3439,7 +3451,7 @@ def _onboard_text_run(shape: Any, paragraph: Any, run: Any, ctx: _OnboardContext
         font_color=resolved.get("font_color"),
         font_caps=resolved.get("font_caps"),
         char_spacing=resolved.get("char_spacing"),
-        baseline_shift=resolved.get("baseline_shift"),
+        baseline_shift=_ooxml_baseline_to_fraction(resolved.get("baseline_shift")),
         strikethrough=resolved.get("strikethrough"),
         hyperlink=_run_hyperlink(run),
     )

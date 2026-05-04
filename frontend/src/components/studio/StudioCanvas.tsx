@@ -18,9 +18,10 @@ interface Props {
   onDuplicateElement?: (id: string) => void
   onToggleLockElement?: (id: string, locked: boolean) => void
   onToggleHiddenElement?: (id: string, hidden: boolean) => void
+  onZIndexChange?: (id: string) => void
 }
 
-export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightIn, refreshKey, onSelectElement, onMultiSelect, onElementRotated, onDeleteElement, onDuplicateElement, onToggleLockElement, onToggleHiddenElement }: Props) {
+export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightIn, refreshKey, onSelectElement, onMultiSelect, onElementRotated, onDeleteElement, onDuplicateElement, onToggleLockElement, onToggleHiddenElement, onZIndexChange }: Props) {
   const containerRef               = useRef<HTMLDivElement>(null)
   const [elements, setElements]     = useState<StudioElement[]>([])
   const [bgColor, setBgColor]       = useState<string | null>(null)
@@ -450,28 +451,49 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
         {ctxMenu && (() => {
           const el = elements.find((e) => e.id === ctxMenu.id)
           if (!el) return null
+          const zVals = elements.map((e) => e.z_index)
+          const maxZ  = Math.max(...zVals)
+          const minZ  = Math.min(...zVals)
+          const sorted = [...elements].sort((a, b) => a.z_index - b.z_index)
+          const idx    = sorted.findIndex((e) => e.id === el.id)
+
+          const changeZ = async (newZ: number) => {
+            try {
+              const updated = await updateElementPosition(docId, slideN, el.id, { z_index: newZ })
+              setElements((prev) => prev.map((e) => e.id === el.id ? updated : e))
+              if (selectedIds.size <= 1) onSelectElement(updated)
+              onZIndexChange?.(el.id)
+            } catch (e) { console.error("z-index change failed:", e) }
+            setCtxMenu(null)
+          }
+
+          const items: ({ label: string; action: () => void; danger?: boolean; dim?: boolean } | null)[] = [
+            { label: "Duplicate", action: () => { onDuplicateElement?.(el.id); setCtxMenu(null) } },
+            { label: "Delete",    action: () => { onDeleteElement?.(el.id); setCtxMenu(null) }, danger: true },
+            null,
+            { label: el.locked ? "Unlock" : "Lock", action: () => { onToggleLockElement?.(el.id, !el.locked); setCtxMenu(null) } },
+            { label: el.hidden ? "Show" : "Hide",   action: () => { onToggleHiddenElement?.(el.id, !el.hidden); setCtxMenu(null) } },
+            null,
+            { label: "Bring to Front",  action: () => changeZ(maxZ + 1), dim: el.z_index === maxZ },
+            { label: "Bring Forward",   action: () => { const above = sorted[idx + 1]; if (above) changeZ(above.z_index + 0.5); else setCtxMenu(null) }, dim: idx >= sorted.length - 1 },
+            { label: "Send Backward",   action: () => { const below = sorted[idx - 1]; if (below) changeZ(below.z_index - 0.5); else setCtxMenu(null) }, dim: idx <= 0 },
+            { label: "Send to Back",    action: () => changeZ(minZ - 1), dim: el.z_index === minZ },
+          ]
           return (
             <div
-              className="fixed z-[99999] bg-surface border border-edge rounded shadow-xl py-1 min-w-[160px] text-xs"
+              className="fixed z-[99999] bg-surface border border-edge rounded shadow-xl py-1 min-w-[170px] text-xs"
               style={{ left: ctxMenu.x, top: ctxMenu.y }}
               onMouseDown={(e) => e.stopPropagation()}
             >
-              {[
-                { label: "Duplicate",                action: () => { onDuplicateElement?.(el.id); setCtxMenu(null) } },
-                { label: "Delete",                   action: () => { onDeleteElement?.(el.id); setCtxMenu(null) }, danger: true },
-                null,
-                { label: el.locked ? "Unlock" : "Lock",   action: () => { onToggleLockElement?.(el.id, !el.locked); setCtxMenu(null) } },
-                { label: el.hidden ? "Show" : "Hide",     action: () => { onToggleHiddenElement?.(el.id, !el.hidden); setCtxMenu(null) } },
-                null,
-                { label: "Bring to Front",           action: () => { handleRotate; handleCommit(el.id, el.left_in, el.top_in, el.width_in, el.height_in); setCtxMenu(null) }, disabled: true },
-              ].map((item, i) =>
+              {items.map((item, i) =>
                 item === null ? (
                   <div key={i} className="border-t border-edge/50 my-1" />
-                ) : item.disabled ? null : (
+                ) : (
                   <button
                     key={i}
                     onClick={item.action}
-                    className={`w-full text-left px-3 py-1.5 hover:bg-white/10 transition-colors ${
+                    disabled={item.dim}
+                    className={`w-full text-left px-3 py-1.5 hover:bg-white/10 transition-colors disabled:opacity-30 disabled:cursor-default ${
                       item.danger ? "text-red-400 hover:text-red-300" : "text-slate-300"
                     }`}
                   >

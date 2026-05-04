@@ -210,10 +210,16 @@ export default function StudioSlideStrip({
       {/* context menu */}
       {contextMenu && (
         <div
-          className="fixed z-[9999] bg-surface border border-edge rounded shadow-xl py-1 min-w-[140px]"
+          className="fixed z-[9999] bg-surface border border-edge rounded shadow-xl py-1 min-w-[160px]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onMouseDown={(e) => e.stopPropagation()}
         >
+          <CtxItem onClick={() => run(() => addSlide(docId, contextMenu.slideN - 1), (r) => r.new_slide_n ?? contextMenu.slideN)}>
+            Insert before
+          </CtxItem>
+          <CtxItem onClick={() => run(() => addSlide(docId, contextMenu.slideN), (r) => r.new_slide_n ?? contextMenu.slideN + 1)}>
+            Insert after
+          </CtxItem>
           <CtxItem onClick={() => handleDuplicate(contextMenu.slideN)}>Duplicate slide</CtxItem>
           <div className="border-t border-edge/50 my-1" />
           <CtxItem onClick={() => handleMoveUp(contextMenu.slideN)} disabled={contextMenu.slideN <= 1}>
@@ -221,6 +227,10 @@ export default function StudioSlideStrip({
           </CtxItem>
           <CtxItem onClick={() => handleMoveDown(contextMenu.slideN)} disabled={contextMenu.slideN >= slideCount}>
             Move down
+          </CtxItem>
+          <div className="border-t border-edge/50 my-1" />
+          <CtxItem onClick={() => { window.open(`/api/docs/${docId}/slides/${contextMenu.slideN}/bridge.png`, "_blank"); setContextMenu(null) }}>
+            Download PNG
           </CtxItem>
           <div className="border-t border-edge/50 my-1" />
           <CtxItem

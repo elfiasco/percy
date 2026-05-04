@@ -591,6 +591,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
             }}
             onToggleLockElement={(id, locked) => handleToggleFlags(id, { locked })}
             onToggleHiddenElement={(id, hidden) => handleToggleFlags(id, { hidden })}
+            onZIndexChange={() => { markDirty(selectedSlideRef.current); setRefreshKey((k) => k + 1) }}
           />
           <StudioNotesBar docId={doc.doc_id} slideN={selectedSlide} />
         </div>

@@ -121,6 +121,88 @@ _NON_BOLD_NAME_TOKENS = [
 _ITALIC_NAME_TOKENS = ["italic", "oblique", "slanted"]
 
 
+# ── ToUnicode CMap injection for Type1 ligature fonts ─────────────────────────
+
+def _inject_tounicode_cmaps(doc: "fitz.Document") -> None:
+    """Patch Type1 fonts that have compound glyph names in /Differences but no /ToUnicode.
+
+    PyMuPDF decodes unknown compound glyph names (e.g. 't_i') by taking only the
+    first component, so ligatures like 'ti', 'ft', 'tt' lose their second character.
+    Injecting a proper ToUnicode CMap makes PyMuPDF use the correct multi-char mapping.
+    """
+    import re as _re
+    try:
+        from fontTools.agl import toUnicode as _agl_to_unicode
+    except ImportError:
+        return
+
+    for xref in range(1, doc.xref_length()):
+        try:
+            obj = doc.xref_object(xref, compressed=False)
+        except Exception:
+            continue
+        if "/Subtype /Type1" not in obj or "/ToUnicode" in obj:
+            continue
+        enc_m = _re.search(r"/Encoding\s+(\d+)\s+\d+\s+R", obj)
+        if not enc_m:
+            continue
+        enc_xref = int(enc_m.group(1))
+        try:
+            enc_obj = doc.xref_object(enc_xref, compressed=False)
+        except Exception:
+            continue
+        if "/Differences" not in enc_obj:
+            continue
+        diff_m = _re.search(r"/Differences\s*\[([^\]]+)\]", enc_obj, _re.DOTALL)
+        if not diff_m:
+            continue
+        items = diff_m.group(1).split()
+        code: int | None = None
+        mappings: list[tuple[int, str]] = []
+        for item in items:
+            if _re.match(r"^-?\d+$", item):
+                code = int(item)
+            elif item.startswith("/") and code is not None:
+                gname = item[1:]
+                try:
+                    ustr = _agl_to_unicode(gname)
+                    if ustr:
+                        mappings.append((code, ustr))
+                except Exception:
+                    pass
+                code += 1
+        if not mappings:
+            continue
+        lines = [
+            "/CIDInit /ProcSet findresource begin",
+            "12 dict begin",
+            "begincmap",
+            "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def",
+            "/CMapName /Custom-UCS def",
+            "/CMapType 2 def",
+            f"{len(mappings)} beginbfchar",
+        ]
+        for char_code, ustr in mappings:
+            hex_in = f"<{char_code:02X}>"
+            hex_out = "".join(f"{ord(c):04X}" for c in ustr)
+            lines.append(f"{hex_in} <{hex_out}>")
+        lines += [
+            "endbfchar",
+            "endcmap",
+            "CMapName currentdict /CMap defineresource pop",
+            "end",
+            "end",
+        ]
+        cmap_bytes = "\n".join(lines).encode("ascii")
+        try:
+            new_xref = doc.get_new_xref()
+            doc.update_object(new_xref, "<< >>")
+            doc.update_stream(new_xref, cmap_bytes)
+            doc.xref_set_key(xref, "ToUnicode", f"{new_xref} 0 R")
+        except Exception:
+            pass
+
+
 # ── public entry point ────────────────────────────────────────────────────────
 
 def onboard_pdf(pdf_path: str | Path) -> PercyDocument:
@@ -129,6 +211,7 @@ def onboard_pdf(pdf_path: str | Path) -> PercyDocument:
 
     path = Path(pdf_path)
     doc = fitz.open(str(path))
+    _inject_tounicode_cmaps(doc)
 
     first = doc[0]
     page_w_in = _pt_to_in(first.rect.width)
@@ -344,7 +427,10 @@ def _onboard_page(
         _r = _d.get("rect") or fitz.Rect()
         _off_left = max(0.0, -_r.x0)
         _off_top  = max(0.0, -_r.y0)
-        if (_off_left > _page_w * 0.25 or _off_top > _page_h * 0.25):
+        _off_right  = max(0.0, _r.x1 - _page_w)
+        _off_bottom = max(0.0, _r.y1 - _page_h)
+        if (_off_left > _page_w * 0.25 or _off_top > _page_h * 0.25
+                or _off_right > _page_w * 0.25 or _off_bottom > _page_h * 0.25):
             if not (_r & page.rect).is_empty:
                 _offpage_candidates.append(_i)
     if len(_offpage_candidates) > 5:
@@ -361,6 +447,38 @@ def _onboard_page(
             _cr = drawings[_ci].get("rect") or fitz.Rect()
             if _cr.width > 1.4 * _page_w or _cr.height > 1.4 * _page_h:
                 used_draw = used_draw | {_ci}
+
+    # Also skip drawings that extend off the right or bottom of the page and are
+    # covered by a Form XObject image block.  Such drawings come from inside Form
+    # XObjects (PyMuPDF flattens them to page coordinates) and are already captured
+    # by the Form XObject rasterization in the primary image pass.  Rendering them
+    # separately causes double-drawing artifacts where the XObject is clipped by its
+    # viewport but the standalone drawing is not.
+    _xobj_img_rects: list[fitz.Rect] = []
+    for _ib in img_blocks:
+        if not _ib.get("xref"):
+            _ibb = _ib.get("bbox", (0, 0, 0, 0))
+            _xr = fitz.Rect(float(_ibb[0]), float(_ibb[1]), float(_ibb[2]), float(_ibb[3]))
+            if not _xr.is_empty:
+                _xobj_img_rects.append(_xr)
+    if _xobj_img_rects:
+        for _i, _d in enumerate(drawings):
+            if _i in used_draw:
+                continue
+            _r = _d.get("rect") or fitz.Rect()
+            _off_right  = max(0.0, _r.x1 - _page_w)
+            _off_bottom = max(0.0, _r.y1 - _page_h)
+            if _off_right <= _page_w * 0.10 and _off_bottom <= _page_h * 0.10:
+                continue  # not significantly off-page on right/bottom
+            # Drawing extends off the right or bottom edge — check if its
+            # page-visible area is mostly covered by a Form XObject image block.
+            _r_visible = _r & page.rect
+            _r_vis_area = _r_visible.get_area()
+            if _r_vis_area <= 0:
+                continue
+            _covered = sum((_r_visible & _xr).get_area() for _xr in _xobj_img_rects)
+            if _covered / _r_vis_area >= 0.70:
+                used_draw = used_draw | {_i}
 
     # Build an ordered work list that interleaves tables and individual drawings
     # by their position in the PDF drawing stream.  A table's position is the
@@ -445,6 +563,35 @@ def _onboard_page(
                 if score > best_score:
                     best, best_score = _cand, score
             stripped_to_full[_stripped] = best
+
+    # Mark text blocks that fall inside Form XObject image blocks (xref=None) as
+    # "used" so they are not rendered as BridgeText elements.  Form XObjects get
+    # rasterized in the primary image pass, so their text content is already captured
+    # visually — adding BridgeText for the same spans would double-render the text.
+    _xobj_rects: list[fitz.Rect] = []
+    for _ib in img_blocks:
+        if not _ib.get("xref"):
+            _ibb = _ib.get("bbox", (0, 0, 0, 0))
+            _xobj_rects.append(fitz.Rect(float(_ibb[0]), float(_ibb[1]), float(_ibb[2]), float(_ibb[3])))
+    if _xobj_rects:
+        for _ti, _tb in enumerate(text_blocks):
+            if _ti in used_text:
+                continue
+            _tbb = _tb.get("bbox")
+            if not _tbb:
+                continue
+            _tr = fitz.Rect(float(_tbb[0]), float(_tbb[1]), float(_tbb[2]), float(_tbb[3]))
+            _tr_area = _tr.get_area()
+            if _tr_area <= 0:
+                continue
+            # If this text block overlaps ≥20% with any Form XObject bbox, skip it.
+            # Threshold is intentionally low: multi-line text blocks can span two
+            # adjacent XObjects, so neither single XObject covers the full block.
+            for _xr in _xobj_rects:
+                _inter = (_tr & _xr).get_area()
+                if _inter / _tr_area >= 0.20:
+                    used_text = used_text | {_ti}
+                    break
 
     text_z = _Z_TEXT_BASE
     for i, block in enumerate(text_blocks):

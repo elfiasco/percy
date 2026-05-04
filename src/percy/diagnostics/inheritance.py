@@ -132,60 +132,25 @@ def _style_sources(shape: Any, paragraph_level: int) -> list[dict[str, Any]]:
     is_placeholder = safe_get(lambda: shape.is_placeholder, False)
 
     layout_match = _matching_layout_placeholder(shape)
-    master_match = _matching_master_placeholder(shape)
-
-    # Layout paragraph (bodyPr, explicit pPr) always comes before master
     if layout_match is not None:
-        p_pr = _first(_xpath(layout_match.element, ".//p:txBody/a:p[1]/a:pPr"))
-        if p_pr is not None:
-            sources.append({"name": "layout-placeholder:paragraph", "pPr": p_pr, "rPr": _def_rpr(p_pr)})
+        sources.extend(_shape_text_sources("layout-placeholder", layout_match.element, level_tag))
 
-    # Master placeholder (paragraph + lstStyle)
+    master_match = _matching_master_placeholder(shape)
     if master_match is not None:
         sources.extend(_shape_text_sources("master-placeholder", master_match.element, level_tag))
 
     master = safe_get(lambda: shape.part.slide_layout.slide_master)
     if master is not None:
         if is_placeholder:
-            # Master txStyles (titleStyle/bodyStyle/otherStyle).
-            # Priority of layout lstStyle vs master txStyles depends on whether the master has an
-            # EXACT idx match for this placeholder. When the layout adds non-standard placeholders
-            # (e.g. idx=10, 11) that don't exist in the master, the layout's lstStyle defines the
-            # ghost/prompt-text visual design, NOT the content inheritance. In that case master
-            # txStyles has higher priority (empirically observed: PowerPoint renders master's
-            # algn='l' over layout lstStyle's algn='ctr' for such placeholders).
-            # When the master has an exact idx match, we follow OOXML spec order (layout → master).
+            # Placeholder shapes: use master txStyles (titleStyle/bodyStyle/otherStyle)
             style_name = _master_style_name(shape)
-            ph_idx = safe_get(lambda: shape.placeholder_format.idx)
-            has_exact_master = any(
-                safe_get(lambda p=p: p.placeholder_format.idx) == ph_idx
-                for p in safe_get(lambda: master.placeholders, [])
-            )
-
-            def _add_layout_lstyle() -> None:
-                if layout_match is not None:
-                    lvl_pr = _first(_xpath(layout_match.element, f".//p:txBody/a:lstStyle/a:{level_tag}"))
-                    if lvl_pr is not None:
-                        sources.append({"name": "layout-placeholder:lstStyle:" + level_tag, "pPr": lvl_pr, "rPr": _def_rpr(lvl_pr)})
-
-            def _add_master_txstyles() -> None:
-                master_style = _first(_xpath(master.element, f".//p:txStyles/p:{style_name}/a:{level_tag}"))
-                if master_style is not None:
-                    sources.append({"name": f"master-txStyles:{style_name}:{level_tag}", "pPr": master_style, "rPr": _def_rpr(master_style)})
-                if level_tag != "lvl1pPr":
-                    lvl1_style = _first(_xpath(master.element, f".//p:txStyles/p:{style_name}/a:lvl1pPr"))
-                    if lvl1_style is not None:
-                        sources.append({"name": f"master-txStyles:{style_name}:lvl1pPr:fallback", "pPr": lvl1_style, "rPr": _def_rpr(lvl1_style)})
-
-            if has_exact_master:
-                # Standard placeholder: layout lstStyle takes priority (OOXML spec order)
-                _add_layout_lstyle()
-                _add_master_txstyles()
-            else:
-                # Non-standard placeholder (no exact master idx match): master txStyles
-                # governs content formatting; layout lstStyle is lower priority
-                _add_master_txstyles()
-                _add_layout_lstyle()
+            master_style = _first(_xpath(master.element, f".//p:txStyles/p:{style_name}/a:{level_tag}"))
+            if master_style is not None:
+                sources.append({"name": f"master-txStyles:{style_name}:{level_tag}", "pPr": master_style, "rPr": _def_rpr(master_style)})
+            if level_tag != "lvl1pPr":
+                lvl1_style = _first(_xpath(master.element, f".//p:txStyles/p:{style_name}/a:lvl1pPr"))
+                if lvl1_style is not None:
+                    sources.append({"name": f"master-txStyles:{style_name}:lvl1pPr:fallback", "pPr": lvl1_style, "rPr": _def_rpr(lvl1_style)})
         else:
             # Non-placeholder shapes (text boxes, auto shapes): use presentation defaultTextStyle
             prs_el = safe_get(lambda: shape.part.package.presentation_part._element)
@@ -201,11 +166,6 @@ def _style_sources(shape: Any, paragraph_level: int) -> list[dict[str, Any]]:
                         lvl1_pr = dts.find(f"{{{_A}}}lvl1pPr")
                         if lvl1_pr is not None:
                             sources.append({"name": "prs:defaultTextStyle:lvl1pPr:fallback", "pPr": lvl1_pr, "rPr": _def_rpr(lvl1_pr)})
-    elif layout_match is not None and is_placeholder:
-        # No master available; still add layout lstStyle
-        lvl_pr = _first(_xpath(layout_match.element, f".//p:txBody/a:lstStyle/a:{level_tag}"))
-        if lvl_pr is not None:
-            sources.append({"name": "layout-placeholder:lstStyle:" + level_tag, "pPr": lvl_pr, "rPr": _def_rpr(lvl_pr)})
 
     return sources
 
@@ -367,10 +327,15 @@ def _resolve_alignment(paragraph: Any | None, sources: list[dict[str, Any]]) -> 
     explicit = enum_name(safe_get(lambda: paragraph.alignment))
     if explicit:
         return ResolvedValue(explicit, "slide:paragraph:pPr")
+    _A = "http://schemas.openxmlformats.org/drawingml/2006/main"
     for source in sources:
-        value = source["pPr"].get("algn") if source["pPr"] is not None else None
-        if value:
-            return ResolvedValue(value, source["name"])
+        pPr = source["pPr"]
+        if pPr is None:
+            continue
+        value = pPr.get("algn")
+        if not value:
+            continue
+        return ResolvedValue(value, source["name"])
     return ResolvedValue("left", "office-default")
 
 
