@@ -3419,6 +3419,80 @@ def export_all_notes(doc_id: str):
     )
 
 
+@app.get("/api/docs/{doc_id}/notes-summary")
+def notes_summary(doc_id: str):
+    """Return a list of slide numbers that have non-empty speaker notes."""
+    d = _require(doc_id)
+    slides_with_notes: list[int] = []
+    for slide in d["doc"].slides:
+        cp = getattr(slide, "custom_properties", None) or {}
+        if cp.get("notes_text", "").strip():
+            slides_with_notes.append(slide.slide_number)
+    return {"slides_with_notes": slides_with_notes}
+
+
+@app.post("/api/docs/{doc_id}/import-slides")
+async def import_slides(doc_id: str, file: UploadFile = File(...)):
+    """Import all slides from an uploaded PPTX and append them to the document."""
+    import copy as _copy
+    import tempfile
+    from percy.diagnostics.onboard import onboard_pptx as _onboard_pptx
+    from percy.diagnostics.render_png import _register_embedded_fonts  # type: ignore[attr-defined]
+
+    _snapshot_doc(doc_id)
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".pptx", delete=False)
+    try:
+        content = await file.read()
+        tmp.write(content)
+        tmp.close()
+
+        src_doc = _onboard_pptx(Path(tmp.name))
+        first_new = len(doc.slides) + 1
+        imported  = 0
+        for src_slide in src_doc.slides:
+            new_slide = _copy.deepcopy(src_slide)
+            doc.slides.append(new_slide)
+            imported += 1
+
+        # Renumber all slides
+        for i, s in enumerate(doc.slides):
+            s.slide_number = i + 1
+
+        # Render each new slide individually
+        bridge_dir = _CACHE_DIR / doc_id / "bridge"
+        bridge_dir.mkdir(parents=True, exist_ok=True)
+        theme          = getattr(doc, "theme_colors", None) or None
+        embedded_fonts = getattr(doc, "embedded_fonts", None)
+        if embedded_fonts:
+            _register_embedded_fonts(embedded_fonts)
+        renderer = SlideRenderer(theme=theme)
+        renderer.set_document(doc)
+        for slide in doc.slides[first_new - 1:]:
+            dest = bridge_dir / f"slide-{slide.slide_number:03d}.png"
+            try:
+                fig = renderer.render_slide(slide)
+                fig.savefig(str(dest), dpi=96, bbox_inches="tight", pad_inches=0)
+                fig.clf()
+            except Exception as exc:
+                log.warning("import-slides: render failed for slide %d: %s", slide.slide_number, exc)
+
+        # Rebuild bridge_paths list from disk
+        d["bridge_paths"] = [
+            str(bridge_dir / f"slide-{s.slide_number:03d}.png")
+            for s in doc.slides
+        ]
+        d["slide_count"] = len(doc.slides)
+
+    finally:
+        Path(tmp.name).unlink(missing_ok=True)
+
+    log.info("studio: imported %d slides into %s  total=%d", imported, doc_id, len(doc.slides))
+    return {"imported": imported, "slide_count": len(doc.slides)}
+
+
 @app.get("/api/docs/{doc_id}/slides/{n}/elements")
 def get_slide_elements(doc_id: str, n: int):
     """Return all Bridge elements on slide *n* with position in inches and percent."""

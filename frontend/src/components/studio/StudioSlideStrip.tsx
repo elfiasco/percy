@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react"
-import { addSlide, deleteSlide, duplicateSlide, moveSlide } from "../../lib/studioApi"
+import { addSlide, deleteSlide, duplicateSlide, moveSlide, fetchNotesSummary, importSlides } from "../../lib/studioApi"
 
 interface Props {
   docId: string
@@ -27,7 +27,17 @@ export default function StudioSlideStrip({
   const [dropTarget, setDropTarget]   = useState<number | null>(null)
   const [hoverN, setHoverN]           = useState<number | null>(null)
   const [hoverY, setHoverY]           = useState(0)
+  const [slidesWithNotes, setSlidesWithNotes] = useState<Set<number>>(new Set())
+  const [importing, setImporting]     = useState(false)
+  const importInputRef                = useRef<HTMLInputElement>(null)
   const stripRef = useRef<HTMLDivElement>(null)
+
+  // Fetch notes summary to show indicators
+  useEffect(() => {
+    fetchNotesSummary(docId)
+      .then((r) => setSlidesWithNotes(new Set(r.slides_with_notes)))
+      .catch(() => {})
+  }, [docId, stripKey, refreshKey])
 
   // close context menu on outside click
   useEffect(() => {
@@ -123,27 +133,59 @@ export default function StudioSlideStrip({
     setDropTarget(null)
   }, [])
 
+  const handleImport = useCallback(async (file: File) => {
+    setImporting(true)
+    try {
+      const r = await importSlides(docId, file)
+      setStripKey((k) => k + 1)
+      onSlideCountChange(r.slide_count, r.slide_count - r.imported + 1)
+    } catch (e) {
+      console.error("import slides failed:", e)
+    } finally {
+      setImporting(false)
+    }
+  }, [docId, onSlideCountChange])
+
   return (
     <div ref={stripRef} className="w-28 shrink-0 flex flex-col border-r border-edge bg-surface min-h-0">
       {/* header */}
       <div className="px-2 py-1.5 text-[10px] text-muted uppercase tracking-widest font-semibold border-b border-edge shrink-0 flex items-center justify-between">
         <span>Slides</span>
-        <button
-          onClick={handleAdd}
-          disabled={busy}
-          title="Add slide after current"
-          className="w-5 h-5 flex items-center justify-center rounded text-muted hover:text-slate-200
-                     hover:bg-white/10 transition-colors text-sm disabled:opacity-40"
-        >
-          +
-        </button>
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={() => importInputRef.current?.click()}
+            disabled={importing}
+            title="Import slides from PPTX"
+            className="w-5 h-5 flex items-center justify-center rounded text-muted hover:text-slate-200
+                       hover:bg-white/10 transition-colors text-xs disabled:opacity-40"
+          >
+            {importing ? "…" : "⤵"}
+          </button>
+          <button
+            onClick={handleAdd}
+            disabled={busy}
+            title="Add slide after current"
+            className="w-5 h-5 flex items-center justify-center rounded text-muted hover:text-slate-200
+                       hover:bg-white/10 transition-colors text-sm disabled:opacity-40"
+          >
+            +
+          </button>
+        </div>
       </div>
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        className="hidden"
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) { handleImport(f); e.target.value = "" } }}
+      />
 
       {/* slide list */}
       <div key={stripKey} className="flex flex-col gap-1 p-2 overflow-y-auto flex-1 scrollbar-thin">
         {Array.from({ length: slideCount }, (_, i) => i + 1).map((n) => {
-          const active = n === selectedSlide
-          const dirty  = dirtySlides?.has(n) ?? false
+          const active    = n === selectedSlide
+          const dirty     = dirtySlides?.has(n) ?? false
+          const hasNotes  = slidesWithNotes.has(n)
           const isDragging = dragSlide === n
           const isDropTarget = dropTarget === n && dragSlide !== null && dragSlide !== n
           return (
@@ -177,6 +219,14 @@ export default function StudioSlideStrip({
                     title="Unsaved changes — click Rebuild to commit"
                     className="absolute top-0.5 right-0.5 w-2 h-2 rounded-full bg-amber-400 shadow-sm"
                   />
+                )}
+                {hasNotes && (
+                  <span
+                    title="Has speaker notes"
+                    className="absolute bottom-0.5 right-0.5 text-[8px] text-white/60 bg-black/50 rounded px-0.5 leading-tight"
+                  >
+                    📝
+                  </span>
                 )}
               </div>
               <span className={`text-[10px] ${active ? "text-accent-light" : dirty ? "text-amber-400" : "text-muted"}`}>

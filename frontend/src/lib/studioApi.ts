@@ -463,6 +463,19 @@ export async function replaceColor(
   })
 }
 
+export async function fetchNotesSummary(docId: string): Promise<{ slides_with_notes: number[] }> {
+  return apiFetch(`${BASE}/docs/${docId}/notes-summary`)
+}
+
+export async function importSlides(
+  docId: string,
+  file: File,
+): Promise<{ imported: number; slide_count: number }> {
+  const form = new FormData()
+  form.append("file", file)
+  return apiFetch(`${BASE}/docs/${docId}/import-slides`, { method: "POST", body: form })
+}
+
 export async function setSlideBackgroundImage(
   docId: string,
   slideN: number,
