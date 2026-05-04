@@ -2,7 +2,7 @@
 
 Pulls jobs from the SQS onboard queue, downloads the source PPTX from S3,
 runs percy onboarding, stores the Bridge bundle back in S3, and reports
-the result to the Percy Cloud API.
+the result to the Percy Cloud API (or directly to Postgres when in VPC).
 """
 
 from __future__ import annotations
@@ -16,8 +16,9 @@ import signal
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Generator
 
 import boto3
 import requests
@@ -40,10 +41,17 @@ POLL_WAIT = int(os.environ.get("POLL_WAIT_SECONDS", "20"))
 
 PERCY_API_KEY = os.environ.get("PERCY_API_KEY", "")
 
+DB_HOST = os.environ.get("DB_HOST")
+DB_PORT = os.environ.get("DB_PORT", "5432")
+DB_NAME = os.environ.get("DB_NAME", "percy")
+DB_USER = os.environ.get("DB_USER", "percy")
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
+
 sqs = boto3.client("sqs", region_name=AWS_REGION)
 s3 = boto3.client("s3", region_name=AWS_REGION)
 
 _shutdown = False
+_db_pool = None
 
 
 def _handle_sigterm(signum, frame):
@@ -53,6 +61,100 @@ def _handle_sigterm(signum, frame):
 
 
 signal.signal(signal.SIGTERM, _handle_sigterm)
+
+
+# -------------------------------------------------------------------------
+# Postgres helpers (primary path in production)
+# -------------------------------------------------------------------------
+
+def _init_db_pool() -> bool:
+    global _db_pool
+    if not DB_HOST:
+        return False
+    try:
+        import psycopg2
+        from psycopg2.pool import ThreadedConnectionPool
+        _db_pool = ThreadedConnectionPool(
+            minconn=1, maxconn=3,
+            host=DB_HOST, port=int(DB_PORT),
+            dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD,
+        )
+        log.info("DB pool initialised (%s:%s/%s)", DB_HOST, DB_PORT, DB_NAME)
+        return True
+    except Exception as exc:
+        log.warning("could not init DB pool: %s", exc)
+        return False
+
+
+@contextmanager
+def _get_conn() -> Generator:
+    if _db_pool is None:
+        raise RuntimeError("DB pool not initialised")
+    conn = _db_pool.getconn()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        _db_pool.putconn(conn)
+
+
+def db_start_job(job_id: str) -> None:
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE jobs
+                   SET status='running', worker_id=%s, started_at=NOW()
+                   WHERE id=%s AND status='queued'""",
+                (WORKER_ID, job_id),
+            )
+
+
+def db_complete_job(job_id: str, result: dict) -> None:
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE jobs
+                   SET status='completed', result=%s, finished_at=NOW()
+                   WHERE id=%s""",
+                (json.dumps(result), job_id),
+            )
+
+
+def db_fail_job(job_id: str, error: str) -> None:
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE jobs
+                   SET status='failed', error=%s, finished_at=NOW()
+                   WHERE id=%s""",
+                (error, job_id),
+            )
+
+
+def db_update_document_status(document_id: str, status: str, bundle_uri: str | None = None) -> None:
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            if bundle_uri:
+                cur.execute(
+                    "UPDATE documents SET status=%s, bundle_uri=%s WHERE id=%s",
+                    (status, bundle_uri, document_id),
+                )
+            else:
+                cur.execute(
+                    "UPDATE documents SET status=%s WHERE id=%s",
+                    (status, document_id),
+                )
+
+
+def db_get_document_storage_uri(document_id: str) -> str | None:
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT storage_uri FROM documents WHERE id=%s", (document_id,))
+            row = cur.fetchone()
+            return row[0] if row else None
 
 
 # -------------------------------------------------------------------------
@@ -75,7 +177,7 @@ def delete_message(receipt_handle: str) -> None:
 
 
 # -------------------------------------------------------------------------
-# Percy API helpers
+# Percy API helpers (fallback for local dev)
 # -------------------------------------------------------------------------
 
 def _api_headers() -> dict:
@@ -129,6 +231,57 @@ def api_update_document_status(document_id: str, status: str, bundle_uri: str | 
         r.raise_for_status()
     except Exception as exc:
         log.warning("could not update document status to %s: %s", status, exc)
+
+
+# -------------------------------------------------------------------------
+# Unified status helpers — DB primary, API fallback
+# -------------------------------------------------------------------------
+
+def start_job(job_id: str) -> None:
+    if _db_pool is not None:
+        db_start_job(job_id)
+    else:
+        api_start_job(job_id)
+
+
+def complete_job(job_id: str, result: dict) -> None:
+    if _db_pool is not None:
+        db_complete_job(job_id, result)
+    else:
+        api_complete_job(job_id, result)
+
+
+def fail_job(job_id: str, error: str) -> None:
+    if _db_pool is not None:
+        db_fail_job(job_id, error)
+    else:
+        api_fail_job(job_id, error)
+
+
+def update_document_status(document_id: str, status: str, bundle_uri: str | None = None) -> None:
+    if _db_pool is not None:
+        try:
+            db_update_document_status(document_id, status, bundle_uri)
+        except Exception as exc:
+            log.warning("could not update document status via DB to %s: %s", status, exc)
+    else:
+        api_update_document_status(document_id, status, bundle_uri)
+
+
+def get_document_storage_uri(document_id: str) -> str | None:
+    if _db_pool is not None:
+        return db_get_document_storage_uri(document_id)
+    try:
+        r = requests.get(
+            f"{API_BASE}/api/cloud/documents/{document_id}",
+            headers=_api_headers(),
+            timeout=10,
+        )
+        r.raise_for_status()
+        return r.json().get("storage_uri")
+    except Exception as exc:
+        log.error("could not fetch document %s: %s", document_id, exc)
+        return None
 
 
 # -------------------------------------------------------------------------
@@ -230,40 +383,28 @@ def process_message(msg: dict) -> None:
     log.info("starting job %s for document %s", job_id, document_id)
 
     try:
-        api_start_job(job_id)
+        start_job(job_id)
     except Exception as exc:
         log.warning("could not mark job started (may already be running): %s", exc)
 
-    # Resolve storage_uri — prefer payload, fall back to fetching document record
-    params_storage_uri = payload.get("storage_uri")
-    if not params_storage_uri:
-        try:
-            r = requests.get(
-                f"{API_BASE}/api/cloud/documents/{document_id}",
-                headers=_api_headers(),
-                timeout=10,
-            )
-            r.raise_for_status()
-            doc_data = r.json()
-            params_storage_uri = doc_data.get("storage_uri")
-        except Exception as exc:
-            log.error("could not fetch document %s: %s", document_id, exc)
+    # Resolve storage_uri — prefer payload, fall back to DB/API
+    storage_uri = payload.get("storage_uri") or get_document_storage_uri(document_id)
 
-    if not params_storage_uri:
-        api_fail_job(job_id, "No storage_uri for document — upload file first via prepare-upload")
+    if not storage_uri:
+        fail_job(job_id, "No storage_uri for document — upload file first via prepare-upload")
         return
 
-    api_update_document_status(document_id, "processing")
+    update_document_status(document_id, "processing")
     try:
-        result = run_onboard(job_id, document_id, params_storage_uri)
-        api_complete_job(job_id, result)
-        api_update_document_status(document_id, "ready", result.get("bundle_uri"))
+        result = run_onboard(job_id, document_id, storage_uri)
+        complete_job(job_id, result)
+        update_document_status(document_id, "ready", result.get("bundle_uri"))
         log.info("job %s complete: %s slides", job_id, result.get("slide_count"))
     except Exception as exc:
         log.exception("job %s failed", job_id)
-        api_update_document_status(document_id, "error")
+        update_document_status(document_id, "error")
         try:
-            api_fail_job(job_id, str(exc))
+            fail_job(job_id, str(exc))
         except Exception:
             pass
 
@@ -271,6 +412,12 @@ def process_message(msg: dict) -> None:
 def main() -> None:
     log.info("Percy onboard worker starting (worker_id=%s)", WORKER_ID)
     log.info("queue=%s bucket=%s api=%s", SQS_QUEUE_URL, S3_BUCKET, API_BASE)
+
+    _init_db_pool()
+    if _db_pool is not None:
+        log.info("using direct DB for job status updates")
+    else:
+        log.info("using HTTP API for job status updates (no DB_HOST set)")
 
     while not _shutdown:
         try:
