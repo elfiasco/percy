@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Annotated
 
 from fastapi import FastAPI, Header, HTTPException
@@ -30,8 +31,18 @@ from app.cloud.models import (
 from app.cloud.store import ConflictError, InMemoryControlPlaneStore, NotFoundError
 
 
+def _build_store():
+    if os.environ.get("DB_HOST") or os.environ.get("DATABASE_URL"):
+        from app.cloud.db import init_pool, run_migrations
+        from app.cloud.pg_store import PostgresControlPlaneStore
+        init_pool()
+        run_migrations()
+        return PostgresControlPlaneStore()
+    return InMemoryControlPlaneStore()
+
+
 app = FastAPI(title="Percy Enterprise Control Plane", version="0.1.0")
-store = InMemoryControlPlaneStore()
+store = _build_store()
 
 ActorHeader = Annotated[str | None, Header(alias="X-Percy-User")]
 

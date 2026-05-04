@@ -13,9 +13,8 @@ This file tracks the local machine setup needed to deploy Percy into the `percy-
 - [x] AWS CLI installed: `C:\Program Files\Amazon\AWSCLIV2\aws.exe`
 - [x] AWS CDK installed: `C:\Users\benst\AppData\Roaming\npm\cdk.cmd`
 - [x] CDK Python dependencies installed into conda env: `percy-env`
-- [ ] Docker Desktop installed and running
-
-Docker Desktop was downloaded through `winget`, but the installer failed during the administrator elevation step. CDK needs Docker to build the Percy API container for the first App Runner deployment.
+- [x] Docker Desktop installed
+- [x] Docker Desktop running (Docker 29.4.1, confirmed build and health check pass)
 
 Because this machine has a permission issue under `C:\Users\benst\AppData\Local\Temp`, use the wrapper below for CDK commands. It points CDK/JSII temp files at `infra\.tmp` and points JSII at the installed Node runtime:
 
@@ -68,3 +67,13 @@ cd C:\Users\benst\Desktop\percy\infra
 ```
 
 CDK will print `PercyApiUrl` after deployment.
+
+## Live Deployment
+
+Percy Cloud API is deployed at:
+
+```
+https://v9ghdhdczr.us-east-1.awsapprunner.com
+```
+
+Health check: `GET /api/cloud/health` → `{"status":"ok"}`

@@ -20,14 +20,14 @@ Start the Percy Enterprise foundation without disrupting the existing local roun
 - [x] Install AWS CDK CLI locally.
 - [x] Install CDK Python dependencies into `percy-env`.
 - [x] Validate App Runner stack with `cdk synth`.
-- [ ] Install Docker Desktop locally.
-- [ ] Authenticate local AWS CLI against `percy-dev`.
+- [x] Install Docker Desktop locally.
+- [x] Authenticate local AWS CLI against `percy-dev`.
 
 ## Next
 
 - [x] Add AWS hosting plan.
 - [x] Add local AWS setup notes.
-- [ ] Add persistent Postgres-backed repository design.
+- [x] Add persistent Postgres-backed repository design.
 - [x] Add document registration model.
 - [x] Add job model and local job lifecycle endpoints.
 - [ ] Add local job runner.
