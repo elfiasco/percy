@@ -118,6 +118,8 @@ interface Props {
   outlineOpen?: boolean
   onToggleOutline?: () => void
   onPresent?: () => void
+  layersOpen?: boolean
+  onToggleLayers?: () => void
 }
 
 export default function StudioToolbar({
@@ -142,6 +144,8 @@ export default function StudioToolbar({
   outlineOpen,
   onToggleOutline,
   onPresent,
+  layersOpen,
+  onToggleLayers,
 }: Props) {
   const [insertOpen, setInsertOpen] = useState(false)
   const [copyToOpen, setCopyToOpen] = useState(false)
@@ -649,6 +653,20 @@ export default function StudioToolbar({
             }`}
           >
             ≡
+          </button>
+        )}
+
+        {onToggleLayers && (
+          <button
+            onClick={onToggleLayers}
+            title="Toggle layers panel"
+            className={`w-7 h-7 flex items-center justify-center rounded border text-xs transition-colors ${
+              layersOpen
+                ? "border-accent/50 text-accent bg-accent/10"
+                : "border-edge text-muted hover:text-slate-200 hover:bg-white/10"
+            }`}
+          >
+            ⧉
           </button>
         )}
 

@@ -16,6 +16,7 @@ import FindReplacePanel from "./FindReplacePanel"
 import KeyboardShortcutsModal from "./KeyboardShortcutsModal"
 import OutlinePanel from "./OutlinePanel"
 import PresentationMode from "./PresentationMode"
+import LayersPanel from "./LayersPanel"
 
 interface Props {
   doc: DocInfo
@@ -36,6 +37,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const [generating, setGenerating]           = useState(false)
   const [outlineOpen, setOutlineOpen]         = useState(false)
   const [presenting, setPresenting]           = useState(false)
+  const [layersOpen, setLayersOpen]           = useState(false)
   const [shortcutsOpen, setShortcutsOpen]       = useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [slideSorterOpen, setSlideSorterOpen]       = useState(false)
@@ -517,6 +519,8 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         outlineOpen={outlineOpen}
         onToggleOutline={() => setOutlineOpen((o) => !o)}
         onPresent={() => setPresenting(true)}
+        layersOpen={layersOpen}
+        onToggleLayers={() => setLayersOpen((o) => !o)}
       />
 
       {/* ── main area: slide strip + canvas + properties ── */}
@@ -552,6 +556,31 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           />
           <StudioNotesBar docId={doc.doc_id} slideN={selectedSlide} />
         </div>
+
+        {layersOpen && (
+          <LayersPanel
+            docId={doc.doc_id}
+            slideN={selectedSlide}
+            elements={slideElements}
+            selectedIds={multiSelectIds.size > 0 ? multiSelectIds : selectedElement ? new Set([selectedElement.id]) : new Set()}
+            onSelect={(id, multi) => {
+              if (multi) {
+                setMultiSelectIds((prev) => {
+                  const next = new Set(prev)
+                  if (next.has(id)) next.delete(id); else next.add(id)
+                  return next
+                })
+              } else {
+                const el = slideElements.find((e) => e.id === id) ?? null
+                setSelectedElement(el)
+                setMultiSelectIds(el ? new Set([id]) : new Set())
+              }
+            }}
+            onToggleLock={(id, locked) => handleToggleFlags(id, { locked })}
+            onToggleHidden={(id, hidden) => handleToggleFlags(id, { hidden })}
+            onReorder={() => setRefreshKey((k) => k + 1)}
+          />
+        )}
 
         <StudioPropertiesPanel
           element={selectedElement}
