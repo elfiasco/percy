@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from "react"
-import { fetchDocumentOutline, updateElementText } from "../../lib/studioApi"
+import { fetchDocumentOutline, updateElementText, fetchSlideLabels } from "../../lib/studioApi"
 import type { SlideOutlineEntry } from "../../lib/studioApi"
 
 interface Props {
@@ -16,14 +16,22 @@ interface Props {
 }
 
 export default function OutlinePanel({ docId, slideCount, selectedSlide, refreshKey, onJumpToSlide }: Props) {
-  const [entries, setEntries] = useState<SlideOutlineEntry[]>([])
-  const [editingN, setEditingN] = useState<number | null>(null)
-  const [editVal, setEditVal]   = useState("")
+  const [entries, setEntries]     = useState<SlideOutlineEntry[]>([])
+  const [slideLabels, setLabels]  = useState<Record<number, string>>({})
+  const [slideTags, setTags]       = useState<Record<number, string>>({})
+  const [editingN, setEditingN]   = useState<number | null>(null)
+  const [editVal, setEditVal]     = useState("")
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     fetchDocumentOutline(docId)
       .then((r) => setEntries(r.slides))
+      .catch(() => {})
+    fetchSlideLabels(docId)
+      .then((r) => {
+        setLabels(Object.fromEntries(Object.entries(r.labels).map(([k, v]) => [Number(k), v])))
+        setTags(Object.fromEntries(Object.entries(r.tags ?? {}).map(([k, v]) => [Number(k), v])))
+      })
       .catch(() => {})
   }, [docId, slideCount, refreshKey])
 
@@ -64,6 +72,12 @@ export default function OutlinePanel({ docId, slideCount, selectedSlide, refresh
               onClick={() => onJumpToSlide(entry.slide_n)}
             >
               <div className="flex items-baseline gap-1.5">
+                {slideTags[entry.slide_n] && (
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0 mt-0.5"
+                    style={{ background: slideTags[entry.slide_n], alignSelf: "center" }}
+                  />
+                )}
                 <span className={`text-[10px] shrink-0 font-mono ${isSelected ? "text-accent-light" : "text-muted/60"}`}>
                   {entry.slide_n}
                 </span>
@@ -97,6 +111,11 @@ export default function OutlinePanel({ docId, slideCount, selectedSlide, refresh
                   </span>
                 )}
               </div>
+              {slideLabels[entry.slide_n] && (
+                <p className="text-[10px] text-indigo-300/60 truncate mt-0.5 ml-5">
+                  {slideLabels[entry.slide_n]}
+                </p>
+              )}
               {entry.body_preview && (
                 <p className="text-[10px] text-muted/50 truncate mt-0.5 ml-5">{entry.body_preview}</p>
               )}
