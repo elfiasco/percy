@@ -13,7 +13,8 @@ Start the Percy Enterprise foundation without disrupting the existing local roun
 - [x] Add local development store.
 - [x] Add local storage abstraction.
 - [x] Add smoke checks for the API.
-- [ ] Create scoped Git backup commit and push source/docs changes.
+- [x] Create scoped Git backup commit for source/docs changes.
+- [ ] Push backup commit to GitHub remote.
 
 ## Next
 
