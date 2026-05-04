@@ -3402,15 +3402,17 @@ class SlideLabelUpdate(BaseModel):
 
 @app.get("/api/docs/{doc_id}/slide-labels")
 def get_slide_labels(doc_id: str):
-    """Return all slide labels keyed by slide number."""
+    """Return all slide labels and tag colors keyed by slide number."""
     d = _require(doc_id)
     labels: dict[str, str] = {}
+    tags: dict[str, str]   = {}
     for slide in d["doc"].slides:
         cp = getattr(slide, "custom_properties", None) or {}
         lbl = cp.get("label", "").strip()
-        if lbl:
-            labels[str(slide.slide_number)] = lbl
-    return {"labels": labels}
+        tag = cp.get("tag_color", "").strip()
+        if lbl: labels[str(slide.slide_number)] = lbl
+        if tag: tags[str(slide.slide_number)]   = tag
+    return {"labels": labels, "tags": tags}
 
 
 @app.patch("/api/docs/{doc_id}/slides/{n}/label")
@@ -3425,6 +3427,26 @@ def set_slide_label(doc_id: str, n: int, req: SlideLabelUpdate):
     slide.custom_properties["label"] = req.label
     log.info("studio: set label for slide %d of %s: %r", n, doc_id, req.label)
     return {"slide_n": n, "label": req.label}
+
+
+class SlideTagUpdate(BaseModel):
+    color: str | None = None   # hex color string or null to clear
+
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/tag")
+def set_slide_tag(doc_id: str, n: int, req: SlideTagUpdate):
+    """Set or clear a tag color for slide *n*."""
+    d = _require(doc_id)
+    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+    if not hasattr(slide, "custom_properties") or slide.custom_properties is None:
+        slide.custom_properties = {}
+    if req.color:
+        slide.custom_properties["tag_color"] = req.color
+    else:
+        slide.custom_properties.pop("tag_color", None)
+    return {"slide_n": n, "tag_color": req.color}
 
 
 @app.get("/api/docs/{doc_id}/notes-export")

@@ -467,7 +467,7 @@ export async function fetchNotesSummary(docId: string): Promise<{ slides_with_no
   return apiFetch(`${BASE}/docs/${docId}/notes-summary`)
 }
 
-export async function fetchSlideLabels(docId: string): Promise<{ labels: Record<string, string> }> {
+export async function fetchSlideLabels(docId: string): Promise<{ labels: Record<string, string>; tags: Record<string, string> }> {
   return apiFetch(`${BASE}/docs/${docId}/slide-labels`)
 }
 
@@ -476,6 +476,14 @@ export async function setSlideLabel(docId: string, n: number, label: string): Pr
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ label }),
+  })
+}
+
+export async function setSlideTag(docId: string, n: number, color: string | null): Promise<{ slide_n: number; tag_color: string | null }> {
+  return apiFetch(`${BASE}/docs/${docId}/slides/${n}/tag`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ color }),
   })
 }
 

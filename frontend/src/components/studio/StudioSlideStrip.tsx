@@ -1,5 +1,16 @@
 import { useState, useRef, useEffect, useCallback } from "react"
-import { addSlide, deleteSlide, duplicateSlide, moveSlide, fetchNotesSummary, importSlides, fetchSlideLabels, setSlideLabel } from "../../lib/studioApi"
+import { addSlide, deleteSlide, duplicateSlide, moveSlide, fetchNotesSummary, importSlides, fetchSlideLabels, setSlideLabel, setSlideTag } from "../../lib/studioApi"
+
+const TAG_COLORS = [
+  { color: null,      label: "None" },
+  { color: "#EF4444", label: "Red" },
+  { color: "#F97316", label: "Orange" },
+  { color: "#EAB308", label: "Yellow" },
+  { color: "#22C55E", label: "Green" },
+  { color: "#3B82F6", label: "Blue" },
+  { color: "#A855F7", label: "Purple" },
+  { color: "#EC4899", label: "Pink" },
+]
 
 interface Props {
   docId: string
@@ -32,8 +43,10 @@ export default function StudioSlideStrip({
   const [multiSelected, setMultiSelected] = useState<Set<number>>(new Set())
   const [thumbnailSize, setThumbnailSize] = useState<"sm" | "md">("sm")
   const [slideLabels, setSlideLabels] = useState<Record<number, string>>({})
+  const [slideTags, setSlideTags]     = useState<Record<number, string>>({})
   const [editingLabel, setEditingLabel] = useState<number | null>(null)
   const [editLabelText, setEditLabelText] = useState("")
+  const [tagMenuN, setTagMenuN]       = useState<number | null>(null)
   const importInputRef                = useRef<HTMLInputElement>(null)
   const stripRef = useRef<HTMLDivElement>(null)
 
@@ -43,7 +56,10 @@ export default function StudioSlideStrip({
       .then((r) => setSlidesWithNotes(new Set(r.slides_with_notes)))
       .catch(() => {})
     fetchSlideLabels(docId)
-      .then((r) => setSlideLabels(Object.fromEntries(Object.entries(r.labels).map(([k, v]) => [Number(k), v]))))
+      .then((r) => {
+        setSlideLabels(Object.fromEntries(Object.entries(r.labels).map(([k, v]) => [Number(k), v])))
+        setSlideTags(Object.fromEntries(Object.entries(r.tags ?? {}).map(([k, v]) => [Number(k), v])))
+      })
       .catch(() => {})
   }, [docId, stripKey, refreshKey])
 
@@ -289,6 +305,7 @@ export default function StudioSlideStrip({
           const dirty     = dirtySlides?.has(n) ?? false
           const hasNotes  = slidesWithNotes.has(n)
           const isMulti   = multiSelected.has(n)
+          const tagColor  = slideTags[n] ?? null
           const isDragging = dragSlide === n
           const isDropTarget = dropTarget === n && dragSlide !== null && dragSlide !== n
           return (
@@ -332,6 +349,13 @@ export default function StudioSlideStrip({
                   >
                     📝
                   </span>
+                )}
+                {tagColor && (
+                  <span
+                    title={`Tagged: ${TAG_COLORS.find((t) => t.color === tagColor)?.label ?? tagColor}`}
+                    className="absolute top-0.5 left-0.5 w-2.5 h-2.5 rounded-full border border-black/20"
+                    style={{ background: tagColor }}
+                  />
                 )}
               </div>
               <div className="w-full flex items-center justify-between gap-0.5 min-w-0">
@@ -406,6 +430,33 @@ export default function StudioSlideStrip({
           <CtxItem onClick={() => { setEditingLabel(contextMenu.slideN); setEditLabelText(slideLabels[contextMenu.slideN] ?? ""); setContextMenu(null) }}>
             Rename slide
           </CtxItem>
+          {/* tag color picker */}
+          <div className="px-3 py-1.5">
+            <div className="text-[9px] text-muted/60 mb-1.5 uppercase tracking-wider">Color tag</div>
+            <div className="flex flex-wrap gap-1">
+              {TAG_COLORS.map((t) => (
+                <button
+                  key={t.color ?? "none"}
+                  title={t.label}
+                  onClick={() => {
+                    const n = contextMenu.slideN
+                    setSlideTags((prev) => {
+                      const next = { ...prev }
+                      if (t.color) next[n] = t.color; else delete next[n]
+                      return next
+                    })
+                    setSlideTag(docId, n, t.color).catch(() => {})
+                    setContextMenu(null)
+                  }}
+                  className="w-4 h-4 rounded-full border-2 transition-transform hover:scale-110"
+                  style={{
+                    background: t.color ?? "transparent",
+                    borderColor: t.color ? (slideTags[contextMenu.slideN] === t.color ? "#fff" : "rgba(255,255,255,0.2)") : "rgba(255,255,255,0.3)",
+                  }}
+                />
+              ))}
+            </div>
+          </div>
           <div className="border-t border-edge/50 my-1" />
           <CtxItem onClick={() => run(() => addSlide(docId, contextMenu.slideN - 1), (r) => r.new_slide_n ?? contextMenu.slideN)}>
             Insert before
