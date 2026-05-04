@@ -10,14 +10,21 @@ from app.cloud.models import (
     AccessRequest,
     ApproveAccessRequestRequest,
     AuditEvent,
+    CompleteJobRequest,
     CreateAccessRequestRequest,
+    CreateJobRequest,
     CreateOrganizationRequest,
     CreateProjectRequest,
     CreateTeamRequest,
+    Document,
+    FailJobRequest,
+    Job,
     DenyAccessRequestRequest,
     Organization,
     OrganizationSummary,
     Project,
+    RegisterDocumentRequest,
+    StartJobRequest,
     Team,
 )
 from app.cloud.store import ConflictError, InMemoryControlPlaneStore, NotFoundError
@@ -90,6 +97,91 @@ def create_project(org_id: str, req: CreateProjectRequest, actor_id: ActorHeader
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@app.post("/api/cloud/projects/{project_id}/documents", response_model=Document)
+def register_document(project_id: str, req: RegisterDocumentRequest) -> Document:
+    try:
+        return store.register_document(
+            project_id=project_id,
+            name=req.name,
+            source_format=req.source_format,
+            storage_uri=req.storage_uri,
+            content_type=req.content_type,
+            size_bytes=req.size_bytes,
+            created_by_id=req.created_by_id,
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/cloud/projects/{project_id}/documents", response_model=list[Document])
+def list_project_documents(project_id: str) -> list[Document]:
+    try:
+        store.get_project(project_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return store.list_project_documents(project_id)
+
+
+@app.post("/api/cloud/documents/{document_id}/jobs", response_model=Job)
+def create_document_job(document_id: str, req: CreateJobRequest) -> Job:
+    try:
+        return store.create_document_job(
+            document_id=document_id,
+            job_type=req.job_type,
+            requested_by_id=req.requested_by_id,
+            parameters=req.parameters,
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/cloud/projects/{project_id}/jobs", response_model=list[Job])
+def list_project_jobs(project_id: str) -> list[Job]:
+    try:
+        store.get_project(project_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return store.list_project_jobs(project_id)
+
+
+@app.get("/api/cloud/jobs/{job_id}", response_model=Job)
+def get_job(job_id: str) -> Job:
+    try:
+        return store.get_job(job_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/cloud/jobs/{job_id}/start", response_model=Job)
+def start_job(job_id: str, req: StartJobRequest) -> Job:
+    try:
+        return store.start_job(job_id, worker_id=req.worker_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/cloud/jobs/{job_id}/complete", response_model=Job)
+def complete_job(job_id: str, req: CompleteJobRequest) -> Job:
+    try:
+        return store.complete_job(job_id, worker_id=req.worker_id, result=req.result)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/cloud/jobs/{job_id}/fail", response_model=Job)
+def fail_job(job_id: str, req: FailJobRequest) -> Job:
+    try:
+        return store.fail_job(job_id, worker_id=req.worker_id, error=req.error)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @app.post("/api/cloud/projects/{project_id}/access-requests", response_model=AccessRequest)
 def create_project_access_request(
     project_id: str, req: CreateAccessRequestRequest
@@ -149,4 +241,3 @@ def list_audit_events(
         resource_type=resource_type,
         resource_id=resource_id,
     )
-

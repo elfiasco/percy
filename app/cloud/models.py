@@ -21,6 +21,16 @@ Role = Literal[
 ]
 
 AccessStatus = Literal["pending", "approved", "denied"]
+SourceFormat = Literal["pptx", "pdf", "tableau", "unknown"]
+JobStatus = Literal["queued", "running", "completed", "failed", "canceled"]
+JobType = Literal[
+    "onboard_document",
+    "render_preview",
+    "rebuild_document",
+    "run_python_snippet",
+    "export_artifact",
+    "security_scan",
+]
 
 
 def utc_now() -> datetime:
@@ -54,6 +64,35 @@ class Project(BaseModel):
     name: str
     team_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class Document(BaseModel):
+    id: str
+    org_id: str
+    project_id: str
+    name: str
+    source_format: SourceFormat = "unknown"
+    storage_uri: str | None = None
+    content_type: str | None = None
+    size_bytes: int | None = None
+    created_by_id: str
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class Job(BaseModel):
+    id: str
+    org_id: str
+    project_id: str
+    document_id: str | None = None
+    job_type: JobType
+    status: JobStatus = "queued"
+    requested_by_id: str
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    result: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
 
 
 class Membership(BaseModel):
@@ -107,6 +146,35 @@ class CreateProjectRequest(BaseModel):
     team_id: str | None = None
 
 
+class RegisterDocumentRequest(BaseModel):
+    name: str
+    source_format: SourceFormat = "unknown"
+    storage_uri: str | None = None
+    content_type: str | None = None
+    size_bytes: int | None = None
+    created_by_id: str
+
+
+class CreateJobRequest(BaseModel):
+    job_type: JobType
+    requested_by_id: str
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+
+class StartJobRequest(BaseModel):
+    worker_id: str
+
+
+class CompleteJobRequest(BaseModel):
+    worker_id: str
+    result: dict[str, Any] = Field(default_factory=dict)
+
+
+class FailJobRequest(BaseModel):
+    worker_id: str
+    error: str
+
+
 class CreateAccessRequestRequest(BaseModel):
     requester_id: str
     requested_role: Role = "viewer"
@@ -127,4 +195,3 @@ class OrganizationSummary(BaseModel):
     teams: list[Team]
     projects: list[Project]
     memberships: list[Membership]
-

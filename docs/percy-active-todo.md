@@ -20,8 +20,9 @@ Start the Percy Enterprise foundation without disrupting the existing local roun
 
 - [x] Add AWS hosting plan.
 - [ ] Add persistent Postgres-backed repository design.
-- [ ] Add document registration model.
-- [ ] Add job model and local job runner.
+- [x] Add document registration model.
+- [x] Add job model and local job lifecycle endpoints.
+- [ ] Add local job runner.
 - [ ] Wire existing PPTX onboarding into cloud document jobs.
 - [ ] Add frontend organization/project navigation.
 - [ ] Define first Python snippet contract for Bridge elements.

@@ -58,6 +58,46 @@ def test_org_team_project_access_request_flow() -> None:
     assert approval_response.status_code == 200
     assert approval_response.json()["status"] == "approved"
 
+    document_response = client.post(
+        f"/api/cloud/projects/{project['id']}/documents",
+        json={
+            "name": "QBR Source Deck",
+            "source_format": "pptx",
+            "storage_uri": "local://uploads/qbr.pptx",
+            "content_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "size_bytes": 1234,
+            "created_by_id": "user_analyst",
+        },
+    )
+    assert document_response.status_code == 200
+    document = document_response.json()
+
+    job_response = client.post(
+        f"/api/cloud/documents/{document['id']}/jobs",
+        json={
+            "job_type": "onboard_document",
+            "requested_by_id": "user_analyst",
+            "parameters": {"mode": "bridge"},
+        },
+    )
+    assert job_response.status_code == 200
+    job = job_response.json()
+    assert job["status"] == "queued"
+
+    started_response = client.post(
+        f"/api/cloud/jobs/{job['id']}/start",
+        json={"worker_id": "worker_local"},
+    )
+    assert started_response.status_code == 200
+    assert started_response.json()["status"] == "running"
+
+    completed_response = client.post(
+        f"/api/cloud/jobs/{job['id']}/complete",
+        json={"worker_id": "worker_local", "result": {"bridge_version_id": "bridge_v1"}},
+    )
+    assert completed_response.status_code == 200
+    assert completed_response.json()["status"] == "completed"
+
     summary_response = client.get(f"/api/cloud/orgs/{org['id']}")
     assert summary_response.status_code == 200
     summary = summary_response.json()
@@ -80,5 +120,8 @@ def test_org_team_project_access_request_flow() -> None:
         "project.created",
         "access.requested",
         "access.approved",
+        "document.registered",
+        "job.queued",
+        "job.started",
+        "job.completed",
     }.issubset(actions)
-

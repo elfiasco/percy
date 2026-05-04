@@ -10,10 +10,14 @@ from typing import Any
 from app.cloud.models import (
     AccessRequest,
     AuditEvent,
+    Document,
     Membership,
     Organization,
     Project,
+    Job,
+    JobType,
     Role,
+    SourceFormat,
     Team,
 )
 
@@ -35,6 +39,8 @@ class InMemoryControlPlaneStore:
         self.org_slug_index: dict[str, str] = {}
         self.teams: dict[str, Team] = {}
         self.projects: dict[str, Project] = {}
+        self.documents: dict[str, Document] = {}
+        self.jobs: dict[str, Job] = {}
         self.memberships: dict[str, Membership] = {}
         self.access_requests: dict[str, AccessRequest] = {}
         self.audit_events: list[AuditEvent] = []
@@ -132,6 +138,160 @@ class InMemoryControlPlaneStore:
             [project for project in self.projects.values() if project.org_id == org_id],
             key=lambda project: project.created_at,
         )
+
+    def register_document(
+        self,
+        project_id: str,
+        name: str,
+        source_format: SourceFormat,
+        storage_uri: str | None,
+        content_type: str | None,
+        size_bytes: int | None,
+        created_by_id: str,
+    ) -> Document:
+        with self._lock:
+            project = self.get_project(project_id)
+            document = Document(
+                id=_new_id("doc"),
+                org_id=project.org_id,
+                project_id=project.id,
+                name=name,
+                source_format=source_format,
+                storage_uri=storage_uri,
+                content_type=content_type,
+                size_bytes=size_bytes,
+                created_by_id=created_by_id,
+            )
+            self.documents[document.id] = document
+            self.add_audit_event(
+                org_id=project.org_id,
+                actor_id=created_by_id,
+                action="document.registered",
+                resource_type="document",
+                resource_id=document.id,
+                details={
+                    "project_id": project.id,
+                    "name": name,
+                    "source_format": source_format,
+                    "storage_uri": storage_uri,
+                },
+            )
+            return document
+
+    def get_document(self, document_id: str) -> Document:
+        try:
+            return self.documents[document_id]
+        except KeyError as exc:
+            raise NotFoundError(f"Document not found: {document_id}") from exc
+
+    def list_project_documents(self, project_id: str) -> list[Document]:
+        return sorted(
+            [document for document in self.documents.values() if document.project_id == project_id],
+            key=lambda document: document.created_at,
+        )
+
+    def create_document_job(
+        self,
+        document_id: str,
+        job_type: JobType,
+        requested_by_id: str,
+        parameters: dict[str, Any] | None = None,
+    ) -> Job:
+        with self._lock:
+            document = self.get_document(document_id)
+            job = Job(
+                id=_new_id("job"),
+                org_id=document.org_id,
+                project_id=document.project_id,
+                document_id=document.id,
+                job_type=job_type,
+                requested_by_id=requested_by_id,
+                parameters=parameters or {},
+            )
+            self.jobs[job.id] = job
+            self.add_audit_event(
+                org_id=document.org_id,
+                actor_id=requested_by_id,
+                action="job.queued",
+                resource_type="job",
+                resource_id=job.id,
+                details={
+                    "document_id": document.id,
+                    "project_id": document.project_id,
+                    "job_type": job_type,
+                },
+            )
+            return job
+
+    def get_job(self, job_id: str) -> Job:
+        try:
+            return self.jobs[job_id]
+        except KeyError as exc:
+            raise NotFoundError(f"Job not found: {job_id}") from exc
+
+    def list_project_jobs(self, project_id: str) -> list[Job]:
+        return sorted(
+            [job for job in self.jobs.values() if job.project_id == project_id],
+            key=lambda job: job.created_at,
+            reverse=True,
+        )
+
+    def start_job(self, job_id: str, worker_id: str) -> Job:
+        with self._lock:
+            job = self.get_job(job_id)
+            if job.status != "queued":
+                raise ConflictError(f"Job is {job.status}, not queued")
+            job.status = "running"
+            job.started_at = datetime.now(timezone.utc)
+            self.add_audit_event(
+                org_id=job.org_id,
+                actor_id=worker_id,
+                action="job.started",
+                resource_type="job",
+                resource_id=job.id,
+                details={"worker_id": worker_id, "job_type": job.job_type},
+            )
+            return job
+
+    def complete_job(self, job_id: str, worker_id: str, result: dict[str, Any] | None = None) -> Job:
+        with self._lock:
+            job = self.get_job(job_id)
+            if job.status not in {"queued", "running"}:
+                raise ConflictError(f"Job is already {job.status}")
+            if job.started_at is None:
+                job.started_at = datetime.now(timezone.utc)
+            job.status = "completed"
+            job.result = result or {}
+            job.finished_at = datetime.now(timezone.utc)
+            self.add_audit_event(
+                org_id=job.org_id,
+                actor_id=worker_id,
+                action="job.completed",
+                resource_type="job",
+                resource_id=job.id,
+                details={"worker_id": worker_id, "job_type": job.job_type},
+            )
+            return job
+
+    def fail_job(self, job_id: str, worker_id: str, error: str) -> Job:
+        with self._lock:
+            job = self.get_job(job_id)
+            if job.status in {"completed", "failed", "canceled"}:
+                raise ConflictError(f"Job is already {job.status}")
+            if job.started_at is None:
+                job.started_at = datetime.now(timezone.utc)
+            job.status = "failed"
+            job.error = error
+            job.finished_at = datetime.now(timezone.utc)
+            self.add_audit_event(
+                org_id=job.org_id,
+                actor_id=worker_id,
+                action="job.failed",
+                resource_type="job",
+                resource_id=job.id,
+                details={"worker_id": worker_id, "job_type": job.job_type, "error": error},
+            )
+            return job
 
     def add_membership(
         self,
@@ -298,4 +458,3 @@ class InMemoryControlPlaneStore:
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
-
