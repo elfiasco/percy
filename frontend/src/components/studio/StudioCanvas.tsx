@@ -333,6 +333,8 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
                 element={el}
                 selected={selectedIds.has(el.id)}
                 isMultiSelected={selectedIds.size > 1 && selectedIds.has(el.id)}
+                snapEnabled={snapOn}
+                otherElements={elements.filter((e) => e.id !== el.id)}
                 docId={docId}
                 slideN={slideN}
                 renderKey={renderKeys[el.id] ?? 0}

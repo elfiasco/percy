@@ -43,6 +43,8 @@ interface Props {
   element: StudioElement
   selected: boolean
   isMultiSelected: boolean
+  snapEnabled?: boolean
+  otherElements?: StudioElement[]
   docId: string
   slideN: number
   renderKey: number
@@ -53,7 +55,7 @@ interface Props {
 }
 
 export default function ElementOverlay({
-  element, selected, isMultiSelected, docId, slideN, renderKey, onSelect, onCommit, onMultiMove, onRotate,
+  element, selected, isMultiSelected, snapEnabled, otherElements, docId, slideN, renderKey, onSelect, onCommit, onMultiMove, onRotate,
 }: Props) {
   const { containerRef, slideWidthIn, slideHeightIn } = useCanvas()
   const overlayRef   = useRef<HTMLDivElement>(null)
@@ -114,6 +116,47 @@ export default function ElementOverlay({
     if (ds.mode === "move") {
       l = Math.max(0, Math.min(100 - w, l + dxPct))
       t = Math.max(0, Math.min(100 - h, t + dyPct))
+
+      // snap to other element edges/centers when snap is enabled
+      if (snapEnabled && otherElements && otherElements.length > 0 && !isMultiSelected) {
+        const THRESH = 1.0  // percent
+        const elRight  = l + w
+        const elCenterX = l + w / 2
+        const elBottom = t + h
+        const elCenterY = t + h / 2
+
+        let bestDx = THRESH + 1
+        let bestDy = THRESH + 1
+
+        for (const other of otherElements) {
+          const oL = other.left_pct, oT = other.top_pct
+          const oR = oL + other.width_pct, oB = oT + other.height_pct
+          const oCX = oL + other.width_pct / 2, oCY = oT + other.height_pct / 2
+
+          // X axis: snap left/right/center to other's left/right/center
+          for (const selfX of [l, elRight, elCenterX]) {
+            for (const otherX of [oL, oR, oCX]) {
+              const d = Math.abs(selfX - otherX)
+              if (d < THRESH && d < Math.abs(bestDx)) {
+                bestDx = selfX === l ? otherX - l : selfX === elRight ? otherX - elRight : otherX - elCenterX
+              }
+            }
+          }
+
+          // Y axis
+          for (const selfY of [t, elBottom, elCenterY]) {
+            for (const otherY of [oT, oB, oCY]) {
+              const d = Math.abs(selfY - otherY)
+              if (d < THRESH && d < Math.abs(bestDy)) {
+                bestDy = selfY === t ? otherY - t : selfY === elBottom ? otherY - elBottom : otherY - elCenterY
+              }
+            }
+          }
+        }
+
+        if (Math.abs(bestDx) <= THRESH) l = Math.max(0, Math.min(100 - w, l + bestDx))
+        if (Math.abs(bestDy) <= THRESH) t = Math.max(0, Math.min(100 - h, t + bestDy))
+      }
     } else {
       const dir = ds.handle!
       if (dir.includes("e")) { w = Math.min(Math.max(1, ds.startWidthPct  + dxPct), 100 - l) }
