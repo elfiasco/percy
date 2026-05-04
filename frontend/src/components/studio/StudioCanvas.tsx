@@ -3,6 +3,7 @@ import type { StudioElement } from "../../lib/studioTypes"
 import { fetchSlideElements, updateElementPosition } from "../../lib/studioApi"
 import { CanvasContext } from "./CanvasContext"
 import ElementOverlay from "./ElementOverlay"
+import InlineTextEditor from "./InlineTextEditor"
 
 interface Props {
   docId: string
@@ -29,7 +30,8 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
   const rbStart                     = useRef<{ x: number; y: number } | null>(null)
   const [gridOn, setGridOn]         = useState(false)
   const [snapOn, setSnapOn]         = useState(false)
-  const [snapGuides, setSnapGuides] = useState<{ type: "h" | "v"; pos: number }[]>([])
+  const [snapGuides, setSnapGuides]   = useState<{ type: "h" | "v"; pos: number }[]>([])
+  const [inlineEditId, setInlineEditId] = useState<string | null>(null)
   const GRID_IN                     = 0.25
 
   // ── fetch elements when slide changes or parent refreshes ─────────────────
@@ -363,6 +365,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
                 onMultiMove={handleMultiMove}
                 onRotate={handleRotate}
                 onSnapLines={setSnapGuides}
+                onInlineEdit={(id) => { setInlineEditId(id) }}
               />
             ))}
             {/* multi-select bounding box */}
@@ -401,6 +404,25 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
                 }}
               />
             )}
+
+            {/* inline text editor */}
+            {inlineEditId && (() => {
+              const el = elements.find((e) => e.id === inlineEditId)
+              if (!el) return null
+              return (
+                <InlineTextEditor
+                  key={inlineEditId}
+                  element={el}
+                  docId={docId}
+                  slideN={slideN}
+                  onCommit={() => {
+                    setInlineEditId(null)
+                    setRenderKeys((prev) => ({ ...prev, [inlineEditId]: (prev[inlineEditId] ?? 0) + 1 }))
+                  }}
+                  onCancel={() => setInlineEditId(null)}
+                />
+              )
+            })()}
 
             {/* loading shimmer */}
             {loading && (

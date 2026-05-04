@@ -55,10 +55,13 @@ interface Props {
   onMultiMove?: (deltaLeftIn: number, deltaTopIn: number) => void
   onRotate?: (id: string, rotation: number) => void
   onSnapLines?: (lines: SnapLine[]) => void
+  onInlineEdit?: (id: string) => void
 }
 
+const TEXT_TYPES = new Set(["BridgeText", "BridgeShape"])
+
 export default function ElementOverlay({
-  element, selected, isMultiSelected, snapEnabled, otherElements, docId, slideN, renderKey, onSelect, onCommit, onMultiMove, onRotate, onSnapLines,
+  element, selected, isMultiSelected, snapEnabled, otherElements, docId, slideN, renderKey, onSelect, onCommit, onMultiMove, onRotate, onSnapLines, onInlineEdit,
 }: Props) {
   const { containerRef, slideWidthIn, slideHeightIn } = useCanvas()
   const overlayRef   = useRef<HTMLDivElement>(null)
@@ -287,6 +290,12 @@ export default function ElementOverlay({
       onClick={(e) => {
         e.stopPropagation()
         if (!isLocked) onSelect(element.id, e.shiftKey)
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation()
+        if (!isLocked && onInlineEdit && TEXT_TYPES.has(element.type)) {
+          onInlineEdit(element.id)
+        }
       }}
       onPointerDown={(e) => { if (selected && !isLocked) startInteraction(e, "move") }}
       onPointerMove={handlePointerMove}
