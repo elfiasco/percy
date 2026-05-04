@@ -29,6 +29,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
   const rbStart                     = useRef<{ x: number; y: number } | null>(null)
   const [gridOn, setGridOn]         = useState(false)
   const [snapOn, setSnapOn]         = useState(false)
+  const [snapGuides, setSnapGuides] = useState<{ type: "h" | "v"; pos: number }[]>([])
   const GRID_IN                     = 0.25
 
   // ── fetch elements when slide changes or parent refreshes ─────────────────
@@ -326,6 +327,25 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
               </svg>
             )}
 
+            {/* snap guide lines — shown during element drag */}
+            {snapGuides.length > 0 && (
+              <svg
+                className="absolute inset-0 pointer-events-none"
+                style={{ width: "100%", height: "100%", zIndex: 19999 }}
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                {snapGuides.map((g, i) =>
+                  g.type === "v" ? (
+                    <line key={i} x1={`${g.pos}%`} y1="0%" x2={`${g.pos}%`} y2="100%"
+                      stroke="rgba(239,68,68,0.85)" strokeWidth={1} strokeDasharray="4 3" />
+                  ) : (
+                    <line key={i} x1="0%" y1={`${g.pos}%`} x2="100%" y2={`${g.pos}%`}
+                      stroke="rgba(239,68,68,0.85)" strokeWidth={1} strokeDasharray="4 3" />
+                  )
+                )}
+              </svg>
+            )}
+
             {/* element overlays — each carries its own render PNG */}
             {[...elements].sort((a, b) => a.z_index - b.z_index).map((el) => (
               <ElementOverlay
@@ -342,6 +362,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
                 onCommit={handleCommit}
                 onMultiMove={handleMultiMove}
                 onRotate={handleRotate}
+                onSnapLines={setSnapGuides}
               />
             ))}
             {/* multi-select bounding box */}

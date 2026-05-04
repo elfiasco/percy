@@ -39,6 +39,8 @@ interface DragState {
   containerH: number
 }
 
+interface SnapLine { type: "h" | "v"; pos: number }
+
 interface Props {
   element: StudioElement
   selected: boolean
@@ -52,10 +54,11 @@ interface Props {
   onCommit: (id: string, leftIn: number, topIn: number, widthIn: number, heightIn: number) => void
   onMultiMove?: (deltaLeftIn: number, deltaTopIn: number) => void
   onRotate?: (id: string, rotation: number) => void
+  onSnapLines?: (lines: SnapLine[]) => void
 }
 
 export default function ElementOverlay({
-  element, selected, isMultiSelected, snapEnabled, otherElements, docId, slideN, renderKey, onSelect, onCommit, onMultiMove, onRotate,
+  element, selected, isMultiSelected, snapEnabled, otherElements, docId, slideN, renderKey, onSelect, onCommit, onMultiMove, onRotate, onSnapLines,
 }: Props) {
   const { containerRef, slideWidthIn, slideHeightIn } = useCanvas()
   const overlayRef   = useRef<HTMLDivElement>(null)
@@ -184,7 +187,26 @@ export default function ElementOverlay({
     el.style.top    = `${t}%`
     el.style.width  = `${w}%`
     el.style.height = `${h}%`
-  }, [])
+
+    // Compute snap guide lines when moving
+    if (ds.mode === "move" && onSnapLines) {
+      const guides: SnapLine[] = []
+      const GUIDE_THRESH = 0.8
+      const cx = l + w / 2, cy = t + h / 2
+      const r = l + w, b = t + h
+      for (const xPos of [0, 50, 100]) {
+        for (const self of [l, cx, r]) {
+          if (Math.abs(self - xPos) < GUIDE_THRESH) { guides.push({ type: "v", pos: xPos }); break }
+        }
+      }
+      for (const yPos of [0, 50, 100]) {
+        for (const self of [t, cy, b]) {
+          if (Math.abs(self - yPos) < GUIDE_THRESH) { guides.push({ type: "h", pos: yPos }); break }
+        }
+      }
+      onSnapLines(guides)
+    }
+  }, [onSnapLines])
 
   const handleRotatePointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault()
@@ -226,6 +248,7 @@ export default function ElementOverlay({
     const el = overlayRef.current
     if (!ds || !el) return
     dragState.current = null
+    onSnapLines?.([])
 
     const lPct = parseFloat(el.style.left)
     const tPct = parseFloat(el.style.top)
