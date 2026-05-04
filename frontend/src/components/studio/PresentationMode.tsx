@@ -69,6 +69,11 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
   const { elapsed, paused, toggle: toggleTimer, reset: resetTimer } = useTimer()
   const [slideStart, setSlideStart]     = useState(0)
   const [slideTimes, setSlideTimes]     = useState<Record<number, number>>({})
+  const [autoplay, setAutoplay]         = useState(false)
+  const [autoDelay, setAutoDelay]       = useState(5)
+  const [showAutoSettings, setShowAutoSettings] = useState(false)
+  const autoProgressRef                 = useRef(0)
+  const [autoProgress, setAutoProgress] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
 
   const slideUrl = (n: number) => `/api/docs/${docId}/slides/${n}/bridge.png`
@@ -81,6 +86,33 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
       if (n) { const img = new Image(); img.src = slideUrl(n) }
     }
   }, [current, slideCount, docId])
+
+  // Autoplay: advance slides on a timer with progress bar
+  useEffect(() => {
+    if (!autoplay) { autoProgressRef.current = 0; setAutoProgress(0); return }
+    const total = autoDelay * 1000
+    const tick  = 50
+    autoProgressRef.current = 0
+    setAutoProgress(0)
+    const id = setInterval(() => {
+      autoProgressRef.current += tick
+      const pct = Math.min(100, (autoProgressRef.current / total) * 100)
+      setAutoProgress(pct)
+      if (autoProgressRef.current >= total) {
+        autoProgressRef.current = 0
+        setCurrent((c) => {
+          const next = c < slideCount ? c + 1 : 1
+          return next
+        })
+      }
+    }, tick)
+    return () => clearInterval(id)
+  }, [autoplay, autoDelay, slideCount])
+
+  // Reset autoplay progress when slide changes manually
+  useEffect(() => {
+    if (autoplay) { autoProgressRef.current = 0; setAutoProgress(0) }
+  }, [current, autoplay])
 
   // Fetch notes for current slide (and adjacent) when notes panel is open
   useEffect(() => {
@@ -113,6 +145,7 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
       if (e.key === "n" || e.key === "N") { e.preventDefault(); setShowNotes((v) => !v); return }
       if (e.key === "t" || e.key === "T") { e.preventDefault(); setShowTimer((v) => !v); return }
       if (e.key === "p" || e.key === "P") { e.preventDefault(); toggleTimer(); return }
+      if (e.key === "a" || e.key === "A") { e.preventDefault(); setAutoplay((v) => !v); return }
       if (e.key === "ArrowRight" || e.key === "ArrowDown" || e.key === "PageDown" || e.key === " ") {
         e.preventDefault(); go(current + 1)
       }
@@ -292,9 +325,58 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
         </div>
       )}
 
+      {/* autoplay progress bar */}
+      {autoplay && (
+        <div className="absolute top-0 left-0 right-0 h-0.5 bg-white/10">
+          <div
+            className="h-full bg-indigo-400 transition-none"
+            style={{ width: `${autoProgress}%` }}
+          />
+        </div>
+      )}
+
+      {/* autoplay controls */}
+      <div
+        className="absolute bottom-4 right-4 flex items-center gap-1"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {showAutoSettings && (
+          <div className="flex items-center gap-1 bg-black/60 rounded px-2 py-1">
+            <span className="text-white/40 text-[10px]">every</span>
+            <input
+              type="number"
+              min={1}
+              max={120}
+              value={autoDelay}
+              onChange={(e) => setAutoDelay(Math.max(1, Math.min(120, Number(e.target.value))))}
+              className="w-10 text-xs bg-white/10 border border-white/20 rounded px-1 py-0.5 text-white/80 text-center focus:outline-none"
+            />
+            <span className="text-white/40 text-[10px]">s</span>
+          </div>
+        )}
+        <button
+          onClick={() => setShowAutoSettings((v) => !v)}
+          title="Autoplay settings"
+          className="text-white/30 hover:text-white/60 text-xs px-1 transition-colors"
+        >
+          ⚙
+        </button>
+        <button
+          onClick={() => setAutoplay((v) => !v)}
+          title={autoplay ? "Stop autoplay (A)" : "Start autoplay (A)"}
+          className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+            autoplay
+              ? "text-indigo-300 border-indigo-400/40 bg-indigo-500/20 hover:bg-indigo-500/30"
+              : "text-white/30 border-white/10 hover:text-white/60 hover:border-white/25"
+          }`}
+        >
+          {autoplay ? "⏹ Auto" : "▶ Auto"}
+        </button>
+      </div>
+
       {/* keyboard hint */}
       <div className="absolute top-3 left-4 text-white/25 text-[10px] font-mono">
-        ← → navigate · N notes · T timer · P pause · Esc exit
+        ← → navigate · N notes · T timer · A autoplay · Esc exit
       </div>
     </div>
   )
