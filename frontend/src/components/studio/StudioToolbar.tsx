@@ -117,6 +117,7 @@ interface Props {
   generating?: boolean
   outlineOpen?: boolean
   onToggleOutline?: () => void
+  onPresent?: () => void
 }
 
 export default function StudioToolbar({
@@ -140,6 +141,7 @@ export default function StudioToolbar({
   generating,
   outlineOpen,
   onToggleOutline,
+  onPresent,
 }: Props) {
   const [insertOpen, setInsertOpen] = useState(false)
   const [copyToOpen, setCopyToOpen] = useState(false)
@@ -595,6 +597,17 @@ export default function StudioToolbar({
               </div>
             )}
           </div>
+        )}
+
+        {onPresent && (
+          <button
+            onClick={onPresent}
+            title="Present slideshow (fullscreen)"
+            className="flex items-center gap-1.5 text-xs px-3 py-1 rounded border transition-colors
+                       bg-violet-500/15 text-violet-300 hover:bg-violet-500/25 border-violet-500/25"
+          >
+            ▶ Present
+          </button>
         )}
 
         <button

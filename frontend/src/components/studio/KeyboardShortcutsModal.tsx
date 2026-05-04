@@ -54,6 +54,7 @@ const SECTIONS = [
       { keys: "Ctrl+G",             desc: "Slide sorter grid view" },
       { keys: "PageUp / PageDown",  desc: "Previous / next slide" },
       { keys: "?",                  desc: "Show this help" },
+      { keys: "F5",                 desc: "Start presentation (fullscreen slideshow)" },
       { keys: "Notes bar",          desc: "Speaker notes (bottom of canvas)" },
     ],
   },

@@ -15,6 +15,7 @@ import SlideSorterModal from "./SlideSorterModal"
 import FindReplacePanel from "./FindReplacePanel"
 import KeyboardShortcutsModal from "./KeyboardShortcutsModal"
 import OutlinePanel from "./OutlinePanel"
+import PresentationMode from "./PresentationMode"
 
 interface Props {
   doc: DocInfo
@@ -34,6 +35,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const [savingToCloud, setSavingToCloud]     = useState(false)
   const [generating, setGenerating]           = useState(false)
   const [outlineOpen, setOutlineOpen]         = useState(false)
+  const [presenting, setPresenting]           = useState(false)
   const [shortcutsOpen, setShortcutsOpen]       = useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [slideSorterOpen, setSlideSorterOpen]       = useState(false)
@@ -376,6 +378,13 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         return
       }
 
+      // F5 → present from current slide
+      if (e.key === "F5") {
+        e.preventDefault()
+        setPresenting(true)
+        return
+      }
+
       // PageUp → previous slide, PageDown → next slide, Home → first, End → last
       if (e.key === "PageUp") {
         e.preventDefault()
@@ -507,6 +516,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         generating={generating}
         outlineOpen={outlineOpen}
         onToggleOutline={() => setOutlineOpen((o) => !o)}
+        onPresent={() => setPresenting(true)}
       />
 
       {/* ── main area: slide strip + canvas + properties ── */}
@@ -586,6 +596,15 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           docId={doc.doc_id}
           onClose={() => setCommandPaletteOpen(false)}
           onJump={handleJumpToElement}
+        />
+      )}
+
+      {presenting && (
+        <PresentationMode
+          docId={doc.doc_id}
+          slideCount={localSlideCount}
+          startSlide={selectedSlide}
+          onClose={() => setPresenting(false)}
         />
       )}
 
