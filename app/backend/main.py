@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -113,6 +113,56 @@ class ElementPositionUpdate(BaseModel):
     top_in: float | None = None
     width_in: float | None = None
     height_in: float | None = None
+    z_index: int | None = None
+
+
+# ── Text-editing models ───────────────────────────────────────────────────────
+
+class RunSpec(BaseModel):
+    text: str = ""
+    font_name: str | None = None
+    font_size: float | None = None
+    font_bold: bool | None = None
+    font_italic: bool | None = None
+    font_underline: bool | None = None
+    font_color: str | None = None    # "#RRGGBB" or "" to clear
+    strikethrough: str | None = None # "sng" | "dbl" | "" to clear
+    font_caps: str | None = None     # "all" | "small" | "" to clear
+    is_line_break: bool = False
+
+class ParagraphSpec(BaseModel):
+    alignment: str | None = None
+    space_before: float | None = None
+    space_after: float | None = None
+    runs: list[RunSpec] = []
+
+class ChartTextUpdate(BaseModel):
+    title_text: str | None = None
+    title_font_size: float | None = None
+    title_font_bold: bool | None = None
+    title_font_italic: bool | None = None
+    title_font_name: str | None = None
+    cat_axis_title: str | None = None
+    val_axis_title: str | None = None
+    legend_font_size: float | None = None
+    legend_font_bold: bool | None = None
+    legend_font_name: str | None = None
+
+class TableCellUpdate(BaseModel):
+    row: int
+    col: int
+    text: str | None = None
+    font_bold: bool | None = None
+    font_italic: bool | None = None
+    font_size: float | None = None
+    font_name: str | None = None
+
+class TextUpdateRequest(BaseModel):
+    kind: str  # "paragraphs" | "chart" | "table_cell"
+    paragraphs: list[ParagraphSpec] | None = None
+    chart: ChartTextUpdate | None = None
+    table_cell: TableCellUpdate | None = None
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -747,6 +797,22 @@ def list_workspace():
     files.sort(key=lambda x: x["name"].lower())
     log.info("list_workspace: found %d files", len(files))
     return {"files": files}
+
+
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...)):
+    """Accept a PPTX/PDF file upload and save it to the first workspace directory."""
+    allowed = {".pptx", ".pdf", ".twbx", ".twb"}
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in allowed:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
+    upload_dir = _WORKSPACE_DIRS[0]
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    dest = upload_dir / (file.filename or f"upload{ext}")
+    contents = await file.read()
+    dest.write_bytes(contents)
+    log.info("upload: saved %s (%d bytes) to %s", file.filename, len(contents), dest)
+    return {"path": str(dest), "name": dest.name, "size_kb": len(contents) // 1024}
 
 
 @app.post("/api/onboard")
@@ -2355,6 +2421,80 @@ def rerender_bridge(doc_id: str):
     return {"bridge_slides": len(paths)}
 
 
+@app.post("/api/docs/{doc_id}/slides/{n}/render")
+def render_single_slide(doc_id: str, n: int):
+    """Re-render one bridge slide PNG from the current in-memory Bridge model.
+
+    Called by Studio after any text/position/fill edit so the canvas
+    shows updated content without a full Rebuild.
+    """
+    from percy.diagnostics.render_png import _register_embedded_fonts  # type: ignore[attr-defined]
+
+    d     = _require(doc_id)
+    doc   = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
+
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    bridge_dir.mkdir(parents=True, exist_ok=True)
+    dest = bridge_dir / f"slide-{n:03d}.png"
+
+    theme          = getattr(doc, "theme_colors", None) or None
+    embedded_fonts = getattr(doc, "embedded_fonts", None)
+    if embedded_fonts:
+        _register_embedded_fonts(embedded_fonts)
+
+    renderer = SlideRenderer(theme=theme)
+    renderer.set_document(doc)
+    try:
+        fig = renderer.render_slide(slide)
+        fig.savefig(str(dest), dpi=96, bbox_inches="tight", pad_inches=0)
+        fig.clf()
+    except Exception as exc:
+        import traceback
+        raise HTTPException(500, detail=f"Render failed: {exc}\n{traceback.format_exc()}")
+
+    # Update bridge_paths so the PNG endpoint serves the fresh file
+    if 1 <= n <= len(d.get("bridge_paths", [])):
+        d["bridge_paths"][n - 1] = str(dest)
+
+    log.info("render_single_slide: slide %d of %s → %s", n, doc_id, dest.name)
+    return {"ok": True, "slide": n, "path": str(dest)}
+
+
+@app.get("/api/docs/{doc_id}/export")
+def export_pptx(doc_id: str):
+    """Rebuild current Bridge model → stream rebuilt PPTX as a file download.
+
+    This is the primary 'Save' action from Percy Studio.
+    Runs rebuild_pptx() synchronously (may take 5–15s for large decks).
+    """
+    import traceback as _tb
+
+    d = _require(doc_id)
+    if d.get("source_format") != "pptx":
+        raise HTTPException(400, "Export is only supported for PPTX documents")
+
+    _REBUILD_DIR.mkdir(parents=True, exist_ok=True)
+    stem     = Path(d["name"]).stem
+    out_path = _REBUILD_DIR / f"{stem}_{doc_id}_studio.pptx"
+
+    t0 = time.perf_counter()
+    try:
+        _rebuild_pptx(d["doc"], out_path)
+    except Exception as exc:
+        raise HTTPException(500, detail=f"Rebuild failed: {exc}\n{_tb.format_exc()}")
+
+    log.info("export_pptx: rebuilt %s in %.1fs", out_path.name, time.perf_counter() - t0)
+    return FileResponse(
+        str(out_path),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=f"{stem}_percy.pptx",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.post("/api/docs/{doc_id}/grades")
 def set_grade(doc_id: str, req: GradeRequest):
     d = _require(doc_id)
@@ -2535,15 +2675,331 @@ def update_element_position(doc_id: str, n: int, element_id: str, req: ElementPo
         raise HTTPException(404, f"Element {element_id!r} not found on slide {n}")
 
     pos = el.position
-    if req.left_in  is not None: pos.left   = max(0.0, req.left_in)
-    if req.top_in   is not None: pos.top    = max(0.0, req.top_in)
-    if req.width_in is not None: pos.width  = max(0.05, req.width_in)
-    if req.height_in is not None: pos.height = max(0.05, req.height_in)
+    if req.left_in   is not None: pos.left          = max(0.0,  req.left_in)
+    if req.top_in    is not None: pos.top           = max(0.0,  req.top_in)
+    if req.width_in  is not None: pos.width         = max(0.05, req.width_in)
+    if req.height_in is not None: pos.height        = max(0.05, req.height_in)
+    if req.z_index   is not None: el.stacking.z_index = max(1,  req.z_index)
 
     w, h = _get_slide_dims(doc, slide)
     log.info("studio: moved element %s on slide %d of %s → (%.3f, %.3f) %.3fx%.3f in",
              element_id, n, doc_id, pos.left, pos.top, pos.width, pos.height)
     return _serialize_element(el, el_index, w, h)
+
+
+# ── Text content helpers ──────────────────────────────────────────────────────
+
+def _color_to_str(c: Any) -> str | None:
+    if c is None:
+        return None
+    v = getattr(c, "value", None)
+    return v if v else None
+
+
+def _str_to_color(s: str | None) -> Any:
+    if not s:
+        return None
+    from percy.bridge.elements import ColorSpec
+    return ColorSpec(value=s)
+
+
+def _ser_run(run: Any, idx: int) -> dict:
+    return {
+        "idx":            idx,
+        "text":           run.text or "",
+        "is_line_break":  bool(getattr(run, "is_line_break", False)),
+        "font_name":      run.font_name,
+        "font_size":      run.font_size,
+        "font_bold":      run.font_bold,
+        "font_italic":    run.font_italic,
+        "font_underline": run.font_underline,
+        "font_color":     _color_to_str(run.font_color),
+        "strikethrough":  run.strikethrough,
+        "font_caps":      run.font_caps,
+    }
+
+
+def _ser_para(para: Any, idx: int) -> dict:
+    return {
+        "idx":          idx,
+        "alignment":    para.alignment,
+        "space_before": para.space_before,
+        "space_after":  para.space_after,
+        "runs":         [_ser_run(r, i) for i, r in enumerate(para.runs)],
+    }
+
+
+def _get_paras(el: Any, el_type: str) -> list:
+    if el_type in ("BridgeText", "BridgeFreeform"):
+        return getattr(el, "paragraphs", []) or []
+    if el_type == "BridgeShape":
+        tc = getattr(el, "text_content", None)
+        return getattr(tc, "paragraphs", []) or [] if tc else []
+    return []
+
+
+def _serialize_element_text_content(el: Any, el_type: str) -> dict:
+    if el_type in ("BridgeText", "BridgeShape", "BridgeFreeform"):
+        paras = _get_paras(el, el_type)
+        return {
+            "kind":       "paragraphs",
+            "paragraphs": [_ser_para(p, i) for i, p in enumerate(paras)],
+        }
+
+    if el_type == "BridgeChart":
+        t   = el.title
+        cat = el.category_axis
+        val = el.value_axis
+        leg = el.legend
+        return {
+            "kind":  "chart",
+            "title": {
+                "text":       t.title,
+                "font_size":  t.title_font_size,
+                "font_bold":  t.title_font_bold,
+                "font_italic":t.title_font_italic,
+                "font_name":  t.title_font_name,
+                "font_color": _color_to_str(t.title_font_color),
+            },
+            "cat_axis_title": {
+                "text":      cat.title.title_text,
+                "font_size": cat.title.title_font_size,
+                "font_bold": cat.title.title_font_bold,
+                "font_name": cat.title.title_font_name,
+            } if cat else None,
+            "val_axis_title": {
+                "text":      val.title.title_text,
+                "font_size": val.title.title_font_size,
+                "font_bold": val.title.title_font_bold,
+                "font_name": val.title.title_font_name,
+            } if val else None,
+            "legend": {
+                "font_size":  leg.font_size,
+                "font_bold":  leg.font_bold,
+                "font_name":  leg.font_name,
+                "font_color": _color_to_str(leg.font_color),
+            } if leg else None,
+            "series": [
+                {
+                    "idx":  i,
+                    "name": s.name,
+                    "data_labels": {
+                        "show":      s.data_labels.show,
+                        "font_size": s.data_labels.font_size,
+                        "font_bold": s.data_labels.font_bold,
+                        "font_name": s.data_labels.font_name,
+                        "font_color":_color_to_str(s.data_labels.font_color),
+                    },
+                }
+                for i, s in enumerate(el.series)
+            ],
+        }
+
+    if el_type == "BridgeTable":
+        cfs = getattr(el, "cell_formats", []) or []
+        return {
+            "kind": "table",
+            "rows": len(cfs),
+            "cols": len(cfs[0]) if cfs else 0,
+            "cells": [
+                [
+                    {
+                        "row":        r,
+                        "col":        c,
+                        "text":       cf.text or "",
+                        "paragraphs": [_ser_para(p, i) for i, p in enumerate(cf.paragraphs or [])],
+                        "font_name":  cf.font.font_name,
+                        "font_size":  cf.font.font_size,
+                        "font_bold":  cf.font.font_bold,
+                        "font_italic":cf.font.font_italic,
+                    }
+                    for c, cf in enumerate(row)
+                ]
+                for r, row in enumerate(cfs)
+            ],
+        }
+
+    return {"kind": "none"}
+
+
+def _apply_run_spec_to(run: Any, spec: RunSpec) -> None:
+    run.text        = spec.text
+    run.is_line_break = spec.is_line_break
+    if spec.font_name      is not None: run.font_name      = spec.font_name or None
+    if spec.font_size      is not None: run.font_size      = spec.font_size
+    if spec.font_bold      is not None: run.font_bold      = spec.font_bold
+    if spec.font_italic    is not None: run.font_italic    = spec.font_italic
+    if spec.font_underline is not None: run.font_underline = spec.font_underline
+    if spec.font_color     is not None: run.font_color     = _str_to_color(spec.font_color)
+    if spec.strikethrough  is not None: run.strikethrough  = spec.strikethrough or None
+    if spec.font_caps      is not None: run.font_caps      = spec.font_caps or None
+
+
+def _apply_text_update(el: Any, el_type: str, req: TextUpdateRequest) -> None:
+    from percy.bridge.elements import TextParagraph, TextRun  # type: ignore[attr-defined]
+
+    if req.kind == "paragraphs" and req.paragraphs is not None:
+        old_paras = _get_paras(el, el_type)
+        new_paras: list[Any] = []
+        for i, pspec in enumerate(req.paragraphs):
+            para = old_paras[i] if i < len(old_paras) else TextParagraph()
+            if pspec.alignment    is not None: para.alignment    = pspec.alignment or None
+            if pspec.space_before is not None: para.space_before = pspec.space_before
+            if pspec.space_after  is not None: para.space_after  = pspec.space_after
+            if pspec.runs:
+                new_runs: list[Any] = []
+                for j, rspec in enumerate(pspec.runs):
+                    run = para.runs[j] if j < len(para.runs) else TextRun()
+                    _apply_run_spec_to(run, rspec)
+                    new_runs.append(run)
+                para.runs = new_runs
+            new_paras.append(para)
+        if el_type in ("BridgeText", "BridgeFreeform"):
+            el.paragraphs = new_paras
+        elif el_type == "BridgeShape":
+            tc = getattr(el, "text_content", None)
+            if tc:
+                tc.paragraphs = new_paras
+                tc.has_text   = bool(any(
+                    not getattr(r, "is_line_break", False) and r.text
+                    for p in new_paras for r in p.runs
+                ))
+
+    elif req.kind == "chart" and req.chart is not None and el_type == "BridgeChart":
+        cu = req.chart
+        t  = el.title
+        if cu.title_text       is not None: t.title             = cu.title_text
+        if cu.title_font_size  is not None: t.title_font_size   = cu.title_font_size
+        if cu.title_font_bold  is not None: t.title_font_bold   = cu.title_font_bold
+        if cu.title_font_italic is not None: t.title_font_italic = cu.title_font_italic
+        if cu.title_font_name  is not None: t.title_font_name   = cu.title_font_name
+        if cu.cat_axis_title is not None and el.category_axis:
+            el.category_axis.title.title_text = cu.cat_axis_title
+        if cu.val_axis_title is not None and el.value_axis:
+            el.value_axis.title.title_text = cu.val_axis_title
+        if el.legend:
+            if cu.legend_font_size is not None: el.legend.font_size = cu.legend_font_size
+            if cu.legend_font_bold is not None: el.legend.font_bold = cu.legend_font_bold
+            if cu.legend_font_name is not None: el.legend.font_name = cu.legend_font_name
+
+    elif req.kind == "table_cell" and req.table_cell is not None and el_type == "BridgeTable":
+        tc = req.table_cell
+        cfs = getattr(el, "cell_formats", [])
+        if 0 <= tc.row < len(cfs) and 0 <= tc.col < len(cfs[tc.row]):
+            cf = cfs[tc.row][tc.col]
+            if tc.text is not None:
+                cf.text = tc.text
+                if cf.paragraphs and cf.paragraphs[0].runs:
+                    cf.paragraphs[0].runs[0].text = tc.text
+            if tc.font_bold   is not None: cf.font.font_bold   = tc.font_bold
+            if tc.font_italic is not None: cf.font.font_italic = tc.font_italic
+            if tc.font_size   is not None: cf.font.font_size   = tc.font_size
+            if tc.font_name   is not None: cf.font.font_name   = tc.font_name
+
+
+# ── Text content endpoints ─────────────────────────────────────────────────────
+
+def _find_element(doc_id: str, n: int, element_id: str):
+    d     = _require(doc_id)
+    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
+    for i, e in enumerate(slide.elements):
+        if _element_id(e, i) == element_id:
+            return e
+    raise HTTPException(404, f"Element {element_id!r} not found on slide {n}")
+
+
+@app.get("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/text")
+def get_element_text(doc_id: str, n: int, element_id: str):
+    el = _find_element(doc_id, n, element_id)
+    return _serialize_element_text_content(el, el.element_type)
+
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/text")
+def update_element_text(doc_id: str, n: int, element_id: str, req: TextUpdateRequest):
+    el = _find_element(doc_id, n, element_id)
+    _apply_text_update(el, el.element_type, req)
+    log.info("studio: updated text on %s slide %d of %s", element_id, n, doc_id)
+    return _serialize_element_text_content(el, el.element_type)
+
+
+@app.get("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/element-png")
+def render_element_png(doc_id: str, n: int, element_id: str, v: int = 0):
+    """Render a single Bridge element to a transparent PNG for the Studio canvas."""
+    from percy.diagnostics.render_png import _register_embedded_fonts  # type: ignore[attr-defined]
+    import io as _io
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
+
+    el_index = None
+    el       = None
+    for i, e in enumerate(slide.elements):
+        if _element_id(e, i) == element_id:
+            el, el_index = e, i
+            break
+    if el is None:
+        raise HTTPException(404, f"Element {element_id!r} not found on slide {n}")
+
+    theme          = getattr(doc, "theme_colors", None) or None
+    embedded_fonts = getattr(doc, "embedded_fonts", None)
+    if embedded_fonts:
+        _register_embedded_fonts(embedded_fonts)
+
+    renderer = SlideRenderer(theme=theme)
+    renderer.set_document(doc)
+    # propagate slide default text color so text-heavy shapes render correctly
+    renderer._default_text_color = getattr(slide, "default_text_color", None)
+
+    try:
+        fig = renderer.render_element(el, padding=0)
+        buf = _io.BytesIO()
+        # save at exact figsize (no tight-crop) so the PNG proportions match
+        # the element's bounding box; transparent so it composites over white canvas
+        fig.savefig(buf, format="png", dpi=96, transparent=True)
+        fig.clf()
+        buf.seek(0)
+    except Exception as exc:
+        import traceback
+        raise HTTPException(500, detail=f"Element render failed: {exc}\n{traceback.format_exc()}")
+
+    return Response(
+        content=buf.read(),
+        media_type="image/png",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatRequest(BaseModel):
+    slide_n: int
+    element_id: str | None = None
+    messages: list[ChatMessage]
+
+@app.post("/api/docs/{doc_id}/chat")
+def chat(doc_id: str, req: ChatRequest):
+    """AI chat stub — will be wired to Claude API."""
+    _require(doc_id)
+    # TODO: wire to Claude API with Bridge model context
+    ctx = f"slide {req.slide_n}"
+    if req.element_id:
+        ctx += f", element {req.element_id}"
+    last = req.messages[-1].content if req.messages else ""
+    reply = (
+        f"[Percy AI — coming soon]\n\n"
+        f"You asked about {ctx}:\n\"{last}\"\n\n"
+        "Full AI assistance will be available once the Claude API is connected. "
+        "The context-aware chatbot will be able to modify elements, suggest design changes, "
+        "and answer questions about your presentation."
+    )
+    return {"reply": reply}
 
 
 # ── serve built frontend in production ────────────────────────────────────────

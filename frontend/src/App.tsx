@@ -94,6 +94,12 @@ export default function App() {
     return () => { if (pollTimer.current) clearTimeout(pollTimer.current) }
   }, [renderPending, refreshEvaluation])
 
+  const refreshWorkspace = () => {
+    api.fetchWorkspace()
+      .then(files => { setWorkspace(files); log("success", `Workspace: ${files.length} files found`) })
+      .catch(e => log("error", "fetchWorkspace failed", String(e)))
+  }
+
   useEffect(() => {
     api.fetchWorkspace()
       .then(files => { setWorkspace(files); log("success", `Workspace: ${files.length} PPTX files found`) })
@@ -274,7 +280,11 @@ export default function App() {
         {mode === "studio" ? (
           /* ── STUDIO MODE ─────────────────────────────────── */
           selectedDoc && selectedDoc.source_format === "pptx" ? (
-            <Studio doc={selectedDoc} />
+            <Studio
+              doc={selectedDoc}
+              onRebuild={() => handleRebuild(selectedDoc.doc_id)}
+              rebuilding={!!rebuildPhase}
+            />
           ) : (
             <div className="flex flex-col flex-1 min-w-0 min-h-0">
               <FileSidebar
@@ -285,6 +295,7 @@ export default function App() {
                 onRebuild={handleRebuild}
                 onRerender={handleRerender}
                 onSelectDoc={handleSelectDoc}
+                onRefreshWorkspace={refreshWorkspace}
                 disabled={!!loading || !!rebuildPhase}
                 rebuildPhase={rebuildPhase}
               />
@@ -308,6 +319,7 @@ export default function App() {
               onRebuild={handleRebuild}
               onRerender={handleRerender}
               onSelectDoc={handleSelectDoc}
+              onRefreshWorkspace={refreshWorkspace}
               disabled={!!loading || !!rebuildPhase}
               rebuildPhase={rebuildPhase}
             />

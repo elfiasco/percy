@@ -1,5 +1,6 @@
+import { useRef } from "react"
 import type { WorkspaceFile, DocInfo } from "../lib/types"
-import { FileText, Play, RefreshCw, ChevronRight, ImageIcon, BarChart3 } from "lucide-react"
+import { FileText, Play, RefreshCw, ChevronRight, ImageIcon, BarChart3, Upload } from "lucide-react"
 
 interface Props {
   workspace: WorkspaceFile[]
@@ -9,19 +10,50 @@ interface Props {
   onRebuild: (docId: string) => void
   onRerender: (docId: string) => void
   onSelectDoc: (docId: string) => void
+  onRefreshWorkspace: () => void
   disabled: boolean
   rebuildPhase: "building" | "rendering" | null
 }
 
 export default function FileSidebar({
-  workspace, docs, selectedDocId, onLoad, onRebuild, onRerender, onSelectDoc, disabled, rebuildPhase,
+  workspace, docs, selectedDocId, onLoad, onRebuild, onRerender, onSelectDoc, onRefreshWorkspace, disabled, rebuildPhase,
 }: Props) {
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const form = new FormData()
+    form.append("file", file)
+    try {
+      const res = await fetch("/api/upload", { method: "POST", body: form })
+      if (!res.ok) throw new Error(await res.text())
+      onRefreshWorkspace()
+    } catch (err) {
+      alert(`Upload failed: ${err}`)
+    } finally {
+      e.target.value = ""
+    }
+  }
+
   const pptxFiles = workspace.filter(f => !f.format || f.format === "pptx")
   const pdfFiles  = workspace.filter(f => f.format === "pdf")
   const tableauFiles = workspace.filter(f => f.format === "tableau")
 
   return (
     <aside className="w-64 shrink-0 flex flex-col border-r border-edge bg-surface overflow-hidden">
+      {/* Upload button */}
+      <div className="px-3 py-2 border-b border-edge">
+        <input ref={fileInputRef} type="file" accept=".pptx,.pdf,.twbx,.twb" className="hidden" onChange={handleUpload} />
+        <button
+          className="btn-xs w-full flex items-center gap-1 justify-center"
+          disabled={disabled}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <Upload size={10} /> Upload File
+        </button>
+      </div>
+
       {/* PPTX files */}
       <Section title="PPTX Files" count={pptxFiles.length}>
         {pptxFiles.length === 0 ? (
