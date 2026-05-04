@@ -128,10 +128,26 @@ export default function StudioChat({ docId, slideN, selectedElement, onClose, on
       {/* messages */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3 min-h-0">
         {messages.length === 0 && !thinking && (
-          <div className="text-[11px] text-muted/60 text-center mt-4 leading-relaxed">
-            Ask Percy anything about this presentation.
-            <br />
-            Select an element first for context-specific help.
+          <div className="text-[11px] text-muted/60 mt-4 leading-relaxed space-y-2">
+            <p className="text-center">Ask Percy to edit your presentation.</p>
+            <ul className="text-[10px] space-y-1 list-none px-1">
+              {[
+                "Change the text of this element",
+                "Make the fill color blue",
+                "Insert a red rectangle at the top",
+                "Move this element to the center",
+                "Set the slide background to #1a1a2e",
+                "Duplicate this element",
+                "Delete this element",
+              ].map((hint) => (
+                <li key={hint}
+                  className="cursor-pointer px-2 py-1 rounded hover:bg-white/5 transition-colors text-muted/70 hover:text-slate-300"
+                  onClick={() => setInput(hint)}
+                >
+                  "{hint}"
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 

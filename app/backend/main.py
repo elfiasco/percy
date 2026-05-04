@@ -3946,6 +3946,61 @@ _STUDIO_TOOLS = [
             },
         },
     },
+    {
+        "name": "update_text",
+        "description": (
+            "Replace the plain text content of the selected text/shape element. "
+            "Provide plain text; existing paragraph structure is replaced. "
+            "Use for title, body, label, or any text element."
+        ),
+        "input_schema": {
+            "type": "object",
+            "required": ["text"],
+            "properties": {
+                "text": {"type": "string", "description": "New text content (use \\n to separate paragraphs)"},
+                "font_size":  {"type": "number", "description": "Font size in points for all runs (optional)"},
+                "font_bold":  {"type": "boolean", "description": "Bold all runs (optional)"},
+                "font_color": {"type": "string", "description": "Font color as '#RRGGBB' (optional)"},
+            },
+        },
+    },
+    {
+        "name": "insert_shape",
+        "description": "Insert a new shape element on the current slide.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "shape_type": {"type": "string", "description": "Geometry preset: 'rect', 'roundRect', 'ellipse', 'triangle', 'text_box'"},
+                "label":      {"type": "string", "description": "Text label / name for the shape"},
+                "left_in":    {"type": "number", "description": "Left position in inches (default 1.0)"},
+                "top_in":     {"type": "number", "description": "Top position in inches (default 1.0)"},
+                "width_in":   {"type": "number", "description": "Width in inches (default 3.0)"},
+                "height_in":  {"type": "number", "description": "Height in inches (default 2.0)"},
+                "fill_color": {"type": "string", "description": "Fill color '#RRGGBB' (default '#4472C4')"},
+            },
+        },
+    },
+    {
+        "name": "delete_element",
+        "description": "Delete the currently selected element from the slide.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "duplicate_element",
+        "description": "Duplicate the currently selected element (creates an offset copy).",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "set_slide_background",
+        "description": "Set the background color of the current slide.",
+        "input_schema": {
+            "type": "object",
+            "required": ["color"],
+            "properties": {
+                "color": {"type": "string", "description": "Background color as '#RRGGBB' hex, or 'none' to clear"},
+            },
+        },
+    },
 ]
 
 
@@ -3982,6 +4037,68 @@ def _execute_tool_call(doc_id: str, slide_n: int, element_id: str | None,
             _apply_style(el, req)
             return "Element style updated successfully"
 
+        if tool_name == "update_text":
+            if not element_id:
+                return "Error: no element selected"
+            from percy.bridge.elements import TextParagraph, TextRun  # type: ignore[attr-defined]
+            el = _find_element(doc_id, slide_n, element_id)
+            el_type = getattr(el, "element_type", "")
+            raw_text: str = tool_input.get("text", "")
+            font_size  = tool_input.get("font_size")
+            font_bold  = tool_input.get("font_bold")
+            font_color = tool_input.get("font_color")
+            # Build new paragraphs from newline-split text
+            new_paras: list[Any] = []
+            for line in raw_text.split("\n"):
+                run = TextRun(text=line)
+                if font_size  is not None: run.font_size  = font_size
+                if font_bold  is not None: run.bold       = font_bold
+                if font_color is not None: run.font_color = font_color
+                para = TextParagraph(runs=[run])
+                new_paras.append(para)
+            _snapshot_doc(doc_id)
+            if el_type in ("BridgeText", "BridgeFreeform"):
+                el.paragraphs = new_paras
+            elif el_type == "BridgeShape":
+                tc = getattr(el, "text_content", None)
+                if tc:
+                    tc.paragraphs = new_paras
+                    tc.has_text   = bool(raw_text.strip())
+            else:
+                return f"Element type {el_type!r} does not support text update"
+            return f"Text updated to: {raw_text[:80]}"
+
+        if tool_name == "insert_shape":
+            req = NewElementRequest(
+                shape_type=tool_input.get("shape_type", "rect"),
+                label=tool_input.get("label", "New Shape"),
+                left_in=float(tool_input.get("left_in", 1.0)),
+                top_in=float(tool_input.get("top_in", 1.0)),
+                width_in=float(tool_input.get("width_in", 3.0)),
+                height_in=float(tool_input.get("height_in", 2.0)),
+                fill_color=tool_input.get("fill_color", "#4472C4"),
+            )
+            result = create_element(doc_id, slide_n, req)
+            return f"Shape inserted: id={result.get('id', '?')}"
+
+        if tool_name == "delete_element":
+            if not element_id:
+                return "Error: no element selected"
+            delete_element(doc_id, slide_n, element_id)
+            return "Element deleted"
+
+        if tool_name == "duplicate_element":
+            if not element_id:
+                return "Error: no element selected"
+            result = duplicate_element(doc_id, slide_n, element_id)
+            return f"Element duplicated: new id={result.get('id', '?')}"
+
+        if tool_name == "set_slide_background":
+            color_val = tool_input.get("color", "")
+            color_arg = None if (not color_val or color_val.lower() == "none") else color_val
+            set_slide_background(doc_id, slide_n, color_arg)
+            return f"Slide background set to {color_arg or 'none'}"
+
         return f"Unknown tool: {tool_name}"
     except Exception as exc:
         return f"Tool execution error: {exc}"
@@ -4007,9 +4124,17 @@ def chat(doc_id: str, req: ChatRequest):
         "You help users understand and edit their presentations through the Percy Studio interface.\n\n"
         "You have access to the following context about the current state of the document:\n\n"
         f"```\n{slide_ctx}\n```\n\n"
-        "You have tools to directly modify the selected element. Use them when the user asks you "
-        "to change something. After using a tool, briefly confirm what you did.\n"
-        "Keep responses concise. Use plain text — no markdown headers or bullet points."
+        "Available tools and when to use them:\n"
+        "- move_element: reposition or resize the selected element\n"
+        "- style_element: change fill color, opacity, border, shadow\n"
+        "- update_text: replace text content of a text or shape element\n"
+        "- insert_shape: add a new shape/text box to the current slide\n"
+        "- delete_element: remove the selected element\n"
+        "- duplicate_element: copy the selected element with offset\n"
+        "- set_slide_background: change the slide background color\n\n"
+        "Use tools proactively whenever the user requests a visual change. "
+        "After using a tool, briefly confirm what you did in one sentence. "
+        "Keep all responses concise — plain text only, no markdown."
     )
 
     client = _anthropic.Anthropic(api_key=api_key)
