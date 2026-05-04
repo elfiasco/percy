@@ -2642,6 +2642,62 @@ def export_pptx(doc_id: str):
     )
 
 
+@app.get("/api/docs/{doc_id}/export-pdf")
+def export_pdf(doc_id: str):
+    """Stitch all rendered slide PNGs into a PDF and stream as a file download."""
+    import io as _io
+    d = _require(doc_id)
+    doc = d["doc"]
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+
+    # Collect PNG paths in slide order
+    png_paths: list[Path] = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        p = bridge_dir / f"slide_{slide.slide_number:04d}.png"
+        if p.exists():
+            png_paths.append(p)
+
+    if not png_paths:
+        # Try rendering on-demand
+        try:
+            from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+            bridge_dir.mkdir(parents=True, exist_ok=True)
+            _rbs(doc, bridge_dir)
+            for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+                p = bridge_dir / f"slide_{slide.slide_number:04d}.png"
+                if p.exists():
+                    png_paths.append(p)
+        except Exception as exc:
+            raise HTTPException(500, f"Could not render slides: {exc}")
+
+    if not png_paths:
+        raise HTTPException(404, "No rendered slides found — open the deck in Studio first to generate thumbnails")
+
+    # Build PDF in-memory using Pillow
+    try:
+        images = [Image.open(str(p)).convert("RGB") for p in png_paths]
+        pdf_buf = _io.BytesIO()
+        images[0].save(
+            pdf_buf, format="PDF", save_all=True,
+            append_images=images[1:],
+            resolution=150,
+        )
+        pdf_bytes = pdf_buf.getvalue()
+    except Exception as exc:
+        raise HTTPException(500, f"PDF generation failed: {exc}")
+
+    stem = Path(d["name"]).stem
+    from fastapi.responses import Response as _Response
+    return _Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{stem}_percy.pdf"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 @app.post("/api/docs/{doc_id}/grades")
 def set_grade(doc_id: str, req: GradeRequest):
     d = _require(doc_id)

@@ -103,6 +103,10 @@ export function exportPptxUrl(docId: string): string {
   return `${BASE}/docs/${docId}/export`
 }
 
+export function exportPdfUrl(docId: string): string {
+  return `${BASE}/docs/${docId}/export-pdf`
+}
+
 export async function fetchElementText(
   docId: string,
   slideN: number,
