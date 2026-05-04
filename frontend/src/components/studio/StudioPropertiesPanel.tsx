@@ -754,6 +754,9 @@ interface Props {
   docId: string
   onTextCommit: () => void
   onSelectElement?: (el: StudioElement) => void
+  onDeleteElement?: (id: string) => void
+  onToggleLock?: (id: string, locked: boolean) => void
+  onToggleHidden?: (id: string, hidden: boolean) => void
 }
 
 type Tab = "position" | "style" | "text"
@@ -761,9 +764,11 @@ type NoSelTab = "slide" | "elements"
 
 export default function StudioPropertiesPanel({
   element, elements, slideN, slideWidthIn: _slideWidthIn, slideHeightIn: _slideHeightIn, docId, onTextCommit, onSelectElement,
+  onDeleteElement, onToggleLock, onToggleHidden,
 }: Props) {
   const [tab, setTab] = useState<Tab>("position")
   const [noSelTab, setNoSelTab] = useState<NoSelTab>("slide")
+  const [elemCtxMenu, setElemCtxMenu] = useState<{ x: number; y: number; el: StudioElement } | null>(null)
 
   // reset to position when element changes
   useEffect(() => { setTab("position") }, [element?.id])
@@ -831,7 +836,7 @@ export default function StudioPropertiesPanel({
       {/* ── tab content ─────────────────────────────────────── */}
       {!element ? (
         noSelTab === "elements" ? (
-          <div className="flex-1 overflow-y-auto p-2 scrollbar-thin">
+          <div className="flex-1 overflow-y-auto p-2 scrollbar-thin relative">
             {!elements || elements.length === 0 ? (
               <p className="text-xs text-muted p-2">No elements on this slide.</p>
             ) : (
@@ -839,6 +844,7 @@ export default function StudioPropertiesPanel({
                 <button
                   key={el.id}
                   onClick={() => onSelectElement?.(el)}
+                  onContextMenu={(e) => { e.preventDefault(); setElemCtxMenu({ x: e.clientX, y: e.clientY, el }) }}
                   className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-left
                              hover:bg-white/5 transition-colors group"
                 >
@@ -852,6 +858,43 @@ export default function StudioPropertiesPanel({
                   <span className="text-[10px] text-muted shrink-0 opacity-0 group-hover:opacity-100">z{el.z_index}</span>
                 </button>
               ))
+            )}
+
+            {/* element context menu */}
+            {elemCtxMenu && (
+              <>
+                <div className="fixed inset-0 z-[9998]" onClick={() => setElemCtxMenu(null)} />
+                <div
+                  className="fixed z-[9999] bg-surface border border-edge rounded-lg shadow-2xl py-1 w-44 text-xs"
+                  style={{ left: elemCtxMenu.x, top: elemCtxMenu.y }}
+                >
+                  <button
+                    className="w-full text-left px-3 py-1.5 hover:bg-white/10 text-slate-200"
+                    onClick={() => { onSelectElement?.(elemCtxMenu.el); setElemCtxMenu(null) }}
+                  >
+                    Select
+                  </button>
+                  <button
+                    className="w-full text-left px-3 py-1.5 hover:bg-white/10 text-slate-300"
+                    onClick={() => { onToggleLock?.(elemCtxMenu.el.id, !elemCtxMenu.el.locked); setElemCtxMenu(null) }}
+                  >
+                    {elemCtxMenu.el.locked ? "🔒 Unlock" : "🔓 Lock"}
+                  </button>
+                  <button
+                    className="w-full text-left px-3 py-1.5 hover:bg-white/10 text-slate-300"
+                    onClick={() => { onToggleHidden?.(elemCtxMenu.el.id, !elemCtxMenu.el.hidden); setElemCtxMenu(null) }}
+                  >
+                    {elemCtxMenu.el.hidden ? "👁 Show" : "🙈 Hide"}
+                  </button>
+                  <div className="border-t border-edge my-1" />
+                  <button
+                    className="w-full text-left px-3 py-1.5 hover:bg-red-900/30 text-bad"
+                    onClick={() => { onDeleteElement?.(elemCtxMenu.el.id); setElemCtxMenu(null) }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </>
             )}
           </div>
         ) : (

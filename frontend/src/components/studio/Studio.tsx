@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import type { DocInfo } from "../../lib/types"
 import type { StudioElement } from "../../lib/studioTypes"
-import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle } from "../../lib/studioApi"
+import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, updateElementFlags } from "../../lib/studioApi"
 import type { ElementStyleData } from "../../lib/studioTypes"
 import * as api from "../../lib/api"
 import StudioSlideStrip from "./StudioSlideStrip"
@@ -134,6 +134,24 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       console.error("delete failed:", e)
     }
   }, [doc.doc_id, markDirty])
+
+  const handleDeleteById = useCallback(async (id: string) => {
+    try {
+      await deleteElement(doc.doc_id, selectedSlideRef.current, id)
+      setSelectedElement((prev) => prev?.id === id ? null : prev)
+      setMultiSelectIds((prev) => { const next = new Set(prev); next.delete(id); return next })
+      markDirty(selectedSlideRef.current)
+      setRefreshKey((k) => k + 1)
+    } catch (e) { console.error("delete failed:", e) }
+  }, [doc.doc_id, markDirty])
+
+  const handleToggleFlags = useCallback(async (id: string, flags: { locked?: boolean; hidden?: boolean }) => {
+    try {
+      const updated = await updateElementFlags(doc.doc_id, selectedSlideRef.current, id, flags)
+      setSlideElements((prev) => prev.map((el) => el.id === id ? updated : el))
+      if (selectedElementRef.current?.id === id) setSelectedElement(updated)
+    } catch (e) { console.error("flag update failed:", e) }
+  }, [doc.doc_id])
 
   // ── duplicate selected element(s) ─────────────────────────────────────────
   const handleDuplicate = useCallback(async () => {
@@ -463,6 +481,9 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           docId={doc.doc_id}
           onTextCommit={rerender}
           onSelectElement={setSelectedElement}
+          onDeleteElement={handleDeleteById}
+          onToggleLock={(id, locked) => handleToggleFlags(id, { locked })}
+          onToggleHidden={(id, hidden) => handleToggleFlags(id, { hidden })}
         />
 
         {chatOpen && (
