@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import type { DocInfo } from "../../lib/types"
 import type { StudioElement } from "../../lib/studioTypes"
-import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, updateElementFlags, applyLayoutPreset } from "../../lib/studioApi"
+import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, updateElementFlags, applyLayoutPreset, groupElements, ungroupElement } from "../../lib/studioApi"
 import type { ElementStyleData } from "../../lib/studioTypes"
 import * as api from "../../lib/api"
 import StudioSlideStrip from "./StudioSlideStrip"
@@ -171,6 +171,30 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
     } catch (e) {
       console.error("duplicate failed:", e)
     }
+  }, [doc.doc_id, markDirty])
+
+  const handleGroupElements = useCallback(async () => {
+    const ids = [...multiSelectIdsRef.current]
+    if (ids.length < 2) return
+    try {
+      const group = await groupElements(doc.doc_id, selectedSlideRef.current, ids)
+      setSelectedElement(group)
+      setMultiSelectIds(new Set([group.id]))
+      markDirty(selectedSlideRef.current)
+      setRefreshKey((k) => k + 1)
+    } catch (e) { console.error("group failed:", e) }
+  }, [doc.doc_id, markDirty])
+
+  const handleUngroupElement = useCallback(async () => {
+    const el = selectedElementRef.current
+    if (!el || el.type !== "BridgeGroup") return
+    try {
+      const res = await ungroupElement(doc.doc_id, selectedSlideRef.current, el.id)
+      setSelectedElement(null)
+      setMultiSelectIds(new Set(res.elements.map((e) => e.id)))
+      markDirty(selectedSlideRef.current)
+      setRefreshKey((k) => k + 1)
+    } catch (e) { console.error("ungroup failed:", e) }
   }, [doc.doc_id, markDirty])
 
   const handleApplyLayout = useCallback(async (layout: string) => {
@@ -464,6 +488,8 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         formatPaintMode={formatPaintMode}
         onCopyToSlide={selectedElement ? handleCopyToSlide : undefined}
         onApplyLayout={handleApplyLayout}
+        onGroupElements={multiSelectIds.size > 1 ? handleGroupElements : undefined}
+        onUngroupElement={selectedElement?.type === "BridgeGroup" ? handleUngroupElement : undefined}
       />
 
       {/* ── main area: slide strip + canvas + properties ── */}

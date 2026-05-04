@@ -338,3 +338,26 @@ export async function applyLayoutPreset(
 export async function listSlideLayouts(docId: string): Promise<{ layouts: string[] }> {
   return apiFetch(`${BASE}/docs/${docId}/slide-layouts`)
 }
+
+export async function groupElements(
+  docId: string,
+  slideN: number,
+  elementIds: string[],
+  groupName = "Group",
+): Promise<StudioElement> {
+  return apiFetch<StudioElement>(`${BASE}/docs/${docId}/slides/${slideN}/group-elements`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ element_ids: elementIds, group_name: groupName }),
+  })
+}
+
+export async function ungroupElement(
+  docId: string,
+  slideN: number,
+  elementId: string,
+): Promise<{ elements: StudioElement[] }> {
+  return apiFetch(`${BASE}/docs/${docId}/slides/${slideN}/elements/${encodeURIComponent(elementId)}/ungroup`, {
+    method: "POST",
+  })
+}

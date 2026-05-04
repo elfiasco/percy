@@ -111,6 +111,8 @@ interface Props {
   onShowSlideSorter?: () => void
   onCopyToSlide?: (targetN: number) => void
   onApplyLayout?: (layout: string) => void
+  onGroupElements?: () => void
+  onUngroupElement?: () => void
 }
 
 export default function StudioToolbar({
@@ -128,6 +130,8 @@ export default function StudioToolbar({
   onShowSlideSorter,
   onCopyToSlide,
   onApplyLayout,
+  onGroupElements,
+  onUngroupElement,
 }: Props) {
   const [insertOpen, setInsertOpen] = useState(false)
   const [copyToOpen, setCopyToOpen] = useState(false)
@@ -267,7 +271,29 @@ export default function StudioToolbar({
                 {symbol.replace(/[⫷⫸⇿]/, "")}
               </button>
             ))}
+            {onGroupElements && (
+              <button
+                title="Group selected elements (Ctrl+G won't conflict — this is a button)"
+                onClick={onGroupElements}
+                className="ml-1 text-[10px] px-1.5 py-0.5 rounded border border-indigo-500/40
+                           text-indigo-300 hover:bg-indigo-500/20 transition-colors"
+              >
+                ⊞ Group
+              </button>
+            )}
           </div>
+        </>
+      )}
+      {selectedElement?.type === "BridgeGroup" && onUngroupElement && (
+        <>
+          <div className="w-px h-5 bg-edge mx-3 shrink-0" />
+          <button
+            title="Ungroup — restore children to slide"
+            onClick={onUngroupElement}
+            className="text-[10px] px-1.5 py-0.5 rounded border border-edge text-muted hover:text-slate-200 hover:bg-white/10 transition-colors"
+          >
+            ⊟ Ungroup
+          </button>
         </>
       )}
 

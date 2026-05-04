@@ -3211,6 +3211,109 @@ def align_elements(doc_id: str, n: int, req: AlignElementsRequest):
     return [_serialize_element(e, i, w, h) for e, i in els]
 
 
+class GroupElementsRequest(BaseModel):
+    element_ids: list[str]
+    group_name: str = "Group"
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/group-elements")
+def group_elements(doc_id: str, n: int, req: GroupElementsRequest):
+    """Group a set of elements into a BridgeGroup, removing originals."""
+    from percy.bridge.elements import (
+        BridgeGroup, Position, Transform, Stacking, Identification, Accessibility,
+    )
+    if len(req.element_ids) < 2:
+        raise HTTPException(400, "Need at least 2 elements to group")
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    id_set = set(req.element_ids)
+    to_group = [(i, e) for i, e in enumerate(slide.elements) if _element_id(e, i) in id_set]
+    if len(to_group) != len(req.element_ids):
+        raise HTTPException(404, "Some element IDs not found on this slide")
+
+    # Compute bounding box of all grouped elements
+    min_l = min(e.position.left for _, e in to_group)
+    min_t = min(e.position.top  for _, e in to_group)
+    max_r = max(e.position.left + e.position.width  for _, e in to_group)
+    max_b = max(e.position.top  + e.position.height for _, e in to_group)
+
+    # Rebase children positions relative to group origin
+    children = []
+    for _, e in to_group:
+        import copy
+        child = copy.deepcopy(e)
+        child.position.left -= min_l
+        child.position.top  -= min_t
+        children.append(child)
+
+    existing_ids = {getattr(getattr(e, "identification", None), "shape_id", None) for e in slide.elements}
+    new_id = max((x for x in existing_ids if x is not None), default=0) + 1
+    max_z  = max((getattr(e.stacking, "z_index", 1) for _, e in to_group), default=1)
+
+    group = BridgeGroup(
+        position=Position(left=min_l, top=min_t, width=max_r - min_l, height=max_b - min_t),
+        transforms=Transform(),
+        stacking=Stacking(z_index=max_z),
+        identification=Identification(shape_id=new_id, shape_name=req.group_name),
+        accessibility=Accessibility(alt_text=req.group_name),
+        children=children,
+    )
+
+    # Remove originals and append group
+    remove_indices = {i for i, _ in to_group}
+    slide.elements = [e for i, e in enumerate(slide.elements) if i not in remove_indices]
+    slide.elements.append(group)
+    new_index = len(slide.elements) - 1
+    w, h = _get_slide_dims(doc, slide)
+    log.info("studio: grouped %d elements into %r on slide %d of %s", len(children), req.group_name, n, doc_id)
+    return _serialize_element(group, new_index, w, h)
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/ungroup")
+def ungroup_element(doc_id: str, n: int, element_id: str):
+    """Ungroup a BridgeGroup, restoring children to the slide."""
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    group_idx = None
+    group_el  = None
+    for i, e in enumerate(slide.elements):
+        if _element_id(e, i) == element_id:
+            group_idx, group_el = i, e
+            break
+
+    if group_el is None:
+        raise HTTPException(404, f"Element {element_id!r} not found")
+    if group_el.element_type != "BridgeGroup":
+        raise HTTPException(400, f"Element {element_id!r} is not a BridgeGroup")
+
+    children = getattr(group_el, "children", [])
+    import copy
+    ungrouped = []
+    for child in children:
+        c = copy.deepcopy(child)
+        c.position.left += group_el.position.left
+        c.position.top  += group_el.position.top
+        ungrouped.append(c)
+
+    # Remove group, append children
+    slide.elements = [e for i, e in enumerate(slide.elements) if i != group_idx] + ungrouped
+    w, h = _get_slide_dims(doc, slide)
+    start_idx = len(slide.elements) - len(ungrouped)
+    result = [_serialize_element(e, start_idx + j, w, h) for j, e in enumerate(ungrouped)]
+    log.info("studio: ungrouped %d children from %r on slide %d of %s", len(ungrouped), element_id, n, doc_id)
+    return {"elements": result}
+
+
 class ElementFlagsUpdate(BaseModel):
     locked: bool | None = None
     hidden: bool | None = None
