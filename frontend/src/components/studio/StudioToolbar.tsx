@@ -263,7 +263,7 @@ export default function StudioToolbar({
 
       {/* ── keyboard hint ─────────────────────────────────── */}
       <div className="text-[10px] text-muted/50 hidden xl:block mr-3">
-        ↑↓←→ nudge · Shift×10 · Del delete · Ctrl+D dup · Ctrl+Z/Y undo · Ctrl+S rebuild · Ctrl+H find · Esc deselect
+        ↑↓←→ nudge · Shift×10 · Del delete · Ctrl+C/V copy/paste · Ctrl+D dup · Ctrl+Z/Y undo · Ctrl+S rebuild · Ctrl+H find · Esc deselect
       </div>
 
       <div className="w-px h-5 bg-edge mx-3 shrink-0" />

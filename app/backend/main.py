@@ -2989,6 +2989,49 @@ def duplicate_element(doc_id: str, n: int, element_id: str):
     return _serialize_element(dup, new_index, w, h)
 
 
+@app.post("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/copy-to-slide")
+def copy_element_to_slide(doc_id: str, n: int, element_id: str, target_n: int, offset_x: float = 0.25, offset_y: float = 0.25):
+    """Deep-copy an element from slide n to slide target_n at a small offset.
+
+    Used for cross-slide paste. When n == target_n behaves like duplicate but on
+    a different target slide; when n != target_n it copies across slides.
+    """
+    import copy
+    _snapshot_doc(doc_id)
+    d    = _require(doc_id)
+    doc  = d["doc"]
+    src_slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if src_slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+    tgt_slide = next((s for s in doc.slides if s.slide_number == target_n), None)
+    if tgt_slide is None:
+        raise HTTPException(404, f"Target slide {target_n} not found")
+
+    src = None
+    for i, e in enumerate(src_slide.elements):
+        if _element_id(e, i) == element_id:
+            src = e
+            break
+    if src is None:
+        raise HTTPException(404, f"Element {element_id!r} not found")
+
+    dup = copy.deepcopy(src)
+    dup.position.left += offset_x
+    dup.position.top  += offset_y
+
+    ident = getattr(dup, "identification", None)
+    if ident is not None:
+        existing_ids = {getattr(getattr(e, "identification", None), "shape_id", None) for e in tgt_slide.elements}
+        new_id = max((x for x in existing_ids if x is not None), default=0) + 1
+        ident.shape_id = new_id
+
+    tgt_slide.elements.append(dup)
+    new_index = len(tgt_slide.elements) - 1
+    w, h = _get_slide_dims(doc, tgt_slide)
+    log.info("studio: copied element %s from slide %d → slide %d", element_id, n, target_n)
+    return _serialize_element(dup, new_index, w, h)
+
+
 class NewElementRequest(BaseModel):
     shape_type: str = "rect"   # geometry preset: "rect" | "roundRect" | "ellipse" | "triangle" etc.
     left_in: float = 1.0

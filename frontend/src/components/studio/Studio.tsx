@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import type { DocInfo } from "../../lib/types"
 import type { StudioElement } from "../../lib/studioTypes"
-import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement } from "../../lib/studioApi"
+import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement, copyElementToSlide } from "../../lib/studioApi"
 import * as api from "../../lib/api"
 import StudioSlideStrip from "./StudioSlideStrip"
 import StudioCanvas from "./StudioCanvas"
@@ -28,6 +28,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const [savingToCloud, setSavingToCloud]     = useState(false)
   const selectedSlideRef = useRef(1)
   selectedSlideRef.current = selectedSlide
+  const clipboardRef = useRef<{ slideN: number; elementId: string } | null>(null)
 
   // keep a ref so the arrow-key handler always sees the latest element
   const selectedElementRef = useRef<StudioElement | null>(null)
@@ -114,6 +115,31 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       // Delete / Backspace → remove element
       if (e.key === "Delete" || e.key === "Backspace") {
         if (selectedElementRef.current) { e.preventDefault(); handleDelete() }
+        return
+      }
+
+      // Ctrl+C → copy element to clipboard
+      if ((e.key === "c" || e.key === "C") && (e.ctrlKey || e.metaKey)) {
+        const el = selectedElementRef.current
+        if (el) {
+          e.preventDefault()
+          clipboardRef.current = { slideN: selectedSlideRef.current, elementId: el.id }
+        }
+        return
+      }
+
+      // Ctrl+V → paste element from clipboard onto current slide
+      if ((e.key === "v" || e.key === "V") && (e.ctrlKey || e.metaKey)) {
+        const clip = clipboardRef.current
+        if (clip) {
+          e.preventDefault()
+          copyElementToSlide(doc.doc_id, clip.slideN, clip.elementId, selectedSlideRef.current)
+            .then((el) => {
+              setRefreshKey((k) => k + 1)
+              setSelectedElement(el)
+            })
+            .catch((err) => console.error("paste failed:", err))
+        }
         return
       }
 

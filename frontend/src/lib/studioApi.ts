@@ -172,6 +172,20 @@ export async function updateElementPosition(
   )
 }
 
+export async function copyElementToSlide(
+  docId: string,
+  srcSlideN: number,
+  elementId: string,
+  targetN: number,
+  offsetX = 0.25,
+  offsetY = 0.25,
+): Promise<StudioElement> {
+  return apiFetch<StudioElement>(
+    `${BASE}/docs/${docId}/slides/${srcSlideN}/elements/${encodeURIComponent(elementId)}/copy-to-slide?target_n=${targetN}&offset_x=${offsetX}&offset_y=${offsetY}`,
+    { method: "POST" },
+  )
+}
+
 export async function replaceImage(
   docId: string,
   slideN: number,
