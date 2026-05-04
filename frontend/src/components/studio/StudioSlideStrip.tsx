@@ -29,6 +29,8 @@ export default function StudioSlideStrip({
   const [hoverY, setHoverY]           = useState(0)
   const [slidesWithNotes, setSlidesWithNotes] = useState<Set<number>>(new Set())
   const [importing, setImporting]     = useState(false)
+  const [multiSelected, setMultiSelected] = useState<Set<number>>(new Set())
+  const [thumbnailSize, setThumbnailSize] = useState<"sm" | "md">("sm")
   const importInputRef                = useRef<HTMLInputElement>(null)
   const stripRef = useRef<HTMLDivElement>(null)
 
@@ -74,22 +76,53 @@ export default function StudioSlideStrip({
     )
   }, [docId, selectedSlide, run])
 
-  const handleDelete = useCallback((n: number) => {
-    run(
-      () => deleteSlide(docId, n) as Promise<{ slide_count: number }>,
-      (r) => Math.min(selectedSlide, r.slide_count),
-    )
-  }, [docId, selectedSlide, run])
+  const handleDelete = useCallback(async (n?: number) => {
+    const toDelete = n !== undefined ? [n] : [...multiSelected].sort((a, b) => b - a)
+    if (!toDelete.length) return
+    setBusy(true)
+    setContextMenu(null)
+    try {
+      let lastCount = slideCount
+      for (const slideN of toDelete) {
+        const r = await deleteSlide(docId, slideN) as { slide_count: number }
+        lastCount = r.slide_count
+      }
+      setMultiSelected(new Set())
+      setStripKey((k) => k + 1)
+      onSlideCountChange(lastCount, Math.min(selectedSlide, lastCount))
+    } catch (e) {
+      console.error("delete slide(s) failed:", e)
+    } finally {
+      setBusy(false)
+    }
+  }, [docId, selectedSlide, slideCount, multiSelected, onSlideCountChange])
 
-  const handleDuplicate = useCallback((n: number) => {
-    run(
-      () => duplicateSlide(docId, n),
-      (r) => r.new_slide_n ?? n + 1,
-    )
-  }, [docId, run])
+  const handleDuplicate = useCallback(async (n?: number) => {
+    const toDup = n !== undefined ? [n] : [...multiSelected].sort((a, b) => a - b)
+    if (!toDup.length) return
+    setBusy(true)
+    setContextMenu(null)
+    try {
+      let lastNewN = toDup[0]
+      let lastCount = slideCount
+      for (const slideN of toDup) {
+        const r = await duplicateSlide(docId, slideN)
+        lastNewN  = r.new_slide_n ?? slideN + 1
+        lastCount = r.slide_count
+      }
+      setMultiSelected(new Set())
+      setStripKey((k) => k + 1)
+      onSlideCountChange(lastCount, lastNewN)
+    } catch (e) {
+      console.error("duplicate slide(s) failed:", e)
+    } finally {
+      setBusy(false)
+    }
+  }, [docId, slideCount, multiSelected, onSlideCountChange])
 
   const handleMoveUp = useCallback((n: number) => {
     if (n <= 1) return
+    setMultiSelected(new Set())
     run(
       () => moveSlide(docId, n, n - 1) as Promise<{ slide_count: number }>,
       () => n - 1,
@@ -98,11 +131,32 @@ export default function StudioSlideStrip({
 
   const handleMoveDown = useCallback((n: number) => {
     if (n >= slideCount) return
+    setMultiSelected(new Set())
     run(
       () => moveSlide(docId, n, n + 1) as Promise<{ slide_count: number }>,
       () => n + 1,
     )
   }, [docId, slideCount, run])
+
+  const handleSlideClick = useCallback((e: React.MouseEvent, n: number) => {
+    if (e.ctrlKey || e.metaKey) {
+      // Ctrl+click: toggle into multi-select
+      setMultiSelected((prev) => {
+        const next = new Set(prev)
+        if (next.has(n)) { next.delete(n) } else { next.add(n) }
+        return next
+      })
+    } else if (e.shiftKey && selectedSlide) {
+      // Shift+click: range select
+      const lo = Math.min(selectedSlide, n)
+      const hi = Math.max(selectedSlide, n)
+      setMultiSelected(new Set(Array.from({ length: hi - lo + 1 }, (_, i) => lo + i)))
+    } else {
+      // Normal click: clear multi-select, set active
+      setMultiSelected(new Set())
+      onSelect(n)
+    }
+  }, [selectedSlide, onSelect])
 
   const handleDragStart = useCallback((e: React.DragEvent, n: number) => {
     setDragSlide(n)
@@ -147,11 +201,44 @@ export default function StudioSlideStrip({
   }, [docId, onSlideCountChange])
 
   return (
-    <div ref={stripRef} className="w-28 shrink-0 flex flex-col border-r border-edge bg-surface min-h-0">
+    <div
+      ref={stripRef}
+      className={`${thumbnailSize === "md" ? "w-40" : "w-28"} shrink-0 flex flex-col border-r border-edge bg-surface min-h-0 transition-all`}
+    >
       {/* header */}
       <div className="px-2 py-1.5 text-[10px] text-muted uppercase tracking-widest font-semibold border-b border-edge shrink-0 flex items-center justify-between">
-        <span>Slides</span>
+        {multiSelected.size > 0 ? (
+          <div className="flex items-center gap-1">
+            <span className="text-violet-400">{multiSelected.size} sel.</span>
+            <button
+              onClick={() => handleDuplicate()}
+              disabled={busy}
+              title="Duplicate selected"
+              className="text-[9px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/15 text-muted transition-colors disabled:opacity-40"
+            >⊕</button>
+            <button
+              onClick={() => handleDelete()}
+              disabled={busy || slideCount - multiSelected.size < 1}
+              title="Delete selected"
+              className="text-[9px] px-1 py-0.5 rounded bg-bad/10 hover:bg-bad/20 text-bad/70 transition-colors disabled:opacity-40"
+            >✕</button>
+            <button
+              onClick={() => setMultiSelected(new Set())}
+              title="Clear selection"
+              className="text-[9px] px-1 text-muted/50 hover:text-muted transition-colors"
+            >⊘</button>
+          </div>
+        ) : (
+          <span>Slides</span>
+        )}
         <div className="flex items-center gap-0.5">
+          <button
+            onClick={() => setThumbnailSize((s) => s === "sm" ? "md" : "sm")}
+            title="Toggle thumbnail size"
+            className="w-5 h-5 flex items-center justify-center rounded text-muted hover:text-slate-200 hover:bg-white/10 transition-colors text-[10px]"
+          >
+            {thumbnailSize === "sm" ? "⊞" : "⊟"}
+          </button>
           <button
             onClick={() => importInputRef.current?.click()}
             disabled={importing}
@@ -186,6 +273,7 @@ export default function StudioSlideStrip({
           const active    = n === selectedSlide
           const dirty     = dirtySlides?.has(n) ?? false
           const hasNotes  = slidesWithNotes.has(n)
+          const isMulti   = multiSelected.has(n)
           const isDragging = dragSlide === n
           const isDropTarget = dropTarget === n && dragSlide !== null && dragSlide !== n
           return (
@@ -198,11 +286,13 @@ export default function StudioSlideStrip({
               onDragEnd={handleDragEnd}
               className={[
                 "flex flex-col items-center gap-1 rounded p-1 transition-all group w-full cursor-grab active:cursor-grabbing",
-                active      ? "ring-2 ring-accent bg-accent/10" : "hover:bg-white/5",
+                active      ? "ring-2 ring-accent bg-accent/10"
+                  : isMulti ? "ring-2 ring-violet-400/60 bg-violet-500/10"
+                  : "hover:bg-white/5",
                 isDragging  ? "opacity-40" : "",
                 isDropTarget ? "ring-2 ring-indigo-400 bg-indigo-500/10" : "",
               ].join(" ")}
-              onClick={() => onSelect(n)}
+              onClick={(e) => handleSlideClick(e, n)}
               onContextMenu={(e) => handleContextMenu(e, n)}
               onMouseEnter={(e) => { setHoverN(n); setHoverY((e.currentTarget as HTMLElement).getBoundingClientRect().top) }}
               onMouseLeave={() => setHoverN(null)}
@@ -242,7 +332,7 @@ export default function StudioSlideStrip({
         <div
           className="fixed z-[9999] pointer-events-none"
           style={{
-            left: 110,
+            left: thumbnailSize === "md" ? 168 : 110,
             top: Math.max(8, Math.min(hoverY - 20, window.innerHeight - 130)),
           }}
         >
