@@ -47,6 +47,7 @@ export default function StudioSlideStrip({
   const [editingLabel, setEditingLabel] = useState<number | null>(null)
   const [editLabelText, setEditLabelText] = useState("")
   const [tagMenuN, setTagMenuN]       = useState<number | null>(null)
+  const [filterTag, setFilterTag]     = useState<string | null>(null)
   const importInputRef                = useRef<HTMLInputElement>(null)
   const stripRef = useRef<HTMLDivElement>(null)
 
@@ -298,9 +299,34 @@ export default function StudioSlideStrip({
         onChange={(e) => { const f = e.target.files?.[0]; if (f) { handleImport(f); e.target.value = "" } }}
       />
 
+      {/* tag filter bar */}
+      {Object.keys(slideTags).length > 0 && (
+        <div className="flex items-center gap-0.5 px-2 py-1 border-b border-edge/50 shrink-0 flex-wrap">
+          <button
+            onClick={() => setFilterTag(null)}
+            title="Show all slides"
+            className={`text-[8px] px-1 py-0.5 rounded transition-colors ${!filterTag ? "bg-white/15 text-slate-200" : "text-muted/50 hover:text-muted"}`}
+          >
+            All
+          </button>
+          {TAG_COLORS.filter((t) => t.color && Object.values(slideTags).includes(t.color)).map((t) => (
+            <button
+              key={t.color}
+              onClick={() => setFilterTag(filterTag === t.color ? null : t.color)}
+              title={`Filter: ${t.label}`}
+              className="w-3 h-3 rounded-full border-2 transition-transform hover:scale-110"
+              style={{
+                background: t.color!,
+                borderColor: filterTag === t.color ? "#fff" : "transparent",
+              }}
+            />
+          ))}
+        </div>
+      )}
+
       {/* slide list */}
       <div key={stripKey} className="flex flex-col gap-1 p-2 overflow-y-auto flex-1 scrollbar-thin">
-        {Array.from({ length: slideCount }, (_, i) => i + 1).map((n) => {
+        {Array.from({ length: slideCount }, (_, i) => i + 1).filter((n) => !filterTag || slideTags[n] === filterTag).map((n) => {
           const active    = n === selectedSlide
           const dirty     = dirtySlides?.has(n) ?? false
           const hasNotes  = slidesWithNotes.has(n)

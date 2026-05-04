@@ -54,8 +54,13 @@ export default function StudioNotesBar({ docId, slideN }: Props) {
         {text.trim() && !open && (
           <span className="ml-1 text-muted/50 truncate max-w-xs">{text.split("\n")[0].slice(0, 60)}</span>
         )}
-        {saving && <span className="ml-auto text-muted/40 italic">saving…</span>}
-        {!saving && !saved && <span className="ml-auto text-amber-400/70">unsaved</span>}
+        {text.trim() && (
+          <span className="ml-auto text-muted/40 text-[9px] shrink-0">
+            {text.trim().split(/\s+/).length}w
+          </span>
+        )}
+        {saving && <span className="ml-1 text-muted/40 italic">saving…</span>}
+        {!saving && !saved && <span className="ml-1 text-amber-400/70">unsaved</span>}
       </button>
 
       {open && (
