@@ -65,6 +65,12 @@ def _build_queue():
 
 
 app = FastAPI(title="Percy Enterprise Control Plane", version="0.1.0")
+
+from app.cloud.auth import ApiKeyMiddleware, get_api_key as _get_api_key
+_api_key = _get_api_key()
+if _api_key:
+    app.add_middleware(ApiKeyMiddleware, api_key=_api_key)
+
 store = _build_store()
 storage = _build_storage()
 queue = _build_queue()

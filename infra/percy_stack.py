@@ -207,7 +207,20 @@ class PercyCloudDemoStack(Stack):
             "PercyAppRunnerInstanceRole",
             assumed_by=iam.ServicePrincipal("tasks.apprunner.amazonaws.com"),
         )
+        from aws_cdk import aws_secretsmanager as secretsmanager
+        api_key_secret = secretsmanager.Secret(
+            self,
+            "PercyApiKeySecret",
+            description="Percy Cloud API key",
+            generate_secret_string=secretsmanager.SecretStringGenerator(
+                password_length=48,
+                exclude_punctuation=True,
+            ),
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+
         db.secret.grant_read(instance_role)
+        api_key_secret.grant_read(instance_role)
         artifacts_bucket.grant_read_write(instance_role)
         onboard_queue.grant_send_messages(instance_role)
 
@@ -259,6 +272,10 @@ class PercyCloudDemoStack(Stack):
                                 name="DB_PASSWORD",
                                 value=f"{db.secret.secret_arn}:password::",
                             ),
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="PERCY_API_KEY",
+                                value=f"{api_key_secret.secret_arn}::",
+                            ),
                         ],
                     ),
                 ),
@@ -309,6 +326,7 @@ class PercyCloudDemoStack(Stack):
             memory_limit_mib=1024,
         )
         db.secret.grant_read(worker_task.task_role)
+        api_key_secret.grant_read(worker_task.task_role)
         artifacts_bucket.grant_read_write(worker_task.task_role)
         onboard_queue.grant_consume_messages(worker_task.task_role)
 
@@ -340,6 +358,7 @@ class PercyCloudDemoStack(Stack):
             },
             secrets={
                 "DB_PASSWORD": ecs.Secret.from_secrets_manager(db.secret, "password"),
+                "PERCY_API_KEY": ecs.Secret.from_secrets_manager(api_key_secret),
             },
         )
 
@@ -418,6 +437,7 @@ class PercyCloudDemoStack(Stack):
         ).add_alarm_action(cw_actions.SnsAction(alerts_topic))
 
         CfnOutput(self, "PercyDbSecretArn", value=db.secret.secret_arn)
+        CfnOutput(self, "PercyApiKeySecretArn", value=api_key_secret.secret_arn)
         CfnOutput(self, "PercyArtifactsBucket", value=artifacts_bucket.bucket_name)
         CfnOutput(self, "PercyOnboardQueueUrl", value=onboard_queue.queue_url)
         CfnOutput(self, "PercyAlertsTopicArn", value=alerts_topic.topic_arn)

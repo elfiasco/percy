@@ -38,6 +38,8 @@ AWS_REGION = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
 WORKER_ID = os.environ.get("WORKER_ID", f"onboard-worker-{os.getpid()}")
 POLL_WAIT = int(os.environ.get("POLL_WAIT_SECONDS", "20"))
 
+PERCY_API_KEY = os.environ.get("PERCY_API_KEY", "")
+
 sqs = boto3.client("sqs", region_name=AWS_REGION)
 s3 = boto3.client("s3", region_name=AWS_REGION)
 
@@ -76,10 +78,18 @@ def delete_message(receipt_handle: str) -> None:
 # Percy API helpers
 # -------------------------------------------------------------------------
 
+def _api_headers() -> dict:
+    h = {"Content-Type": "application/json"}
+    if PERCY_API_KEY:
+        h["X-Percy-Api-Key"] = PERCY_API_KEY
+    return h
+
+
 def api_start_job(job_id: str) -> None:
     r = requests.post(
         f"{API_BASE}/api/cloud/jobs/{job_id}/start",
         json={"worker_id": WORKER_ID},
+        headers=_api_headers(),
         timeout=10,
     )
     r.raise_for_status()
@@ -89,6 +99,7 @@ def api_complete_job(job_id: str, result: dict[str, Any]) -> None:
     r = requests.post(
         f"{API_BASE}/api/cloud/jobs/{job_id}/complete",
         json={"worker_id": WORKER_ID, "result": result},
+        headers=_api_headers(),
         timeout=10,
     )
     r.raise_for_status()
@@ -98,6 +109,7 @@ def api_fail_job(job_id: str, error: str) -> None:
     r = requests.post(
         f"{API_BASE}/api/cloud/jobs/{job_id}/fail",
         json={"worker_id": WORKER_ID, "error": error},
+        headers=_api_headers(),
         timeout=10,
     )
     r.raise_for_status()
@@ -111,6 +123,7 @@ def api_update_document_status(document_id: str, status: str, bundle_uri: str | 
         r = requests.patch(
             f"{API_BASE}/api/cloud/documents/{document_id}/status",
             json=body,
+            headers=_api_headers(),
             timeout=10,
         )
         r.raise_for_status()
@@ -225,7 +238,11 @@ def process_message(msg: dict) -> None:
     params_storage_uri = payload.get("storage_uri")
     if not params_storage_uri:
         try:
-            r = requests.get(f"{API_BASE}/api/cloud/documents/{document_id}", timeout=10)
+            r = requests.get(
+                f"{API_BASE}/api/cloud/documents/{document_id}",
+                headers=_api_headers(),
+                timeout=10,
+            )
             r.raise_for_status()
             doc_data = r.json()
             params_storage_uri = doc_data.get("storage_uri")
