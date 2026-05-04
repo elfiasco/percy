@@ -122,6 +122,7 @@ interface Props {
   onToggleLayers?: () => void
   onRerenderAll?: () => void
   rerenderingAll?: boolean
+  onColorSwap?: () => void
 }
 
 export default function StudioToolbar({
@@ -150,6 +151,7 @@ export default function StudioToolbar({
   onToggleLayers,
   onRerenderAll,
   rerenderingAll,
+  onColorSwap,
 }: Props) {
   const [insertOpen, setInsertOpen] = useState(false)
   const [copyToOpen, setCopyToOpen] = useState(false)
@@ -555,6 +557,17 @@ export default function StudioToolbar({
         >
           ↓ PNG
         </a>
+
+        {onColorSwap && (
+          <button
+            onClick={onColorSwap}
+            title="Color Swap — replace fill/line colors across deck"
+            className="flex items-center gap-1 text-xs px-3 py-1 rounded border transition-colors
+                       bg-white/5 text-muted hover:text-slate-200 border-edge hover:bg-white/10"
+          >
+            🎨 Colors
+          </button>
+        )}
 
         {onToggleFindReplace && (
           <button

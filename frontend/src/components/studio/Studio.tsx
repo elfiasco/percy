@@ -17,6 +17,7 @@ import KeyboardShortcutsModal from "./KeyboardShortcutsModal"
 import OutlinePanel from "./OutlinePanel"
 import PresentationMode from "./PresentationMode"
 import LayersPanel from "./LayersPanel"
+import ColorSwapPanel from "./ColorSwapPanel"
 
 interface Props {
   doc: DocInfo
@@ -39,6 +40,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const [presenting, setPresenting]           = useState(false)
   const [layersOpen, setLayersOpen]           = useState(false)
   const [rerenderingAll, setRerenderingAll]   = useState(false)
+  const [colorSwapOpen, setColorSwapOpen]     = useState(false)
   const [shortcutsOpen, setShortcutsOpen]       = useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [slideSorterOpen, setSlideSorterOpen]       = useState(false)
@@ -536,6 +538,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         onToggleLayers={() => setLayersOpen((o) => !o)}
         onRerenderAll={handleRerenderAll}
         rerenderingAll={rerenderingAll}
+        onColorSwap={() => setColorSwapOpen(true)}
       />
 
       {/* ── main area: slide strip + canvas + properties ── */}
@@ -640,6 +643,16 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           docId={doc.doc_id}
           onClose={() => setCommandPaletteOpen(false)}
           onJump={handleJumpToElement}
+        />
+      )}
+
+      {colorSwapOpen && (
+        <ColorSwapPanel
+          docId={doc.doc_id}
+          onClose={() => setColorSwapOpen(false)}
+          onReplaced={(slides) => {
+            if (slides.includes(selectedSlide)) setRefreshKey((k) => k + 1)
+          }}
         />
       )}
 

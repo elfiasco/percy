@@ -385,6 +385,10 @@ export async function generateSlideContent(
   })
 }
 
+export async function fetchColorPalette(docId: string): Promise<{ colors: string[] }> {
+  return apiFetch(`${BASE}/docs/${docId}/color-palette`)
+}
+
 export async function rerenderAllSlides(docId: string): Promise<{ ok: boolean; rendered: number; errors: { slide: number; error: string }[] }> {
   return apiFetch(`${BASE}/docs/${docId}/rerender-all`, { method: "POST" })
 }

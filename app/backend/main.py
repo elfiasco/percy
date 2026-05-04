@@ -4376,6 +4376,43 @@ def search_elements(doc_id: str, q: str = ""):
     return results
 
 
+def _collect_colors_from_element(el: Any, colors: set[str]) -> None:
+    fill = getattr(el, "fill", None)
+    if fill and getattr(fill, "fill_type", None) == "solid":
+        fg = getattr(fill, "color", None) or getattr(fill, "fill_color", None)
+        c = _color_to_str(fg)
+        if c:
+            colors.add(c.upper())
+    line = getattr(el, "line", None)
+    if line:
+        lc = getattr(line, "color", None) or getattr(line, "line_color", None)
+        c = _color_to_str(lc)
+        if c:
+            colors.add(c.upper())
+    tf = getattr(el, "text_frame", None) or getattr(el, "body", None)
+    if tf:
+        for para in getattr(tf, "paragraphs", []) or []:
+            for run in getattr(para, "runs", []) or []:
+                rf = getattr(run, "font", None) or run
+                rc = getattr(rf, "color", None) or getattr(rf, "font_color", None)
+                c = _color_to_str(rc)
+                if c:
+                    colors.add(c.upper())
+    for child in getattr(el, "children", []) or []:
+        _collect_colors_from_element(child, colors)
+
+
+@app.get("/api/docs/{doc_id}/color-palette")
+def get_color_palette(doc_id: str):
+    """Return all unique fill/line/text colors used in the deck."""
+    d = _require(doc_id)
+    colors: set[str] = set()
+    for slide in d["doc"].slides:
+        for el in slide.elements:
+            _collect_colors_from_element(el, colors)
+    return {"colors": sorted(colors)}
+
+
 @app.post("/api/docs/{doc_id}/replace-text")
 def replace_text(doc_id: str, req: ReplaceTextRequest):
     """Replace all occurrences of req.find with req.replace across all slides."""
