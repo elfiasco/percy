@@ -52,6 +52,7 @@ const SECTIONS = [
       { keys: "Ctrl+H / Ctrl+F",    desc: "Find & Replace" },
       { keys: "Ctrl+K",             desc: "Jump to element (command palette)" },
       { keys: "Ctrl+G",             desc: "Slide sorter grid view" },
+      { keys: "PageUp / PageDown",  desc: "Previous / next slide" },
       { keys: "?",                  desc: "Show this help" },
       { keys: "Notes bar",          desc: "Speaker notes (bottom of canvas)" },
     ],

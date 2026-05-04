@@ -43,6 +43,8 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const [slideElements, setSlideElements]     = useState<StudioElement[]>([])
   const selectedSlideRef = useRef(1)
   selectedSlideRef.current = selectedSlide
+  const localSlideCountRef = useRef(localSlideCount)
+  localSlideCountRef.current = localSlideCount
   const clipboardRef = useRef<{ slideN: number; elementId: string } | null>(null)
 
   // keep a ref so the arrow-key handler always sees the latest element
@@ -299,6 +301,20 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           setRedoDepth(r.redo_depth)
           setRefreshKey((k) => k + 1)
         }).catch(() => {})
+        return
+      }
+
+      // PageUp → previous slide, PageDown → next slide, Home → first, End → last
+      if (e.key === "PageUp") {
+        e.preventDefault()
+        setSelectedSlide((n) => Math.max(1, n - 1))
+        setSelectedElement(null)
+        return
+      }
+      if (e.key === "PageDown") {
+        e.preventDefault()
+        setSelectedSlide((n) => Math.min(localSlideCountRef.current, n + 1))
+        setSelectedElement(null)
         return
       }
 
