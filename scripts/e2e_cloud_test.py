@@ -15,6 +15,7 @@ Tests the full flow:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -24,9 +25,11 @@ import requests
 DEFAULT_API = "https://v9ghdhdczr.us-east-1.awsapprunner.com"
 
 
-def run(pptx_path: Path, api: str) -> None:
+def run(pptx_path: Path, api: str, api_key: str | None = None) -> None:
     s = requests.Session()
     s.headers["Content-Type"] = "application/json"
+    if api_key:
+        s.headers["X-Percy-Api-Key"] = api_key
 
     print(f"API: {api}")
     print(f"File: {pptx_path}")
@@ -101,5 +104,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--pptx", required=True, type=Path)
     parser.add_argument("--api", default=DEFAULT_API)
+    parser.add_argument("--api-key", default=os.environ.get("PERCY_API_KEY"))
     args = parser.parse_args()
-    run(args.pptx, args.api)
+    run(args.pptx, args.api, args.api_key)

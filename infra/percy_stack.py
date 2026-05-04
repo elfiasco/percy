@@ -274,7 +274,7 @@ class PercyCloudDemoStack(Stack):
                             ),
                             apprunner.CfnService.KeyValuePairProperty(
                                 name="PERCY_API_KEY",
-                                value=f"{api_key_secret.secret_arn}::",
+                                value=api_key_secret.secret_arn,
                             ),
                         ],
                     ),
