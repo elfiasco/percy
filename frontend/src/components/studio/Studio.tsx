@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import type { DocInfo } from "../../lib/types"
 import type { StudioElement } from "../../lib/studioTypes"
-import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements } from "../../lib/studioApi"
+import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle } from "../../lib/studioApi"
+import type { ElementStyleData } from "../../lib/studioTypes"
 import * as api from "../../lib/api"
 import StudioSlideStrip from "./StudioSlideStrip"
 import StudioCanvas from "./StudioCanvas"
@@ -31,6 +32,8 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const [savingToCloud, setSavingToCloud]     = useState(false)
   const [shortcutsOpen, setShortcutsOpen]       = useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
+  const [formatPaintMode, setFormatPaintMode]   = useState(false)
+  const formatPaintStyleRef = useRef<ElementStyleData | null>(null)
   const [dirtySlides, setDirtySlides]         = useState<Set<number>>(new Set())
   const [multiSelectIds, setMultiSelectIds]   = useState<Set<string>>(new Set())
   const [undoDepth, setUndoDepth]             = useState(0)
@@ -160,6 +163,35 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       console.error("align failed:", e)
     }
   }, [doc.doc_id, markDirty])
+
+  // ── format painter ────────────────────────────────────────────────────────
+  const handleFormatPaint = useCallback(async () => {
+    const el = selectedElementRef.current
+    if (!el) return
+    try {
+      const style = await fetchElementStyle(doc.doc_id, selectedSlideRef.current, el.id)
+      formatPaintStyleRef.current = style
+      setFormatPaintMode(true)
+    } catch (e) {
+      console.error("format paint fetch failed:", e)
+    }
+  }, [doc.doc_id])
+
+  // Apply paint when a new element is selected while paint mode is on
+  const prevElementIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    const el = selectedElement
+    if (!el) return
+    if (el.id === prevElementIdRef.current) return
+    prevElementIdRef.current = el.id
+    if (!formatPaintMode || !formatPaintStyleRef.current) return
+    const style = formatPaintStyleRef.current
+    setFormatPaintMode(false)
+    formatPaintStyleRef.current = null
+    updateElementStyle(doc.doc_id, selectedSlideRef.current, el.id, style)
+      .then(() => { markDirty(selectedSlideRef.current); setRefreshKey((k) => k + 1) })
+      .catch((err) => console.error("format paint apply failed:", err))
+  }, [selectedElement, formatPaintMode, doc.doc_id, markDirty])
 
   // ── arrow key nudge + Delete/Duplicate keyboard shortcuts ─────────────────
   useEffect(() => {
@@ -361,6 +393,8 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         onShowShortcuts={() => setShortcutsOpen(true)}
         multiSelectIds={multiSelectIds}
         onAlignElements={handleAlignElements}
+        onFormatPaint={handleFormatPaint}
+        formatPaintMode={formatPaintMode}
       />
 
       {/* ── main area: slide strip + canvas + properties ── */}

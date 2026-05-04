@@ -106,6 +106,8 @@ interface Props {
   onShowShortcuts?: () => void
   multiSelectIds?: Set<string>
   onAlignElements?: (alignment: string) => void
+  onFormatPaint?: () => void
+  formatPaintMode?: boolean
 }
 
 export default function StudioToolbar({
@@ -119,6 +121,7 @@ export default function StudioToolbar({
   undoDepth, redoDepth,
   onShowShortcuts,
   multiSelectIds, onAlignElements,
+  onFormatPaint, formatPaintMode,
 }: Props) {
   const [insertOpen, setInsertOpen] = useState(false)
   const imageInputRef = useRef<HTMLInputElement>(null)
@@ -255,6 +258,17 @@ export default function StudioToolbar({
 
       {/* ── element actions ───────────────────────────────── */}
       <div className={`flex items-center gap-0.5 ${disabled ? "opacity-35 pointer-events-none" : ""}`}>
+        {onFormatPaint && (
+          <button
+            title={formatPaintMode ? "Click another element to paste style" : "Format Painter — copy style to clipboard"}
+            onClick={onFormatPaint}
+            className={`w-6 h-6 flex items-center justify-center text-sm rounded transition-colors ${
+              formatPaintMode
+                ? "bg-amber-500/30 text-amber-300 ring-1 ring-amber-400"
+                : "text-muted hover:text-slate-200 hover:bg-white/10"
+            }`}
+          >🖌</button>
+        )}
         <button
           title="Duplicate element (Ctrl+D)"
           onClick={onDuplicate}
