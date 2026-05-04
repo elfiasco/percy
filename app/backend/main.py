@@ -115,6 +115,7 @@ class ElementPositionUpdate(BaseModel):
     height_in: float | None = None
     z_index: int | None = None
     rotation: float | None = None
+    name: str | None = None
 
 class LoadBundleRequest(BaseModel):
     bundle_uri: str          # s3://bucket/bundles/{doc_id}/bridge.pkl
@@ -2759,6 +2760,7 @@ def _serialize_element(el: Any, index: int, slide_w: float, slide_h: float) -> d
     width_pct = (pos.width  / slide_w * 100) if slide_w else 0.0
     height_pct= (pos.height / slide_h * 100) if slide_h else 0.0
 
+    custom = getattr(el, "custom_properties", {}) or {}
     return {
         "id":          el_id,
         "index":       index,
@@ -2775,6 +2777,8 @@ def _serialize_element(el: Any, index: int, slide_w: float, slide_h: float) -> d
         "height_pct":  round(height_pct, 5),
         "rotation":    rotation,
         "z_index":     z_index,
+        "locked":      bool(custom.get("studio_locked", False)),
+        "hidden":      bool(custom.get("studio_hidden", False)),
     }
 
 
@@ -2927,10 +2931,47 @@ def update_element_position(doc_id: str, n: int, element_id: str, req: ElementPo
     if req.rotation  is not None:
         xf = getattr(el, "transforms", None)
         if xf is not None: xf.rotation = req.rotation % 360
+    if req.name is not None:
+        ident = getattr(el, "identification", None)
+        if ident is not None: ident.shape_name = req.name.strip() or ident.shape_name
 
     w, h = _get_slide_dims(doc, slide)
     log.info("studio: moved element %s on slide %d of %s → (%.3f, %.3f) %.3fx%.3f in",
              element_id, n, doc_id, pos.left, pos.top, pos.width, pos.height)
+    return _serialize_element(el, el_index, w, h)
+
+
+class ElementFlagsUpdate(BaseModel):
+    locked: bool | None = None
+    hidden: bool | None = None
+
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/flags")
+def update_element_flags(doc_id: str, n: int, element_id: str, req: ElementFlagsUpdate):
+    """Set studio_locked / studio_hidden flags in element's custom_properties."""
+    _snapshot_doc(doc_id)
+    d    = _require(doc_id)
+    doc  = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
+
+    el = el_index = None
+    for i, e in enumerate(slide.elements):
+        if _element_id(e, i) == element_id:
+            el, el_index = e, i
+            break
+    if el is None:
+        raise HTTPException(404, f"Element {element_id!r} not found on slide {n}")
+
+    custom = getattr(el, "custom_properties", None)
+    if custom is None:
+        raise HTTPException(400, "Element does not support custom_properties")
+
+    if req.locked is not None: custom["studio_locked"] = req.locked
+    if req.hidden is not None: custom["studio_hidden"] = req.hidden
+
+    w, h = _get_slide_dims(doc, slide)
     return _serialize_element(el, el_index, w, h)
 
 
@@ -3040,6 +3081,75 @@ class NewElementRequest(BaseModel):
     height_in: float = 1.0
     fill_color: str = "#4472C4"
     label: str = "New Shape"
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/elements/image")
+async def create_image_element(doc_id: str, n: int, file: UploadFile = File(...)):
+    """Upload an image file and insert a new BridgeImage element at the center of the slide."""
+    from percy.bridge.elements import (  # type: ignore[attr-defined]
+        BridgeImage, ImageData, ImageFileInfo, ImageDimensions, ImageCropping,
+        ImageBorder, ShapeShadow, Position, Transform, Stacking, Identification, Accessibility,
+    )
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, "Uploaded file is empty")
+
+    try:
+        from PIL import Image as _PIL
+        import io as _io
+        with _PIL.open(_io.BytesIO(raw)) as img:
+            fmt = (img.format or "png").lower()
+            img_w, img_h = img.size
+    except Exception:
+        fmt = (file.filename or "").rsplit(".", 1)[-1].lower() or "png"
+        img_w, img_h = None, None
+
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    sw, sh = _get_slide_dims(doc, slide)
+    # Default to 4×3 inches at center, preserving aspect ratio if known
+    default_w = 4.0
+    default_h = 3.0
+    if img_w and img_h and img_w > 0:
+        default_h = default_w * img_h / img_w
+    left = max(0.0, (sw - default_w) / 2)
+    top  = max(0.0, (sh - default_h) / 2)
+
+    existing_ids = {getattr(getattr(e, "identification", None), "shape_id", None) for e in slide.elements}
+    new_id = max((x for x in existing_ids if x is not None), default=0) + 1
+    max_z  = max((getattr(e.stacking, "z_index", 1) for e in slide.elements), default=0)
+
+    el = BridgeImage(
+        position=Position(left=left, top=top, width=default_w, height=default_h),
+        transforms=Transform(),
+        stacking=Stacking(z_index=max_z + 1),
+        identification=Identification(shape_id=new_id, shape_name=file.filename or "image"),
+        accessibility=Accessibility(alt_text=file.filename or "image"),
+        image_data=ImageData(image_bytes=raw, image_format=fmt),
+        file_info=ImageFileInfo(original_filename=file.filename),
+        dimensions=ImageDimensions(width_px=img_w, height_px=img_h),
+        cropping=ImageCropping(),
+        border=ImageBorder(),
+        shadow=ShapeShadow(),
+    )
+    slide.elements.append(el)
+    new_index = len(slide.elements) - 1
+
+    # Re-render the slide PNG so the new image shows up
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    try:
+        from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+        _rbs(doc, bridge_dir, slide_numbers=[n])
+    except Exception as exc:
+        log.warning("create_image_element: re-render failed: %s", exc)
+
+    log.info("create_image_element: added %s (%d bytes) to slide %d of %s", fmt, len(raw), n, doc_id)
+    return _serialize_element(el, new_index, sw, sh)
 
 
 @app.post("/api/docs/{doc_id}/slides/{n}/elements")

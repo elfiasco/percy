@@ -20,6 +20,7 @@ export interface DocInfo {
   diagnostic_summary?: DiagnosticSummary
   grades?: Record<number, Grade>
   tableau?: TableauOverview | null
+  cloud_bundle_uri?: string | null
 }
 
 export type Grade = "good" | "partial" | "bad"

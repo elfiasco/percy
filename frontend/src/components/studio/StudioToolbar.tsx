@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import type { StudioElement } from "../../lib/studioTypes"
 import type { DocInfo } from "../../lib/types"
 import { exportPptxUrl } from "../../lib/studioApi"
@@ -81,6 +81,7 @@ interface Props {
   onDelete: () => void
   onDuplicate: () => void
   onInsertShape: (shapeType: string) => void
+  onInsertImage?: (file: File) => void
   onRebuild: () => void
   rebuilding: boolean
   chatOpen: boolean
@@ -89,18 +90,22 @@ interface Props {
   onToggleFindReplace?: () => void
   onSaveToCloud?: () => void
   savingToCloud?: boolean
+  undoDepth?: number
+  redoDepth?: number
 }
 
 export default function StudioToolbar({
   doc, slideN, slideWidthIn, slideHeightIn, selectedElement,
   onCommitPosition, onCommitZIndex,
-  onDelete, onDuplicate, onInsertShape,
+  onDelete, onDuplicate, onInsertShape, onInsertImage,
   onRebuild, rebuilding,
   chatOpen, onToggleChat,
   findReplaceOpen, onToggleFindReplace,
   onSaveToCloud, savingToCloud,
+  undoDepth, redoDepth,
 }: Props) {
   const [insertOpen, setInsertOpen] = useState(false)
+  const imageInputRef = useRef<HTMLInputElement>(null)
   const [x, setX] = useState("")
   const [y, setY] = useState("")
   const [w, setW] = useState("")
@@ -234,7 +239,7 @@ export default function StudioToolbar({
       <div className="relative mr-2">
         <button
           onClick={() => setInsertOpen((o) => !o)}
-          title="Insert a new shape"
+          title="Insert a new shape or image"
           className="flex items-center gap-1 text-xs px-2.5 py-1 rounded
                      bg-white/5 text-muted hover:text-slate-200 border border-edge hover:bg-white/10
                      transition-colors"
@@ -246,6 +251,17 @@ export default function StudioToolbar({
             className="absolute right-0 top-full mt-1 z-[9999] bg-surface border border-edge rounded shadow-xl py-1 min-w-[150px]"
             onMouseLeave={() => setInsertOpen(false)}
           >
+            {onInsertImage && (
+              <>
+                <button
+                  onClick={() => { setInsertOpen(false); imageInputRef.current?.click() }}
+                  className="w-full text-left px-3 py-1 text-xs text-slate-300 hover:bg-white/10 transition-colors"
+                >
+                  🖼 Image…
+                </button>
+                <div className="border-t border-edge/50 my-1" />
+              </>
+            )}
             {INSERT_SHAPES.map((s, i) => s.value === "" ? (
               <div key={i} className="border-t border-edge/50 my-1" />
             ) : (
@@ -259,11 +275,31 @@ export default function StudioToolbar({
             ))}
           </div>
         )}
+        {/* hidden file input for image insertion */}
+        <input
+          ref={imageInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            if (file && onInsertImage) { onInsertImage(file) }
+            e.target.value = ""
+          }}
+        />
       </div>
+
+      {/* ── undo/redo depth indicator ─────────────────────── */}
+      {(undoDepth !== undefined || redoDepth !== undefined) && (
+        <div className="flex items-center gap-1 text-[10px] text-muted/60 mr-2 shrink-0">
+          <span title={`Undo stack: ${undoDepth ?? 0} steps`}>↩{undoDepth ?? 0}</span>
+          <span title={`Redo stack: ${redoDepth ?? 0} steps`}>↪{redoDepth ?? 0}</span>
+        </div>
+      )}
 
       {/* ── keyboard hint ─────────────────────────────────── */}
       <div className="text-[10px] text-muted/50 hidden xl:block mr-3">
-        ↑↓←→ nudge · Shift×10 · Del delete · Ctrl+C/V copy/paste · Ctrl+D dup · Ctrl+Z/Y undo · Ctrl+S rebuild · Ctrl+H find · Esc deselect
+        ↑↓←→ nudge · Shift×10 · Del delete · Ctrl+C/V copy/paste · Ctrl+D dup · Ctrl+Z/Y undo · Ctrl+S rebuild · Ctrl+H find · G grid · S snap · Esc deselect
       </div>
 
       <div className="w-px h-5 bg-edge mx-3 shrink-0" />
@@ -293,6 +329,17 @@ export default function StudioToolbar({
                      transition-colors no-underline"
         >
           ↓ Export
+        </a>
+
+        <a
+          href={`/api/docs/${doc.doc_id}/slides/${slideN}/bridge.png`}
+          download={`${docName}-slide${slideN}.png`}
+          title="Download current slide as PNG"
+          className="flex items-center gap-1 text-xs px-3 py-1 rounded
+                     bg-cyan-500/15 text-cyan-300 hover:bg-cyan-500/25 border border-cyan-500/25
+                     transition-colors no-underline"
+        >
+          ↓ PNG
         </a>
 
         {onToggleFindReplace && (

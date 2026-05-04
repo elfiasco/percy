@@ -156,11 +156,23 @@ export async function updateElementStyle(
   )
 }
 
+export async function updateElementFlags(
+  docId: string,
+  slideN: number,
+  elementId: string,
+  flags: { locked?: boolean; hidden?: boolean },
+): Promise<StudioElement> {
+  return apiFetch<StudioElement>(
+    `${BASE}/docs/${docId}/slides/${slideN}/elements/${encodeURIComponent(elementId)}/flags`,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(flags) },
+  )
+}
+
 export async function updateElementPosition(
   docId: string,
   slideN: number,
   elementId: string,
-  update: { left_in?: number; top_in?: number; width_in?: number; height_in?: number; z_index?: number; rotation?: number },
+  update: { left_in?: number; top_in?: number; width_in?: number; height_in?: number; z_index?: number; rotation?: number; name?: string },
 ): Promise<StudioElement> {
   return apiFetch<StudioElement>(
     `${BASE}/docs/${docId}/slides/${slideN}/elements/${encodeURIComponent(elementId)}`,
@@ -183,6 +195,19 @@ export async function copyElementToSlide(
   return apiFetch<StudioElement>(
     `${BASE}/docs/${docId}/slides/${srcSlideN}/elements/${encodeURIComponent(elementId)}/copy-to-slide?target_n=${targetN}&offset_x=${offsetX}&offset_y=${offsetY}`,
     { method: "POST" },
+  )
+}
+
+export async function createImageElement(
+  docId: string,
+  slideN: number,
+  file: File,
+): Promise<StudioElement> {
+  const form = new FormData()
+  form.append("file", file)
+  return apiFetch<StudioElement>(
+    `${BASE}/docs/${docId}/slides/${slideN}/elements/image`,
+    { method: "POST", body: form },
   )
 }
 

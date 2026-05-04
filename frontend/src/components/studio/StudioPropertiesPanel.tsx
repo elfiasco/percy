@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react"
 import type { StudioElement, ElementStyleData } from "../../lib/studioTypes"
-import { fetchElementStyle, updateElementStyle, updateElementPosition, setSlideBackground, replaceImage } from "../../lib/studioApi"
+import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, replaceImage } from "../../lib/studioApi"
 import StudioTextPanel from "./StudioTextPanel"
 
 const TYPE_COLOR: Record<string, string> = {
@@ -131,6 +131,7 @@ function PositionTab({ element, docId, slideN, onCommit }: PositionTabProps) {
   const [w, setW] = useState(element.width_in.toFixed(3))
   const [h, setH] = useState(element.height_in.toFixed(3))
   const [rot, setRot] = useState(element.rotation.toFixed(1))
+  const [editName, setEditName] = useState(element.name)
 
   useEffect(() => {
     setX(element.left_in.toFixed(3))
@@ -138,6 +139,7 @@ function PositionTab({ element, docId, slideN, onCommit }: PositionTabProps) {
     setW(element.width_in.toFixed(3))
     setH(element.height_in.toFixed(3))
     setRot(element.rotation.toFixed(1))
+    setEditName(element.name)
   }, [element])
 
   const commitPos = useCallback(async () => {
@@ -161,6 +163,15 @@ function PositionTab({ element, docId, slideN, onCommit }: PositionTabProps) {
     setRot(updated.rotation.toFixed(1))
     onCommit()
   }, [rot, docId, slideN, element.id, onCommit])
+
+  const commitName = useCallback(async () => {
+    const n = editName.trim()
+    if (!n || n === element.name) return
+    try {
+      await updateElementPosition(docId, slideN, element.id, { name: n })
+      onCommit()
+    } catch (e) { console.error("rename failed:", e) }
+  }, [editName, element.name, element.id, docId, slideN, onCommit])
 
   return (
     <div className="p-3 overflow-y-auto flex-1 scrollbar-thin">
@@ -199,6 +210,31 @@ function PositionTab({ element, docId, slideN, onCommit }: PositionTabProps) {
       <FieldRow label="Index">
         <span className="text-xs font-mono text-slate-300">{element.index}</span>
       </FieldRow>
+      <FieldRow label="Locked">
+        <Toggle
+          on={element.locked}
+          onChange={async (v) => {
+            try {
+              const updated = await updateElementFlags(docId, slideN, element.id, { locked: v })
+              onCommit()
+              // propagate updated element — parent will re-set via setSelectedElement
+              void updated
+            } catch (e) { console.error("lock toggle failed:", e) }
+          }}
+        />
+      </FieldRow>
+      <FieldRow label="Hidden">
+        <Toggle
+          on={element.hidden}
+          onChange={async (v) => {
+            try {
+              const updated = await updateElementFlags(docId, slideN, element.id, { hidden: v })
+              onCommit()
+              void updated
+            } catch (e) { console.error("hidden toggle failed:", e) }
+          }}
+        />
+      </FieldRow>
 
       <SectionHead title="Info" />
       <FieldRow label="Type">
@@ -208,7 +244,15 @@ function PositionTab({ element, docId, slideN, onCommit }: PositionTabProps) {
         <span className="text-[10px] font-mono text-muted break-all leading-tight">{element.id}</span>
       </FieldRow>
       <FieldRow label="Name">
-        <span className="text-xs text-muted">{element.name}</span>
+        <input
+          type="text"
+          value={editName}
+          onChange={(e) => setEditName(e.target.value)}
+          onBlur={commitName}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitName() } }}
+          className="w-full text-xs bg-base border border-edge rounded px-1.5 py-0.5
+                     text-slate-200 focus:outline-none focus:border-accent"
+        />
       </FieldRow>
 
       <div className="mt-4 text-[10px] text-muted/60 leading-relaxed">

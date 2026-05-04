@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import type { DocInfo } from "../../lib/types"
 import type { StudioElement } from "../../lib/studioTypes"
-import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement, copyElementToSlide } from "../../lib/studioApi"
+import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement } from "../../lib/studioApi"
 import * as api from "../../lib/api"
 import StudioSlideStrip from "./StudioSlideStrip"
 import StudioCanvas from "./StudioCanvas"
@@ -26,6 +26,10 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const [findReplaceOpen, setFindReplaceOpen] = useState(false)
   const [localSlideCount, setLocalSlideCount] = useState(doc.slide_count)
   const [savingToCloud, setSavingToCloud]     = useState(false)
+  const [dirtySlides, setDirtySlides]         = useState<Set<number>>(new Set())
+  const [multiSelectIds, setMultiSelectIds]   = useState<Set<string>>(new Set())
+  const [undoDepth, setUndoDepth]             = useState(0)
+  const [redoDepth, setRedoDepth]             = useState(0)
   const selectedSlideRef = useRef(1)
   selectedSlideRef.current = selectedSlide
   const clipboardRef = useRef<{ slideN: number; elementId: string } | null>(null)
@@ -44,12 +48,17 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       .catch(() => {})
   }, [doc.doc_id, selectedSlide])
 
+  const markDirty = useCallback((n: number) => {
+    setDirtySlides((prev) => { const next = new Set(prev); next.add(n); return next })
+  }, [])
+
   // ── re-render current slide PNG then bump refreshKey ─────────────────────
   const rerender = useCallback(async () => {
     const n = selectedSlideRef.current
+    markDirty(n)
     try { await renderSingleSlide(doc.doc_id, n) } catch { /* non-fatal */ }
     setRefreshKey((k) => k + 1)
-  }, [doc.doc_id])
+  }, [doc.doc_id, markDirty])
 
   // ── commit a position/size change from toolbar or arrow keys ──────────────
   const handleCommitPosition = useCallback(async (
@@ -62,6 +71,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         left_in: leftIn, top_in: topIn, width_in: widthIn, height_in: heightIn,
       })
       setSelectedElement(updated)
+      markDirty(selectedSlideRef.current)
       await rerender()
     } catch (e) {
       console.error("position commit failed:", e)
@@ -75,37 +85,54 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
     try {
       const updated = await updateElementPosition(doc.doc_id, selectedSlideRef.current, el.id, { z_index: zIndex })
       setSelectedElement(updated)
+      markDirty(selectedSlideRef.current)
       await rerender()
     } catch (e) {
       console.error("z-index commit failed:", e)
     }
   }, [doc.doc_id, rerender])
 
-  // ── delete selected element ────────────────────────────────────────────────
+  const multiSelectIdsRef = useRef<Set<string>>(new Set())
+  multiSelectIdsRef.current = multiSelectIds
+
+  // ── delete selected element(s) ────────────────────────────────────────────
   const handleDelete = useCallback(async () => {
-    const el = selectedElementRef.current
-    if (!el) return
+    const ids = multiSelectIdsRef.current
+    const el  = selectedElementRef.current
+    const toDelete = ids.size > 0 ? [...ids] : el ? [el.id] : []
+    if (!toDelete.length) return
     try {
-      await deleteElement(doc.doc_id, selectedSlideRef.current, el.id)
+      for (const id of toDelete) {
+        await deleteElement(doc.doc_id, selectedSlideRef.current, id)
+      }
       setSelectedElement(null)
+      setMultiSelectIds(new Set())
+      markDirty(selectedSlideRef.current)
       setRefreshKey((k) => k + 1)
     } catch (e) {
       console.error("delete failed:", e)
     }
-  }, [doc.doc_id])
+  }, [doc.doc_id, markDirty])
 
-  // ── duplicate selected element ─────────────────────────────────────────────
+  // ── duplicate selected element(s) ─────────────────────────────────────────
   const handleDuplicate = useCallback(async () => {
-    const el = selectedElementRef.current
-    if (!el) return
+    const ids = multiSelectIdsRef.current
+    const el  = selectedElementRef.current
+    const toDup = ids.size > 0 ? [...ids] : el ? [el.id] : []
+    if (!toDup.length) return
     try {
-      const dup = await duplicateElement(doc.doc_id, selectedSlideRef.current, el.id)
-      setSelectedElement(dup)
+      let lastDup: StudioElement | null = null
+      for (const id of toDup) {
+        lastDup = await duplicateElement(doc.doc_id, selectedSlideRef.current, id)
+      }
+      if (lastDup) setSelectedElement(lastDup)
+      setMultiSelectIds(new Set())
+      markDirty(selectedSlideRef.current)
       setRefreshKey((k) => k + 1)
     } catch (e) {
       console.error("duplicate failed:", e)
     }
-  }, [doc.doc_id])
+  }, [doc.doc_id, markDirty])
 
   // ── arrow key nudge + Delete/Duplicate keyboard shortcuts ─────────────────
   useEffect(() => {
@@ -135,6 +162,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           e.preventDefault()
           copyElementToSlide(doc.doc_id, clip.slideN, clip.elementId, selectedSlideRef.current)
             .then((el) => {
+              markDirty(selectedSlideRef.current)
               setRefreshKey((k) => k + 1)
               setSelectedElement(el)
             })
@@ -166,8 +194,10 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       // Ctrl+Z → undo, Ctrl+Y or Ctrl+Shift+Z → redo
       if ((e.key === "z" || e.key === "Z") && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
         e.preventDefault()
-        undoDoc(doc.doc_id).then(() => {
+        undoDoc(doc.doc_id).then((r) => {
           setSelectedElement(null)
+          setUndoDepth(r.undo_depth)
+          setRedoDepth(r.redo_depth)
           setRefreshKey((k) => k + 1)
         }).catch(() => {})
         return
@@ -175,8 +205,10 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       if (((e.key === "y" || e.key === "Y") && (e.ctrlKey || e.metaKey)) ||
           ((e.key === "z" || e.key === "Z") && (e.ctrlKey || e.metaKey) && e.shiftKey)) {
         e.preventDefault()
-        redoDoc(doc.doc_id).then(() => {
+        redoDoc(doc.doc_id).then((r) => {
           setSelectedElement(null)
+          setUndoDepth(r.undo_depth)
+          setRedoDepth(r.redo_depth)
           setRefreshKey((k) => k + 1)
         }).catch(() => {})
         return
@@ -184,7 +216,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
 
       if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return
       const el = selectedElementRef.current
-      if (!el) return
+      if (!el || el.locked) return
       e.preventDefault()
       const step = e.shiftKey ? 1.0 : 0.1
       const dl = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0
@@ -203,6 +235,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const handleSlideSelect = useCallback((n: number) => {
     setSelectedSlide(n)
     setSelectedElement(null)
+    setMultiSelectIds(new Set())
   }, [])
 
   const handleInsertShape = useCallback(async (shapeType: string) => {
@@ -214,11 +247,23 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         label: shapeType.charAt(0).toUpperCase() + shapeType.slice(1),
       })
       setSelectedElement(el)
+      markDirty(selectedSlideRef.current)
       setRefreshKey((k) => k + 1)
     } catch (e) {
       console.error("insert failed:", e)
     }
-  }, [doc.doc_id])
+  }, [doc.doc_id, markDirty])
+
+  const handleInsertImage = useCallback(async (file: File) => {
+    try {
+      const el = await createImageElement(doc.doc_id, selectedSlideRef.current, file)
+      setSelectedElement(el)
+      markDirty(selectedSlideRef.current)
+      setRefreshKey((k) => k + 1)
+    } catch (e) {
+      console.error("insert image failed:", e)
+    }
+  }, [doc.doc_id, markDirty])
 
   const handleSlideCountChange = useCallback((newCount: number, focusSlide: number) => {
     setLocalSlideCount(newCount)
@@ -255,7 +300,8 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         onDelete={handleDelete}
         onDuplicate={handleDuplicate}
         onInsertShape={handleInsertShape}
-        onRebuild={onRebuild}
+        onInsertImage={handleInsertImage}
+        onRebuild={() => { setDirtySlides(new Set()); onRebuild() }}
         rebuilding={rebuilding}
         chatOpen={chatOpen}
         onToggleChat={() => setChatOpen((o) => !o)}
@@ -263,6 +309,8 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         onToggleFindReplace={() => setFindReplaceOpen((o) => !o)}
         onSaveToCloud={doc.cloud_bundle_uri ? handleSaveToCloud : undefined}
         savingToCloud={savingToCloud}
+        undoDepth={undoDepth}
+        redoDepth={redoDepth}
       />
 
       {/* ── main area: slide strip + canvas + properties ── */}
@@ -271,6 +319,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           docId={doc.doc_id}
           slideCount={localSlideCount}
           selectedSlide={selectedSlide}
+          dirtySlides={dirtySlides}
           onSelect={handleSlideSelect}
           onSlideCountChange={handleSlideCountChange}
         />
@@ -282,6 +331,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           slideHeightIn={slideHeightIn}
           refreshKey={refreshKey}
           onSelectElement={setSelectedElement}
+          onMultiSelect={setMultiSelectIds}
         />
 
         <StudioPropertiesPanel
