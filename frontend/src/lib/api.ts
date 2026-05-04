@@ -89,6 +89,18 @@ export async function captureTableauArtifact(docId: string, artifactN: number): 
   )
 }
 
+export async function saveToCloud(docId: string): Promise<{ ok: boolean; bundle_uri: string; bytes: number; version_archived: string | null }> {
+  return json(`${BASE}/docs/${docId}/save-to-cloud`, { method: "POST" })
+}
+
+export async function loadBundle(bundleUri: string, name?: string): Promise<OnboardResult> {
+  return json<OnboardResult>(`${BASE}/load-bundle`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bundle_uri: bundleUri, name }),
+  })
+}
+
 export async function captureAllTableauSheets(
   docId: string, renderWait?: number,
 ): Promise<{ captured: number; total: number; results: Array<Record<string, unknown>> }> {

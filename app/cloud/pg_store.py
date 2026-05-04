@@ -274,6 +274,20 @@ class PostgresControlPlaneStore:
             rows = _rows(conn, "SELECT * FROM jobs WHERE project_id = %s ORDER BY created_at DESC", (project_id,))
         return [self._job_from_row(r) for r in rows]
 
+    def list_recent_jobs(self, limit: int = 50) -> list[Job]:
+        with get_conn() as conn:
+            rows = _rows(conn, "SELECT * FROM jobs ORDER BY created_at DESC LIMIT %s", (limit,))
+        return [self._job_from_row(r) for r in rows]
+
+    def search_documents(self, query: str, limit: int = 50) -> list[Document]:
+        with get_conn() as conn:
+            rows = _rows(
+                conn,
+                "SELECT * FROM documents WHERE name ILIKE %s ORDER BY created_at DESC LIMIT %s",
+                (f"%{query}%", limit),
+            )
+        return [self._doc_from_row(r) for r in rows]
+
     def start_job(self, job_id: str, worker_id: str) -> Job:
         with get_conn() as conn:
             job_row = _row(conn, "SELECT * FROM jobs WHERE id = %s", (job_id,))

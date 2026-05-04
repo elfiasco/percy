@@ -201,6 +201,14 @@ def prepare_upload(project_id: str, req: PrepareUploadRequest) -> PrepareUploadR
     return PrepareUploadResponse(document=doc, upload_url=upload_url)
 
 
+@app.get("/api/cloud/documents/search", response_model=list[Document])
+def search_documents(q: str, limit: int = 50) -> list[Document]:
+    """Full-text name search across all documents."""
+    if not q.strip():
+        return []
+    return store.search_documents(q.strip(), min(limit, 200))
+
+
 @app.get("/api/cloud/documents/{document_id}", response_model=Document)
 def get_document(document_id: str) -> Document:
     try:
@@ -274,6 +282,12 @@ def list_project_jobs(project_id: str) -> list[Job]:
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return store.list_project_jobs(project_id)
+
+
+@app.get("/api/cloud/jobs/recent", response_model=list[Job])
+def list_recent_jobs(limit: int = 50) -> list[Job]:
+    """Return the most recent jobs across all projects, newest first."""
+    return store.list_recent_jobs(min(limit, 200))
 
 
 @app.get("/api/cloud/jobs/{job_id}", response_model=Job)
@@ -364,6 +378,35 @@ def deny_access_request(request_id: str, req: DenyAccessRequestRequest) -> Acces
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+# ------------------------------------------------------------------
+# Manual refresh trigger — re-onboards all ready documents
+# ------------------------------------------------------------------
+
+@app.post("/api/cloud/trigger-refresh")
+def trigger_refresh() -> dict:
+    """Queue fresh onboard_document jobs for every ready document."""
+    orgs = store.list_organizations()
+    dispatched = 0
+    errors: list[str] = []
+    for org in orgs:
+        for project in store.list_projects(org.id):
+            for doc in store.list_project_documents(project.id):
+                if doc.status != "ready" or doc.bundle_uri is None:
+                    continue
+                try:
+                    job = store.create_document_job(
+                        document_id=doc.id,
+                        job_type="onboard_document",
+                        requested_by_id="scheduler",
+                        parameters={},
+                    )
+                    queue.enqueue(job.id, job.job_type, {"document_id": doc.id})
+                    dispatched += 1
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"{doc.id}: {exc}")
+    return {"ok": True, "dispatched": dispatched, "errors": errors}
 
 
 # ------------------------------------------------------------------

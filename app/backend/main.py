@@ -116,6 +116,30 @@ class ElementPositionUpdate(BaseModel):
     z_index: int | None = None
     rotation: float | None = None
 
+class LoadBundleRequest(BaseModel):
+    bundle_uri: str          # s3://bucket/bundles/{doc_id}/bridge.pkl
+    name: str | None = None  # optional display name
+
+
+class ElementStyleUpdate(BaseModel):
+    """Style properties that can be patched on a Bridge element."""
+    fill_color: str | None = None          # hex "#RRGGBB" or "none" to remove fill
+    fill_type: str | None = None           # "solid" | "none"
+    line_color: str | None = None          # hex or "none"
+    line_width: float | None = None        # pt
+    line_dash: str | None = None           # SOLID|DASH|DOT|DASH_DOT|DASH_DOT_DOT|SYS_DASH|SYS_DOT
+    opacity: float | None = None           # 0.0–1.0 (element transparency)
+    shadow_on: bool | None = None
+    shadow_color: str | None = None        # hex
+    shadow_blur: float | None = None       # pt
+    shadow_offset_x: float | None = None   # pt
+    shadow_offset_y: float | None = None   # pt
+    # image-specific
+    crop_left: float | None = None         # 0.0–1.0
+    crop_right: float | None = None
+    crop_top: float | None = None
+    crop_bottom: float | None = None
+
 
 # ── Text-editing models ───────────────────────────────────────────────────────
 
@@ -816,6 +840,73 @@ async def upload_file(file: UploadFile = File(...)):
     return {"path": str(dest), "name": dest.name, "size_kb": len(contents) // 1024}
 
 
+@app.post("/api/load-bundle")
+def load_bundle(req: LoadBundleRequest):
+    """Download a Bridge PKL from S3 and load it into the in-memory workspace."""
+    import pickle as _pickle
+
+    bundle_uri = req.bundle_uri
+    if not bundle_uri.startswith("s3://"):
+        raise HTTPException(400, "bundle_uri must be an S3 URI (s3://...)")
+    parts = bundle_uri.removeprefix("s3://").split("/", 1)
+    if len(parts) != 2:
+        raise HTTPException(400, "Invalid S3 URI format")
+    bucket, key = parts[0], parts[1]
+
+    log.info("load-bundle: downloading %s", bundle_uri)
+    try:
+        import boto3 as _boto3
+        s3 = _boto3.client("s3")
+        resp = s3.get_object(Bucket=bucket, Key=key)
+        pkl_bytes = resp["Body"].read()
+    except Exception as exc:
+        log.exception("load-bundle: S3 download failed")
+        raise HTTPException(500, f"Failed to download bundle from S3: {exc}")
+
+    log.info("load-bundle: unpickling %d bytes", len(pkl_bytes))
+    try:
+        doc = _pickle.loads(pkl_bytes)
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to unpickle bundle: {exc}")
+
+    doc_id = str(uuid.uuid4())[:8]
+    display_name = req.name or getattr(doc, "name", None) or doc_id
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+
+    log.info("load-bundle: rendering bridge slides for doc_id=%s  slides=%d", doc_id, len(doc.slides))
+    try:
+        bridge_paths = _render_bridge(doc, bridge_dir)
+    except Exception as exc:
+        log.warning("load-bundle: bridge render partial: %s", exc)
+        bridge_paths = []
+
+    _docs[doc_id] = {
+        "doc":              doc,
+        "source_path":      bundle_uri,
+        "source_format":    "pptx",
+        "name":             display_name,
+        "slide_count":      len(doc.slides),
+        "bridge_paths":     bridge_paths,
+        "orig_paths":       [],
+        "rebuilt_path":     None,
+        "rebuilt_paths":    [],
+        "diagnostics":      [],
+        "grades":           {},
+        "pixel_scores":     {},
+        "cloud_bundle_uri": bundle_uri,
+    }
+
+    log.info("load-bundle: ready  doc_id=%s  bridge_slides=%d", doc_id, len(bridge_paths))
+    return {
+        "doc_id":        doc_id,
+        "name":          display_name,
+        "slide_count":   len(doc.slides),
+        "has_originals": False,
+        "bridge_slides": len(bridge_paths),
+        "source_format": "pptx",
+    }
+
+
 @app.post("/api/onboard")
 def onboard(req: OnboardRequest):
     """Onboard PPTX or PDF → PercyDocument, render bridge + original slides."""
@@ -930,17 +1021,18 @@ def onboard(req: OnboardRequest):
 def list_docs():
     result = [
         {
-            "doc_id":        doc_id,
-            "name":          d["name"],
-            "slide_count":   d["slide_count"],
-            "source_path":   d["source_path"],
-            "source_format": d.get("source_format", "pptx"),
-            "has_rebuild":   bool(d["rebuilt_path"]),
-            "has_originals": bool(d["orig_paths"]),
+            "doc_id":           doc_id,
+            "name":             d["name"],
+            "slide_count":      d["slide_count"],
+            "source_path":      d["source_path"],
+            "source_format":    d.get("source_format", "pptx"),
+            "has_rebuild":      bool(d["rebuilt_path"]),
+            "has_originals":    bool(d["orig_paths"]),
             "has_rebuilt_renders": bool(d["rebuilt_paths"]),
-            "grade_summary": _grade_summary(d["grades"], d["slide_count"]),
+            "grade_summary":    _grade_summary(d["grades"], d["slide_count"]),
             "diagnostic_summary": _diagnostic_summary(d["diagnostics"]),
-            "tableau": _tableau_overview(d) if d.get("source_format") == "tableau" else None,
+            "tableau":          _tableau_overview(d) if d.get("source_format") == "tableau" else None,
+            "cloud_bundle_uri": d.get("cloud_bundle_uri"),
         }
         for doc_id, d in _docs.items()
     ]
@@ -952,18 +1044,19 @@ def list_docs():
 def get_doc(doc_id: str):
     d = _require(doc_id)
     return {
-        "doc_id":        doc_id,
-        "name":          d["name"],
-        "slide_count":   d["slide_count"],
-        "source_path":   d["source_path"],
-        "source_format": d.get("source_format", "pptx"),
-        "has_rebuild":   bool(d["rebuilt_path"]),
-        "has_originals": bool(d["orig_paths"]),
+        "doc_id":           doc_id,
+        "name":             d["name"],
+        "slide_count":      d["slide_count"],
+        "source_path":      d["source_path"],
+        "source_format":    d.get("source_format", "pptx"),
+        "has_rebuild":      bool(d["rebuilt_path"]),
+        "has_originals":    bool(d["orig_paths"]),
         "has_rebuilt_renders": bool(d["rebuilt_paths"]),
-        "grade_summary": _grade_summary(d["grades"], d["slide_count"]),
+        "grade_summary":    _grade_summary(d["grades"], d["slide_count"]),
         "diagnostic_summary": _diagnostic_summary(d["diagnostics"]),
-        "grades":        d["grades"],
-        "tableau": _tableau_overview(d) if d.get("source_format") == "tableau" else None,
+        "grades":           d["grades"],
+        "tableau":          _tableau_overview(d) if d.get("source_format") == "tableau" else None,
+        "cloud_bundle_uri": d.get("cloud_bundle_uri"),
     }
 
 
@@ -2422,6 +2515,58 @@ def rerender_bridge(doc_id: str):
     return {"bridge_slides": len(paths)}
 
 
+@app.post("/api/docs/{doc_id}/save-to-cloud")
+def save_to_cloud(doc_id: str):
+    """Pickle the current in-memory PercyDocument and overwrite its S3 bundle.
+
+    Only available for documents loaded via /api/load-bundle (have cloud_bundle_uri set).
+    """
+    import pickle as _pickle
+
+    d = _require(doc_id)
+    bundle_uri = d.get("cloud_bundle_uri")
+    if not bundle_uri:
+        raise HTTPException(400, "Document was not loaded from a cloud bundle")
+    if not bundle_uri.startswith("s3://"):
+        raise HTTPException(400, "Invalid cloud_bundle_uri format")
+
+    parts = bundle_uri.removeprefix("s3://").split("/", 1)
+    if len(parts) != 2:
+        raise HTTPException(400, "Invalid S3 URI in cloud_bundle_uri")
+    bucket, key = parts[0], parts[1]
+
+    log.info("save-to-cloud: pickling doc_id=%s → %s", doc_id, bundle_uri)
+    try:
+        pkl_bytes = _pickle.dumps(d["doc"])
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to pickle document: {exc}")
+
+    try:
+        import boto3 as _boto3
+        import time as _time
+        s3 = _boto3.client("s3")
+        # Archive the previous version before overwriting
+        version_key: str | None = None
+        try:
+            head = s3.head_object(Bucket=bucket, Key=key)
+            if head.get("ContentLength", 0) > 0:
+                ts = int(_time.time())
+                key_stem = key.rsplit(".", 1)
+                version_key = f"{key_stem[0]}_v{ts}.{'pkl' if len(key_stem) < 2 else key_stem[1]}"
+                s3.copy_object(Bucket=bucket, CopySource={"Bucket": bucket, "Key": key}, Key=version_key)
+                log.info("save-to-cloud: archived previous version → %s", version_key)
+        except Exception:
+            pass  # no previous version or head failed — safe to overwrite
+        s3.put_object(Bucket=bucket, Key=key, Body=pkl_bytes, ContentType="application/octet-stream")
+    except Exception as exc:
+        log.exception("save-to-cloud: S3 upload failed")
+        raise HTTPException(500, f"Failed to upload bundle to S3: {exc}")
+
+    log.info("save-to-cloud: saved %d bytes → %s", len(pkl_bytes), bundle_uri)
+    return {"ok": True, "bundle_uri": bundle_uri, "bytes": len(pkl_bytes),
+            "version_archived": version_key}
+
+
 @app.post("/api/docs/{doc_id}/slides/{n}/render")
 def render_single_slide(doc_id: str, n: int):
     """Re-render one bridge slide PNG from the current in-memory Bridge model.
@@ -2639,6 +2784,102 @@ def _get_slide_dims(doc: Any, slide: Any) -> tuple[float, float]:
     return float(w), float(h)
 
 
+# ── Slide management endpoints ────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slides")
+def add_slide(doc_id: str, after_n: int = 0):
+    """Insert a blank slide after slide *after_n* (0 = append at end)."""
+    from percy.bridge.elements import BridgeSlide
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    doc = d["doc"]
+    w, h = _get_slide_dims(doc, doc.slides[0]) if doc.slides else (13.333, 7.5)
+    new_slide = BridgeSlide(slide_number=0, elements=[], width=w, height=h)
+    if after_n <= 0 or after_n >= len(doc.slides):
+        doc.slides.append(new_slide)
+        pos = len(doc.slides)
+    else:
+        doc.slides.insert(after_n, new_slide)
+        pos = after_n + 1
+    # renumber
+    for i, s in enumerate(doc.slides):
+        s.slide_number = i + 1
+    log.info("studio: added blank slide at position %d in %s", pos, doc_id)
+    return {"slide_count": len(doc.slides), "new_slide_n": pos}
+
+
+@app.delete("/api/docs/{doc_id}/slides/{n}")
+def delete_slide(doc_id: str, n: int):
+    """Delete slide *n*. Cannot delete the last slide."""
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    doc = d["doc"]
+    if len(doc.slides) <= 1:
+        raise HTTPException(400, "Cannot delete the only slide")
+    idx = next((i for i, s in enumerate(doc.slides) if s.slide_number == n), None)
+    if idx is None:
+        raise HTTPException(404, f"Slide {n} not found")
+    doc.slides.pop(idx)
+    for i, s in enumerate(doc.slides):
+        s.slide_number = i + 1
+    log.info("studio: deleted slide %d from %s", n, doc_id)
+    return {"slide_count": len(doc.slides)}
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/duplicate")
+def duplicate_slide(doc_id: str, n: int):
+    """Deep-copy slide *n* and insert the copy directly after it."""
+    import copy as _copy
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    doc = d["doc"]
+    src = next((s for s in doc.slides if s.slide_number == n), None)
+    if src is None:
+        raise HTTPException(404, f"Slide {n} not found")
+    dup = _copy.deepcopy(src)
+    idx = doc.slides.index(src)
+    doc.slides.insert(idx + 1, dup)
+    for i, s in enumerate(doc.slides):
+        s.slide_number = i + 1
+    new_n = dup.slide_number
+    log.info("studio: duplicated slide %d → %d in %s", n, new_n, doc_id)
+    return {"slide_count": len(doc.slides), "new_slide_n": new_n}
+
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/move")
+def move_slide(doc_id: str, n: int, to_n: int):
+    """Move slide *n* to position *to_n* (1-based)."""
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    doc = d["doc"]
+    if not (1 <= to_n <= len(doc.slides)):
+        raise HTTPException(400, f"to_n={to_n} out of range 1..{len(doc.slides)}")
+    idx = next((i for i, s in enumerate(doc.slides) if s.slide_number == n), None)
+    if idx is None:
+        raise HTTPException(404, f"Slide {n} not found")
+    slide = doc.slides.pop(idx)
+    doc.slides.insert(to_n - 1, slide)
+    for i, s in enumerate(doc.slides):
+        s.slide_number = i + 1
+    log.info("studio: moved slide %d → position %d in %s", n, to_n, doc_id)
+    return {"slide_count": len(doc.slides)}
+
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/background")
+def set_slide_background(doc_id: str, n: int, color: str | None = None):
+    """Set slide background color (hex '#RRGGBB') or clear it (color=null)."""
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+    slide.background_color = color
+    slide.background_gradient_stops = []
+    log.info("studio: set slide %d background to %s in %s", n, color, doc_id)
+    return {"background_color": slide.background_color}
+
+
 @app.get("/api/docs/{doc_id}/slides/{n}/elements")
 def get_slide_elements(doc_id: str, n: int):
     """Return all Bridge elements on slide *n* with position in inches and percent."""
@@ -2650,17 +2891,19 @@ def get_slide_elements(doc_id: str, n: int):
     w, h = _get_slide_dims(doc, slide)
     elements = [_serialize_element(el, i, w, h) for i, el in enumerate(slide.elements)]
     return {
-        "slide_number":    n,
-        "slide_width_in":  round(w, 5),
-        "slide_height_in": round(h, 5),
-        "element_count":   len(elements),
-        "elements":        elements,
+        "slide_number":      n,
+        "slide_width_in":    round(w, 5),
+        "slide_height_in":   round(h, 5),
+        "element_count":     len(elements),
+        "elements":          elements,
+        "background_color":  getattr(slide, "background_color", None),
     }
 
 
 @app.patch("/api/docs/{doc_id}/slides/{n}/elements/{element_id}")
 def update_element_position(doc_id: str, n: int, element_id: str, req: ElementPositionUpdate):
     """Move or resize a Bridge element; updates the in-memory PercyDocument."""
+    _snapshot_doc(doc_id)
     d    = _require(doc_id)
     doc  = d["doc"]
     slide = next((s for s in doc.slides if s.slide_number == n), None)
@@ -2694,6 +2937,7 @@ def update_element_position(doc_id: str, n: int, element_id: str, req: ElementPo
 @app.delete("/api/docs/{doc_id}/slides/{n}/elements/{element_id}")
 def delete_element(doc_id: str, n: int, element_id: str):
     """Remove an element from a slide."""
+    _snapshot_doc(doc_id)
     d    = _require(doc_id)
     doc  = d["doc"]
     slide = next((s for s in doc.slides if s.slide_number == n), None)
@@ -2712,6 +2956,7 @@ def delete_element(doc_id: str, n: int, element_id: str):
 def duplicate_element(doc_id: str, n: int, element_id: str):
     """Deep-copy an element, offset by 0.25 inches, append to slide."""
     import copy
+    _snapshot_doc(doc_id)
     d    = _require(doc_id)
     doc  = d["doc"]
     slide = next((s for s in doc.slides if s.slide_number == n), None)
@@ -2742,6 +2987,117 @@ def duplicate_element(doc_id: str, n: int, element_id: str):
     w, h = _get_slide_dims(doc, slide)
     log.info("studio: duplicated element %s → %s on slide %d", element_id, _element_id(dup, new_index), n)
     return _serialize_element(dup, new_index, w, h)
+
+
+class NewElementRequest(BaseModel):
+    shape_type: str = "rect"   # geometry preset: "rect" | "roundRect" | "ellipse" | "triangle" etc.
+    left_in: float = 1.0
+    top_in: float = 1.0
+    width_in: float = 2.0
+    height_in: float = 1.0
+    fill_color: str = "#4472C4"
+    label: str = "New Shape"
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/elements")
+def create_element(doc_id: str, n: int, req: NewElementRequest):
+    """Insert a new BridgeShape element on a slide."""
+    from percy.bridge.elements import (
+        BridgeShape, Position, Transform, Stacking, Identification,
+        Accessibility, ShapeIdentification, ShapeFill, ShapeLine,
+        ShapeShadow, ShapeTextContent, ShapeTextFrame, ShapeBorders, ColorSpec,
+    )
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
+
+    existing_ids = {getattr(getattr(e, "identification", None), "shape_id", None) for e in slide.elements}
+    new_id = max((x for x in existing_ids if x is not None), default=0) + 1
+    max_z  = max((getattr(e.stacking, "z_index", 1) for e in slide.elements), default=0)
+
+    is_text_box = req.shape_type == "text_box"
+    el = BridgeShape(
+        position=Position(left=req.left_in, top=req.top_in, width=req.width_in, height=req.height_in),
+        transforms=Transform(),
+        stacking=Stacking(z_index=max_z + 1),
+        identification=Identification(shape_id=new_id, shape_name=req.label),
+        accessibility=Accessibility(alt_text=req.label),
+        shape_identification=ShapeIdentification(
+            shape_type="auto_shape",
+            geometry_preset="rect" if is_text_box else req.shape_type,
+        ),
+        fill=ShapeFill(fill_type="none" if is_text_box else "solid",
+                       color=None if is_text_box else ColorSpec(value=req.fill_color)),
+        line=ShapeLine(visible=False),
+        shadow=ShapeShadow(),
+        text_content=ShapeTextContent(),
+        text_frame=ShapeTextFrame(),
+        borders=ShapeBorders(),
+    )
+    slide.elements.append(el)
+    new_index = len(slide.elements) - 1
+    w, h = _get_slide_dims(doc, slide)
+    log.info("studio: created new %s element on slide %d of %s", req.shape_type, n, doc_id)
+    return _serialize_element(el, new_index, w, h)
+
+
+# ── Undo/redo snapshot stack ──────────────────────────────────────────────────
+_MAX_UNDO = 50
+
+def _snapshot_doc(doc_id: str) -> None:
+    """Push a pickle snapshot of the current doc to the undo stack."""
+    import pickle as _pickle
+    d = _docs.get(doc_id)
+    if d is None or d.get("doc") is None:
+        return
+    stack: list = d.setdefault("_undo_stack", [])
+    try:
+        stack.append(_pickle.dumps(d["doc"]))
+    except Exception as exc:
+        log.warning("_snapshot_doc: could not pickle doc: %s", exc)
+        return
+    if len(stack) > _MAX_UNDO:
+        stack.pop(0)
+    d["_redo_stack"] = []
+
+
+@app.post("/api/docs/{doc_id}/undo")
+def undo(doc_id: str):
+    """Restore previous Bridge model snapshot."""
+    import pickle as _pickle
+    d = _require(doc_id)
+    stack = d.get("_undo_stack", [])
+    if not stack:
+        raise HTTPException(400, "Nothing to undo")
+    redo_stack: list = d.setdefault("_redo_stack", [])
+    try:
+        redo_stack.append(_pickle.dumps(d["doc"]))
+    except Exception:
+        pass
+    d["doc"] = _pickle.loads(stack.pop())
+    log.info("undo: %s — %d undo / %d redo remain", doc_id, len(stack), len(redo_stack))
+    return {"ok": True, "undo_depth": len(stack), "redo_depth": len(redo_stack)}
+
+
+@app.post("/api/docs/{doc_id}/redo")
+def redo_action(doc_id: str):
+    """Re-apply the last undone operation."""
+    import pickle as _pickle
+    d = _require(doc_id)
+    redo_stack = d.get("_redo_stack", [])
+    if not redo_stack:
+        raise HTTPException(400, "Nothing to redo")
+    stack: list = d.setdefault("_undo_stack", [])
+    try:
+        stack.append(_pickle.dumps(d["doc"]))
+    except Exception:
+        pass
+    d["doc"] = _pickle.loads(redo_stack.pop())
+    log.info("redo: %s — %d undo / %d redo remain", doc_id, len(stack), len(redo_stack))
+    return {"ok": True, "undo_depth": len(stack), "redo_depth": len(redo_stack)}
 
 
 # ── Text content helpers ──────────────────────────────────────────────────────
@@ -2975,10 +3331,284 @@ def get_element_text(doc_id: str, n: int, element_id: str):
 
 @app.patch("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/text")
 def update_element_text(doc_id: str, n: int, element_id: str, req: TextUpdateRequest):
+    _snapshot_doc(doc_id)
     el = _find_element(doc_id, n, element_id)
     _apply_text_update(el, el.element_type, req)
     log.info("studio: updated text on %s slide %d of %s", element_id, n, doc_id)
     return _serialize_element_text_content(el, el.element_type)
+
+
+# ── Find & Replace ────────────────────────────────────────────────────────────
+
+def _element_plain_text(el: Any) -> str:
+    """Return all plain text from a Bridge element (for search preview)."""
+    et = getattr(el, "element_type", "")
+    if et in ("BridgeText", "BridgeShape", "BridgeFreeform"):
+        parts: list[str] = []
+        for p in _get_paras(el, et):
+            parts.extend(r.text for r in getattr(p, "runs", []) if getattr(r, "text", None))
+        return " ".join(parts)
+    if et == "BridgeChart":
+        return getattr(el.title, "title", None) or ""
+    if et == "BridgeTable":
+        parts = []
+        for row in getattr(el, "cell_formats", []):
+            for cell in row:
+                t = getattr(cell, "text", None)
+                if t:
+                    parts.append(t)
+        return " ".join(parts)
+    return ""
+
+
+def _replace_in_element(el: Any, find: str, replace: str, case_sensitive: bool) -> int:
+    """Replace text in-place. Returns number of replacements made."""
+    count = 0
+    et = getattr(el, "element_type", "")
+    cmp_find = find if case_sensitive else find.lower()
+
+    def _sub(text: str) -> tuple[str, int]:
+        if case_sensitive:
+            if find in text:
+                return text.replace(find, replace), text.count(find)
+        else:
+            if cmp_find in text.lower():
+                import re as _re
+                new_text, n = _re.subn(_re.escape(find), replace, text, flags=_re.IGNORECASE)
+                return new_text, n
+        return text, 0
+
+    if et in ("BridgeText", "BridgeShape", "BridgeFreeform"):
+        for p in _get_paras(el, et):
+            for run in getattr(p, "runs", []):
+                if getattr(run, "text", None):
+                    new_text, n = _sub(run.text)
+                    if n:
+                        run.text = new_text
+                        count += n
+    elif et == "BridgeChart":
+        t = el.title
+        if getattr(t, "title", None):
+            new_text, n = _sub(t.title)
+            if n:
+                t.title = new_text
+                count += n
+    elif et == "BridgeTable":
+        for row in getattr(el, "cell_formats", []):
+            for cell in row:
+                ct = getattr(cell, "text", None)
+                if ct:
+                    new_text, n = _sub(ct)
+                    if n:
+                        cell.text = new_text
+                        if cell.paragraphs and cell.paragraphs[0].runs:
+                            cell.paragraphs[0].runs[0].text = new_text
+                        count += n
+    return count
+
+
+class ReplaceTextRequest(BaseModel):
+    find: str
+    replace: str
+    case_sensitive: bool = False
+
+
+@app.get("/api/docs/{doc_id}/search-text")
+def search_text(doc_id: str, q: str):
+    """Search all slides for text matching q. Returns list of matches with slide/element context."""
+    d = _require(doc_id)
+    if not q.strip():
+        return []
+    matches = []
+    cmp = q.lower()
+    for slide in d["doc"].slides:
+        for i, el in enumerate(slide.elements):
+            plain = _element_plain_text(el)
+            if cmp in plain.lower():
+                matches.append({
+                    "slide_n":    slide.slide_number,
+                    "element_id": _element_id(el, i),
+                    "element_type": getattr(el, "element_type", ""),
+                    "preview":    plain[:120],
+                })
+    return matches
+
+
+@app.post("/api/docs/{doc_id}/replace-text")
+def replace_text(doc_id: str, req: ReplaceTextRequest):
+    """Replace all occurrences of req.find with req.replace across all slides."""
+    if not req.find:
+        raise HTTPException(400, "find text cannot be empty")
+    d = _require(doc_id)
+    _snapshot_doc(doc_id)
+    total = 0
+    affected_slides: list[int] = []
+    for slide in d["doc"].slides:
+        slide_count = 0
+        for el in slide.elements:
+            slide_count += _replace_in_element(el, req.find, req.replace, req.case_sensitive)
+        if slide_count:
+            affected_slides.append(slide.slide_number)
+            total += slide_count
+    log.info("replace-text: '%s'→'%s' in doc %s: %d replacements on slides %s",
+             req.find, req.replace, doc_id, total, affected_slides)
+    return {"replaced": total, "affected_slides": affected_slides}
+
+
+# ── Element style helpers ─────────────────────────────────────────────────────
+
+def _ser_style(el: Any) -> dict:
+    """Serialize current style properties of a Bridge element."""
+    fill_color = None
+    fill_type  = "none"
+    line_color = None
+    line_width = None
+    line_dash  = None
+    opacity    = None
+    shadow     = {}
+
+    el_type = getattr(el, "element_type", "")
+
+    # fill
+    fill = getattr(el, "fill", None)
+    if fill:
+        fill_type = getattr(fill, "fill_type", "none") or "none"
+        if fill_type == "solid":
+            fg = getattr(fill, "color", None) or getattr(fill, "fill_color", None)
+            fill_color = _color_to_str(fg)
+
+    # line — ShapeLine uses .color/.width/.dash_style; FreeformLine uses .line_color/.line_width/.line_dash
+    line = getattr(el, "line", None)
+    if line:
+        lc = getattr(line, "color", None) or getattr(line, "line_color", None)
+        line_color = _color_to_str(lc)
+        line_width = getattr(line, "width", None) or getattr(line, "line_width", None)
+        line_dash  = getattr(line, "dash_style", None) or getattr(line, "line_dash", None)
+
+    # opacity — stored as fill.transparency (0.0 = fully opaque, 1.0 = fully transparent)
+    # We expose it as 0.0–1.0 opacity (inverse of transparency)
+    fill_transp = getattr(fill, "transparency", None) if fill else None
+    opacity = (1.0 - float(fill_transp)) if fill_transp is not None else 1.0
+
+    # shadow (common for shapes, images) — ShapeShadow has has_shadow, blur, distance, direction
+    sf = getattr(el, "shadow", None)
+    if sf:
+        shadow = {
+            "on":       getattr(sf, "has_shadow", False),
+            "color":    _color_to_str(getattr(sf, "color", None)),
+            "blur":     getattr(sf, "blur", None),
+            "offset_x": getattr(sf, "distance", None),   # distance as proxy for offset
+            "offset_y": getattr(sf, "direction", None),  # direction (degrees)
+        }
+
+    # image crop — BridgeImage.cropping is ImageCropping with crop_left etc.
+    crop_left = crop_right = crop_top = crop_bottom = None
+    if el_type == "BridgeImage":
+        crop_obj = getattr(el, "cropping", None)
+        if crop_obj:
+            crop_left   = getattr(crop_obj, "crop_left",   0.0)
+            crop_right  = getattr(crop_obj, "crop_right",  0.0)
+            crop_top    = getattr(crop_obj, "crop_top",    0.0)
+            crop_bottom = getattr(crop_obj, "crop_bottom", 0.0)
+
+    shadow_on = shadow_color = shadow_blur = shadow_offset_x = shadow_offset_y = None
+    if shadow:
+        shadow_on       = shadow.get("on", False)
+        shadow_color    = shadow.get("color")
+        shadow_blur     = shadow.get("blur")
+        shadow_offset_x = shadow.get("offset_x")
+        shadow_offset_y = shadow.get("offset_y")
+
+    return {
+        "fill_type":        fill_type,
+        "fill_color":       fill_color,
+        "line_color":       line_color,
+        "line_width":       line_width,
+        "line_dash":        line_dash,
+        "opacity":          opacity,
+        "shadow_on":        shadow_on,
+        "shadow_color":     shadow_color,
+        "shadow_blur":      shadow_blur,
+        "shadow_offset_x":  shadow_offset_x,
+        "shadow_offset_y":  shadow_offset_y,
+        "crop_left":        crop_left,
+        "crop_right":       crop_right,
+        "crop_top":         crop_top,
+        "crop_bottom":      crop_bottom,
+    }
+
+
+def _apply_style(el: Any, req: ElementStyleUpdate) -> None:
+    """Apply an ElementStyleUpdate to a Bridge element in-place."""
+    from percy.bridge.elements import ColorSpec
+
+    # fill — ShapeFill uses .color; FreeformFill uses .fill_color
+    if req.fill_color is not None or req.fill_type is not None:
+        fill = getattr(el, "fill", None)
+        if fill is not None:
+            if req.fill_type == "none":
+                fill.fill_type = "none"
+            elif req.fill_color is not None:
+                fill.fill_type = "solid"
+                cs = ColorSpec(value=req.fill_color) if req.fill_color != "none" else None
+                if hasattr(fill, "color"):      fill.color      = cs
+                if hasattr(fill, "fill_color"): fill.fill_color = cs
+
+    # line — handle both ShapeLine (.color/.width/.dash_style) and FreeformLine (.line_color/.line_width/.line_dash)
+    if req.line_color is not None or req.line_width is not None or req.line_dash is not None:
+        line = getattr(el, "line", None)
+        if line is not None:
+            cs = ColorSpec(value=req.line_color) if (req.line_color and req.line_color != "none") else None
+            if req.line_color is not None:
+                if hasattr(line, "color"):      line.color      = cs
+                if hasattr(line, "line_color"): line.line_color = cs
+            if req.line_width is not None:
+                if hasattr(line, "width"):      line.width      = req.line_width
+                if hasattr(line, "line_width"): line.line_width = req.line_width
+            if req.line_dash is not None:
+                if hasattr(line, "dash_style"): line.dash_style = req.line_dash
+                if hasattr(line, "line_dash"):  line.line_dash  = req.line_dash
+
+    # opacity → fill.transparency (inverted: opacity 1.0 = transparency 0.0)
+    if req.opacity is not None:
+        fill_obj = getattr(el, "fill", None)
+        if fill_obj is not None and hasattr(fill_obj, "transparency"):
+            fill_obj.transparency = max(0.0, min(1.0, 1.0 - req.opacity))
+
+    # shadow — ShapeShadow fields: has_shadow, blur, distance, direction, color
+    sf = getattr(el, "shadow", None)
+    if sf is not None:
+        if req.shadow_on    is not None: sf.has_shadow = req.shadow_on
+        if req.shadow_color is not None: sf.color      = ColorSpec(value=req.shadow_color)
+        if req.shadow_blur  is not None: sf.blur       = req.shadow_blur
+        if req.shadow_offset_x is not None: sf.distance  = req.shadow_offset_x
+        if req.shadow_offset_y is not None: sf.direction = req.shadow_offset_y
+
+    # image crop — BridgeImage.cropping is ImageCropping
+    if getattr(el, "element_type", "") == "BridgeImage":
+        crop = getattr(el, "cropping", None)
+        if crop is not None:
+            if req.crop_left   is not None: crop.crop_left   = max(0.0, min(0.99, req.crop_left))
+            if req.crop_right  is not None: crop.crop_right  = max(0.0, min(0.99, req.crop_right))
+            if req.crop_top    is not None: crop.crop_top    = max(0.0, min(0.99, req.crop_top))
+            if req.crop_bottom is not None: crop.crop_bottom = max(0.0, min(0.99, req.crop_bottom))
+
+
+@app.get("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/style")
+def get_element_style(doc_id: str, n: int, element_id: str):
+    """Return current style properties of a Bridge element."""
+    el = _find_element(doc_id, n, element_id)
+    return _ser_style(el)
+
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/style")
+def update_element_style(doc_id: str, n: int, element_id: str, req: ElementStyleUpdate):
+    """Patch fill, line, opacity, shadow, or crop on a Bridge element."""
+    _snapshot_doc(doc_id)
+    el = _find_element(doc_id, n, element_id)
+    _apply_style(el, req)
+    log.info("studio: updated style on %s slide %d of %s", element_id, n, doc_id)
+    return _ser_style(el)
 
 
 @app.get("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/element-png")
@@ -3040,23 +3670,185 @@ class ChatRequest(BaseModel):
     element_id: str | None = None
     messages: list[ChatMessage]
 
+def _build_slide_context(doc_id: str, slide_n: int, element_id: str | None) -> str:
+    """Build a text summary of the current slide + element to inject into the system prompt."""
+    try:
+        d = _require(doc_id)
+        doc = d["doc"]
+        slide = doc.slides[slide_n - 1]
+        sw, sh = _get_slide_dims(doc, slide)
+        lines: list[str] = [
+            f"Presentation: {doc.name}",
+            f"Slide {slide_n} of {len(doc.slides)} ({sw:.2f}\" × {sh:.2f}\")",
+            f"Elements on this slide ({len(slide.elements)}):",
+        ]
+        for el in slide.elements:
+            p = el.position
+            tag = f"  [{el.__class__.__name__}] '{el.name}' id={el.shape_id}"
+            tag += f" pos=({p.left_in:.2f}\",{p.top_in:.2f}\") size={p.width_in:.2f}\"×{p.height_in:.2f}\""
+            if element_id and str(el.shape_id) == element_id:
+                tag += "  ← SELECTED"
+            lines.append(tag)
+        if element_id:
+            try:
+                el = _find_element(doc_id, slide_n, element_id)
+                st = _ser_style(el)
+                lines.append(f"\nSelected element style: {st}")
+            except Exception:
+                pass
+        return "\n".join(lines)
+    except Exception as exc:
+        return f"(context unavailable: {exc})"
+
+
+_STUDIO_TOOLS = [
+    {
+        "name": "move_element",
+        "description": "Move or resize the selected element by updating its position and/or size.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "left_in":   {"type": "number", "description": "New left position in inches"},
+                "top_in":    {"type": "number", "description": "New top position in inches"},
+                "width_in":  {"type": "number", "description": "New width in inches"},
+                "height_in": {"type": "number", "description": "New height in inches"},
+                "rotation":  {"type": "number", "description": "Rotation angle in degrees"},
+            },
+        },
+    },
+    {
+        "name": "style_element",
+        "description": "Change visual style of the selected element: fill color, opacity, border, shadow.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "fill_color":  {"type": "string", "description": "Fill color as '#RRGGBB' hex"},
+                "fill_type":   {"type": "string", "description": "Fill type: 'solid' or 'none'"},
+                "opacity":     {"type": "number", "description": "Opacity 0.0 (transparent) to 1.0 (opaque)"},
+                "line_color":  {"type": "string", "description": "Border color as '#RRGGBB' hex"},
+                "line_width":  {"type": "number", "description": "Border width in points"},
+                "shadow_on":   {"type": "boolean", "description": "Enable or disable drop shadow"},
+            },
+        },
+    },
+]
+
+
+def _execute_tool_call(doc_id: str, slide_n: int, element_id: str | None,
+                       tool_name: str, tool_input: dict) -> str:
+    """Execute a Claude tool call and return a result string."""
+    try:
+        if tool_name == "move_element":
+            if not element_id:
+                return "Error: no element selected"
+            req = ElementPositionUpdate(
+                left_in=tool_input.get("left_in"),
+                top_in=tool_input.get("top_in"),
+                width_in=tool_input.get("width_in"),
+                height_in=tool_input.get("height_in"),
+                rotation=tool_input.get("rotation"),
+            )
+            update_element_position(doc_id, slide_n, element_id, req)
+            return "Element moved/resized successfully"
+
+        if tool_name == "style_element":
+            if not element_id:
+                return "Error: no element selected"
+            req = ElementStyleUpdate(
+                fill_color=tool_input.get("fill_color"),
+                fill_type=tool_input.get("fill_type"),
+                opacity=tool_input.get("opacity"),
+                line_color=tool_input.get("line_color"),
+                line_width=tool_input.get("line_width"),
+                shadow_on=tool_input.get("shadow_on"),
+            )
+            el = _find_element(doc_id, slide_n, element_id)
+            _snapshot_doc(doc_id)
+            _apply_style(el, req)
+            return "Element style updated successfully"
+
+        return f"Unknown tool: {tool_name}"
+    except Exception as exc:
+        return f"Tool execution error: {exc}"
+
+
 @app.post("/api/docs/{doc_id}/chat")
 def chat(doc_id: str, req: ChatRequest):
-    """AI chat stub — will be wired to Claude API."""
+    """AI chat powered by Claude — context-aware about the current slide and element."""
     _require(doc_id)
-    # TODO: wire to Claude API with Bridge model context
-    ctx = f"slide {req.slide_n}"
-    if req.element_id:
-        ctx += f", element {req.element_id}"
-    last = req.messages[-1].content if req.messages else ""
-    reply = (
-        f"[Percy AI — coming soon]\n\n"
-        f"You asked about {ctx}:\n\"{last}\"\n\n"
-        "Full AI assistance will be available once the Claude API is connected. "
-        "The context-aware chatbot will be able to modify elements, suggest design changes, "
-        "and answer questions about your presentation."
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return {"reply": (
+            "No ANTHROPIC_API_KEY found in environment.\n\n"
+            "Set ANTHROPIC_API_KEY in your shell or .env file, then restart the backend."
+        ), "actions_taken": 0}
+
+    slide_ctx = _build_slide_context(doc_id, req.slide_n, req.element_id)
+
+    system_prompt = (
+        "You are Percy, an AI assistant specialized in PowerPoint presentation design. "
+        "You help users understand and edit their presentations through the Percy Studio interface.\n\n"
+        "You have access to the following context about the current state of the document:\n\n"
+        f"```\n{slide_ctx}\n```\n\n"
+        "You have tools to directly modify the selected element. Use them when the user asks you "
+        "to change something. After using a tool, briefly confirm what you did.\n"
+        "Keep responses concise. Use plain text — no markdown headers or bullet points."
     )
-    return {"reply": reply}
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    claude_messages = [{"role": m.role, "content": m.content} for m in req.messages]
+
+    actions_taken = 0
+    reply = ""
+
+    try:
+        # First call — may trigger tool use
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            system=system_prompt,
+            tools=_STUDIO_TOOLS,
+            messages=claude_messages,
+        )
+
+        # Process tool calls if any
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                result_str = _execute_tool_call(
+                    doc_id, req.slide_n, req.element_id,
+                    block.name, block.input,
+                )
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result_str,
+                })
+                actions_taken += 1
+
+        if tool_results:
+            # Second call after tool results
+            claude_messages = claude_messages + [
+                {"role": "assistant", "content": response.content},
+                {"role": "user", "content": tool_results},
+            ]
+            response2 = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=512,
+                system=system_prompt,
+                tools=_STUDIO_TOOLS,
+                messages=claude_messages,
+            )
+            reply = next((b.text for b in response2.content if hasattr(b, "text")), "Done.")
+        else:
+            reply = next((b.text for b in response.content if hasattr(b, "text")), "")
+
+    except Exception as exc:
+        reply = f"Claude API error: {exc}"
+
+    return {"reply": reply, "actions_taken": actions_taken}
 
 
 # ── reverse proxy /api/cloud/* → Percy Cloud control-plane API ───────────────

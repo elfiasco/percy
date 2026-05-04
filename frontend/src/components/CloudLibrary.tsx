@@ -16,7 +16,11 @@ interface UploadStatus {
   error?: string
 }
 
-export default function CloudLibrary() {
+interface CloudLibraryProps {
+  onLoadInStudio?: (bundleUri: string, name: string) => Promise<void>
+}
+
+export default function CloudLibrary({ onLoadInStudio }: CloudLibraryProps) {
   const [orgs, setOrgs]               = useState<CloudOrg[]>([])
   const [selectedOrg, setSelectedOrg] = useState<CloudOrg | null>(null)
   const [projects, setProjects]       = useState<CloudProject[]>([])
@@ -26,6 +30,9 @@ export default function CloudLibrary() {
   const [loading, setLoading]         = useState(false)
   const [error, setError]             = useState<string | null>(null)
   const [uploads, setUploads]         = useState<UploadStatus[]>([])
+  const [loadingBundle, setLoadingBundle] = useState<string | null>(null) // doc id being loaded
+  const [triggering, setTriggering] = useState(false)
+  const [triggerMsg, setTriggerMsg] = useState<string | null>(null)
 
   // New org / project creation
   const [showNewOrg, setShowNewOrg]           = useState(false)
@@ -137,6 +144,29 @@ export default function CloudLibrary() {
     }
   }
 
+  async function handleTriggerRefresh() {
+    setTriggering(true); setTriggerMsg(null)
+    try {
+      const res = await cloudApi.triggerRefresh()
+      setTriggerMsg(`Queued ${res.dispatched} refresh job${res.dispatched !== 1 ? "s" : ""}`)
+      if (selectedProject) await selectProject(selectedProject)
+    } catch (e) {
+      setTriggerMsg(`Error: ${e}`)
+    } finally {
+      setTriggering(false)
+    }
+  }
+
+  async function handleLoadInStudio(doc: CloudDocument) {
+    if (!doc.bundle_uri || !onLoadInStudio) return
+    setLoadingBundle(doc.id)
+    try {
+      await onLoadInStudio(doc.bundle_uri, doc.name)
+    } finally {
+      setLoadingBundle(null)
+    }
+  }
+
   const jobForDoc = (docId: string) => jobs.find(j => j.document_id === docId)
 
   return (
@@ -145,11 +175,22 @@ export default function CloudLibrary() {
       <div className="flex items-center gap-2 px-3 py-2 border-b border-edge shrink-0">
         <Cloud size={14} className="text-accent-light" />
         <span className="font-semibold text-slate-300 text-xs">Cloud Library</span>
-        <button onClick={loadOrgs} className="ml-auto btn-xs p-0.5" title="Refresh">
+        <button
+          onClick={handleTriggerRefresh}
+          disabled={triggering}
+          className="ml-auto btn-xs px-1.5 py-0.5 text-[10px] bg-sky-500/20 text-sky-300 border border-sky-500/30 rounded hover:bg-sky-500/30 disabled:opacity-50"
+          title="Re-onboard all ready documents"
+        >
+          {triggering ? "…" : "↻ All"}
+        </button>
+        <button onClick={loadOrgs} className="btn-xs p-0.5" title="Refresh org list">
           <RefreshCw size={10} className={loading ? "animate-spin" : ""} />
         </button>
       </div>
 
+      {triggerMsg && (
+        <div className="mx-2 my-1 px-2 py-1 rounded bg-sky-900/40 text-sky-300 text-xs">{triggerMsg}</div>
+      )}
       {error && (
         <div className="mx-2 my-1 px-2 py-1 rounded bg-red-900/40 text-red-300 text-xs">{error}</div>
       )}
@@ -252,18 +293,32 @@ export default function CloudLibrary() {
             )}
             {documents.map(doc => {
               const job = jobForDoc(doc.id)
+              const isLoading = loadingBundle === doc.id
               return (
                 <div key={doc.id} className="px-3 py-1.5">
                   <div className="flex items-center gap-1">
                     <DocStatusIcon status={doc.status} />
                     <span className="truncate text-xs text-slate-300 flex-1" title={doc.name}>{doc.name}</span>
+                    {doc.status === "ready" && doc.bundle_uri && onLoadInStudio && (
+                      <button
+                        disabled={isLoading}
+                        onClick={() => handleLoadInStudio(doc)}
+                        title="Download bundle and open in Studio"
+                        className="ml-1 shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-accent/20 text-accent
+                                   border border-accent/30 hover:bg-accent/30 transition-colors
+                                   disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {isLoading ? "Loading…" : "→ Studio"}
+                      </button>
+                    )}
                   </div>
                   <div className="flex gap-2 mt-0.5 text-[10px] text-muted">
                     <span>{doc.status}</span>
-                    {job && <span>· job: {job.status}</span>}
-                    {doc.status === "ready" && (
-                      <span className="text-good">· ready</span>
+                    {job?.status === "completed" && (job.result as any)?.slide_count && (
+                      <span>· {(job.result as any).slide_count} slides</span>
                     )}
+                    {job?.status === "failed" && <span className="text-bad">· failed</span>}
+                    {job?.status === "running" && <span className="text-yellow-400">· running</span>}
                   </div>
                 </div>
               )

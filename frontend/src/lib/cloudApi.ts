@@ -120,3 +120,15 @@ export async function createOnboardJob(documentId: string): Promise<CloudJob> {
     }),
   })
 }
+
+export async function triggerRefresh(): Promise<{ ok: boolean; dispatched: number; errors: string[] }> {
+  return req<{ ok: boolean; dispatched: number; errors: string[] }>("/trigger-refresh", { method: "POST" })
+}
+
+export async function listRecentJobs(limit = 50): Promise<CloudJob[]> {
+  return req<CloudJob[]>(`/jobs/recent?limit=${limit}`)
+}
+
+export async function searchDocuments(query: string, limit = 50): Promise<CloudDocument[]> {
+  return req<CloudDocument[]>(`/documents/search?q=${encodeURIComponent(query)}&limit=${limit}`)
+}

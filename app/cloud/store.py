@@ -248,6 +248,13 @@ class InMemoryControlPlaneStore:
             reverse=True,
         )
 
+    def list_recent_jobs(self, limit: int = 50) -> list[Job]:
+        return sorted(self.jobs.values(), key=lambda j: j.created_at, reverse=True)[:limit]
+
+    def search_documents(self, query: str, limit: int = 50) -> list[Document]:
+        q = query.lower()
+        return [d for d in self.documents.values() if q in d.name.lower()][:limit]
+
     def start_job(self, job_id: str, worker_id: str) -> Job:
         with self._lock:
             job = self.get_job(job_id)

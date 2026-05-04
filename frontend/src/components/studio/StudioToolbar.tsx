@@ -85,6 +85,10 @@ interface Props {
   rebuilding: boolean
   chatOpen: boolean
   onToggleChat: () => void
+  findReplaceOpen?: boolean
+  onToggleFindReplace?: () => void
+  onSaveToCloud?: () => void
+  savingToCloud?: boolean
 }
 
 export default function StudioToolbar({
@@ -93,6 +97,8 @@ export default function StudioToolbar({
   onDelete, onDuplicate, onInsertShape,
   onRebuild, rebuilding,
   chatOpen, onToggleChat,
+  findReplaceOpen, onToggleFindReplace,
+  onSaveToCloud, savingToCloud,
 }: Props) {
   const [insertOpen, setInsertOpen] = useState(false)
   const [x, setX] = useState("")
@@ -257,7 +263,7 @@ export default function StudioToolbar({
 
       {/* ── keyboard hint ─────────────────────────────────── */}
       <div className="text-[10px] text-muted/50 hidden xl:block mr-3">
-        ↑↓←→ nudge · Shift×10 · Del delete · Ctrl+D dup · Ctrl+Z/Y undo · Ctrl+S rebuild · Esc deselect
+        ↑↓←→ nudge · Shift×10 · Del delete · Ctrl+D dup · Ctrl+Z/Y undo · Ctrl+S rebuild · Ctrl+H find · Esc deselect
       </div>
 
       <div className="w-px h-5 bg-edge mx-3 shrink-0" />
@@ -289,6 +295,20 @@ export default function StudioToolbar({
           ↓ Export
         </a>
 
+        {onToggleFindReplace && (
+          <button
+            onClick={onToggleFindReplace}
+            title="Find & Replace text across slides (Ctrl+H)"
+            className={`flex items-center gap-1 text-xs px-3 py-1 rounded border transition-colors ${
+              findReplaceOpen
+                ? "bg-amber-500/30 text-amber-300 border-amber-500/40 hover:bg-amber-500/40"
+                : "bg-white/5 text-muted hover:text-slate-200 border-edge hover:bg-white/10"
+            }`}
+          >
+            ⌕ Find
+          </button>
+        )}
+
         <button
           onClick={onToggleChat}
           title={chatOpen ? "Close AI Chat" : "Open AI Chat"}
@@ -300,6 +320,22 @@ export default function StudioToolbar({
         >
           💬 Chat
         </button>
+
+        {onSaveToCloud && (
+          <button
+            onClick={onSaveToCloud}
+            disabled={savingToCloud}
+            title="Save current Bridge edits back to S3 cloud bundle"
+            className="flex items-center gap-1.5 text-xs px-3 py-1 rounded border transition-colors
+                       bg-sky-500/20 text-sky-300 border-sky-500/30 hover:bg-sky-500/30
+                       disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {savingToCloud && (
+              <span className="inline-block w-2.5 h-2.5 border border-sky-300 border-t-transparent rounded-full animate-spin" />
+            )}
+            ↑ Cloud
+          </button>
+        )}
       </div>
     </div>
   )

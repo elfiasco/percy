@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from aws_cdk import CfnOutput, Duration, RemovalPolicy, Stack
+from aws_cdk import BundlingOptions, CfnOutput, Duration, RemovalPolicy, Stack
 from aws_cdk import aws_applicationautoscaling as autoscaling
 from aws_cdk import aws_apprunner as apprunner
 from aws_cdk import aws_cloudwatch as cloudwatch
@@ -8,7 +8,10 @@ from aws_cdk import aws_cloudwatch_actions as cw_actions
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_ecr_assets as ecr_assets
 from aws_cdk import aws_ecs as ecs
+from aws_cdk import aws_events as events
+from aws_cdk import aws_events_targets as events_targets
 from aws_cdk import aws_iam as iam
+from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_rds as rds
 from aws_cdk import aws_s3 as s3
@@ -523,6 +526,61 @@ class PercyCloudDemoStack(Stack):
             alarm_description="Percy onboard queue depth high — worker may be stuck",
             treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
         ).add_alarm_action(cw_actions.SnsAction(alerts_topic))
+
+        # ------------------------------------------------------------------
+        # Refresh Scheduler Lambda — re-onboards all ready documents daily
+        # ------------------------------------------------------------------
+        refresh_lambda = lambda_.Function(
+            self,
+            "PercyRefreshScheduler",
+            function_name="percy-refresh-scheduler-dev",
+            runtime=lambda_.Runtime.PYTHON_3_13,
+            handler="handler.handler",
+            code=lambda_.Code.from_asset(
+                str(repo_root / "lambda" / "refresh_scheduler"),
+                bundling=BundlingOptions(
+                    image=lambda_.Runtime.PYTHON_3_13.bundling_image,
+                    command=[
+                        "bash", "-c",
+                        "pip install -r requirements.txt -t /asset-output --quiet "
+                        "&& cp handler.py /asset-output/",
+                    ],
+                ),
+            ),
+            timeout=Duration.minutes(5),
+            memory_size=256,
+            environment={
+                "SQS_ONBOARD_QUEUE_URL": onboard_queue.queue_url,
+                "DB_HOST": db.db_instance_endpoint_address,
+                "DB_PORT": db.db_instance_endpoint_port,
+                "DB_NAME": "percy",
+                "DB_USER": "percy",
+            },
+            vpc=vpc,
+            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_ISOLATED),
+            security_groups=[worker_sg],  # reuse worker SG (allows DB + VPC endpoints)
+            log_retention=logs.RetentionDays.ONE_WEEK,
+        )
+        # Lambda needs DB password
+        db.secret.grant_read(refresh_lambda.role)
+        # Add DB_PASSWORD via secret env at deploy time (using SSM trick not available;
+        # instead pull from Secrets Manager in the Lambda itself or inject as env secret)
+        refresh_lambda.add_environment("DB_SECRET_ARN", db.secret.secret_arn)
+
+        # Grant Lambda access to read secrets and send to SQS
+        onboard_queue.grant_send_messages(refresh_lambda.role)
+
+        # EventBridge rule — run every 24 hours at 03:00 UTC
+        events.Rule(
+            self,
+            "PercyDailyRefresh",
+            rule_name="percy-daily-refresh-dev",
+            description="Triggers Percy document re-onboarding for all ready documents",
+            schedule=events.Schedule.cron(hour="3", minute="0"),
+            targets=[events_targets.LambdaFunction(refresh_lambda)],
+        )
+
+        CfnOutput(self, "PercyRefreshSchedulerArn", value=refresh_lambda.function_arn)
 
         CfnOutput(self, "PercyDbSecretArn", value=db.secret.secret_arn)
         CfnOutput(self, "PercyApiKeySecretArn", value=api_key_secret.secret_arn)

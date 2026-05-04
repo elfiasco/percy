@@ -11,6 +11,7 @@ import DiagPanel from "./components/DiagPanel"
 import LogPanel from "./components/LogPanel"
 import Studio from "./components/studio/Studio"
 import CloudLibrary from "./components/CloudLibrary"
+import CloudDashboard from "./components/CloudDashboard"
 import { log } from "./lib/logger"
 
 type AppMode = "roundtrip" | "studio" | "cloud"
@@ -204,6 +205,33 @@ export default function App() {
     }
   }, [refreshEvaluation])
 
+  const handleLoadBundle = useCallback(async (bundleUri: string, name: string): Promise<void> => {
+    log("info", `Loading cloud bundle: ${name}`)
+    setLoading(`Loading ${name} from cloud…`)
+    setError(null)
+    try {
+      const result = await api.loadBundle(bundleUri, name)
+      log("success", `Bundle loaded: ${result.slide_count} slides`, result)
+      const updated = await api.fetchDocs()
+      setDocs(updated)
+      setSelectedDocId(result.doc_id)
+      setSelectedSlide(1)
+      setGrades({})
+      setDiagnostics([])
+      setSummary(null)
+      setVisionResult(null)
+      setPixelScores({})
+      setBridgeVer(0)
+      setMode("studio")
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      log("error", `Load bundle failed: ${msg}`)
+      setError(msg)
+    } finally {
+      setLoading(null)
+    }
+  }, [])
+
   const handleGrade = useCallback(async (slideN: number, grade: Grade) => {
     if (!selectedDocId) return
     log("info", `Grade slide ${slideN}: ${grade}`)
@@ -282,13 +310,10 @@ export default function App() {
           /* ── CLOUD MODE ──────────────────────────────────── */
           <div className="flex flex-1 min-h-0 min-w-0">
             <div className="w-72 shrink-0 border-r border-edge overflow-hidden flex flex-col">
-              <CloudLibrary />
+              <CloudLibrary onLoadInStudio={handleLoadBundle} />
             </div>
-            <div className="flex flex-col items-center justify-center flex-1 gap-2 text-center px-10">
-              <p className="text-slate-300 font-semibold text-lg">Percy Cloud</p>
-              <p className="text-muted text-sm max-w-sm leading-relaxed">
-                Browse your cloud organisations and projects. Upload a <strong className="text-slate-400">.pptx</strong> or <strong className="text-slate-400">.pdf</strong> to a project — Percy will onboard it in the cloud and store a Bridge bundle in S3.
-              </p>
+            <div className="flex-1 overflow-hidden">
+              <CloudDashboard onLoadInStudio={handleLoadBundle} />
             </div>
           </div>
         ) : mode === "studio" ? (

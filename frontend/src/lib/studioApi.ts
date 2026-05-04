@@ -1,4 +1,16 @@
-import type { SlideElementsResponse, StudioElement } from "./studioTypes"
+import type { SlideElementsResponse, StudioElement, ElementTextContent, ElementStyleData, ElementStyleUpdate } from "./studioTypes"
+
+export interface TextSearchMatch {
+  slide_n: number
+  element_id: string
+  element_type: string
+  preview: string
+}
+
+export interface ReplaceTextResult {
+  replaced: number
+  affected_slides: number[]
+}
 
 const BASE = "/api"
 
@@ -11,15 +23,144 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+// ── Slide management ──────────────────────────────────────────────────────────
+
+export async function addSlide(docId: string, afterN = 0): Promise<{ slide_count: number; new_slide_n: number }> {
+  return apiFetch(`${BASE}/docs/${docId}/slides?after_n=${afterN}`, { method: "POST" })
+}
+
+export async function deleteSlide(docId: string, n: number): Promise<{ slide_count: number }> {
+  return apiFetch(`${BASE}/docs/${docId}/slides/${n}`, { method: "DELETE" })
+}
+
+export async function duplicateSlide(docId: string, n: number): Promise<{ slide_count: number; new_slide_n: number }> {
+  return apiFetch(`${BASE}/docs/${docId}/slides/${n}/duplicate`, { method: "POST" })
+}
+
+export async function moveSlide(docId: string, n: number, toN: number): Promise<{ slide_count: number }> {
+  return apiFetch(`${BASE}/docs/${docId}/slides/${n}/move?to_n=${toN}`, { method: "PATCH" })
+}
+
+export async function setSlideBackground(docId: string, n: number, color: string | null): Promise<{ background_color: string | null }> {
+  const params = color ? `?color=${encodeURIComponent(color)}` : ""
+  return apiFetch(`${BASE}/docs/${docId}/slides/${n}/background${params}`, { method: "PATCH" })
+}
+
+export async function createNewElement(
+  docId: string,
+  slideN: number,
+  opts: {
+    shape_type?: string
+    left_in?: number
+    top_in?: number
+    width_in?: number
+    height_in?: number
+    fill_color?: string
+    label?: string
+  },
+): Promise<StudioElement> {
+  return apiFetch<StudioElement>(
+    `${BASE}/docs/${docId}/slides/${slideN}/elements`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts) },
+  )
+}
+
+// ── Slide elements ────────────────────────────────────────────────────────────
+
 export async function fetchSlideElements(docId: string, slideN: number): Promise<SlideElementsResponse> {
   return apiFetch<SlideElementsResponse>(`${BASE}/docs/${docId}/slides/${slideN}/elements`)
+}
+
+export async function renderSingleSlide(docId: string, slideN: number): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(
+    `${BASE}/docs/${docId}/slides/${slideN}/render`,
+    { method: "POST" },
+  )
+}
+
+export function exportPptxUrl(docId: string): string {
+  return `${BASE}/docs/${docId}/export`
+}
+
+export async function fetchElementText(
+  docId: string,
+  slideN: number,
+  elementId: string,
+): Promise<ElementTextContent> {
+  return apiFetch<ElementTextContent>(
+    `${BASE}/docs/${docId}/slides/${slideN}/elements/${encodeURIComponent(elementId)}/text`,
+  )
+}
+
+export async function updateElementText(
+  docId: string,
+  slideN: number,
+  elementId: string,
+  update: unknown,
+): Promise<ElementTextContent> {
+  return apiFetch<ElementTextContent>(
+    `${BASE}/docs/${docId}/slides/${slideN}/elements/${encodeURIComponent(elementId)}/text`,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(update) },
+  )
+}
+
+export async function undoDoc(docId: string): Promise<{ ok: boolean; undo_depth: number; redo_depth: number }> {
+  return apiFetch(`${BASE}/docs/${docId}/undo`, { method: "POST" })
+}
+
+export async function redoDoc(docId: string): Promise<{ ok: boolean; undo_depth: number; redo_depth: number }> {
+  return apiFetch(`${BASE}/docs/${docId}/redo`, { method: "POST" })
+}
+
+export async function deleteElement(
+  docId: string,
+  slideN: number,
+  elementId: string,
+): Promise<{ ok: boolean; deleted: string }> {
+  return apiFetch<{ ok: boolean; deleted: string }>(
+    `${BASE}/docs/${docId}/slides/${slideN}/elements/${encodeURIComponent(elementId)}`,
+    { method: "DELETE" },
+  )
+}
+
+export async function duplicateElement(
+  docId: string,
+  slideN: number,
+  elementId: string,
+): Promise<StudioElement> {
+  return apiFetch<StudioElement>(
+    `${BASE}/docs/${docId}/slides/${slideN}/elements/${encodeURIComponent(elementId)}/duplicate`,
+    { method: "POST" },
+  )
+}
+
+export async function fetchElementStyle(
+  docId: string,
+  slideN: number,
+  elementId: string,
+): Promise<ElementStyleData> {
+  return apiFetch<ElementStyleData>(
+    `${BASE}/docs/${docId}/slides/${slideN}/elements/${encodeURIComponent(elementId)}/style`,
+  )
+}
+
+export async function updateElementStyle(
+  docId: string,
+  slideN: number,
+  elementId: string,
+  update: ElementStyleUpdate,
+): Promise<ElementStyleData> {
+  return apiFetch<ElementStyleData>(
+    `${BASE}/docs/${docId}/slides/${slideN}/elements/${encodeURIComponent(elementId)}/style`,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(update) },
+  )
 }
 
 export async function updateElementPosition(
   docId: string,
   slideN: number,
   elementId: string,
-  update: { left_in?: number; top_in?: number; width_in?: number; height_in?: number },
+  update: { left_in?: number; top_in?: number; width_in?: number; height_in?: number; z_index?: number; rotation?: number },
 ): Promise<StudioElement> {
   return apiFetch<StudioElement>(
     `${BASE}/docs/${docId}/slides/${slideN}/elements/${encodeURIComponent(elementId)}`,
@@ -29,4 +170,21 @@ export async function updateElementPosition(
       body: JSON.stringify(update),
     },
   )
+}
+
+export async function searchText(docId: string, q: string): Promise<TextSearchMatch[]> {
+  return apiFetch<TextSearchMatch[]>(`${BASE}/docs/${docId}/search-text?q=${encodeURIComponent(q)}`)
+}
+
+export async function replaceText(
+  docId: string,
+  find: string,
+  replace: string,
+  caseSensitive = false,
+): Promise<ReplaceTextResult> {
+  return apiFetch<ReplaceTextResult>(`${BASE}/docs/${docId}/replace-text`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ find, replace, case_sensitive: caseSensitive }),
+  })
 }
