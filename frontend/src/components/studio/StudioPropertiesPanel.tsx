@@ -205,6 +205,27 @@ function PositionTab({ element, docId, slideN, onCommit }: PositionTabProps) {
       </FieldRow>
 
       <SectionHead title="Stack" />
+      <div className="flex gap-1 mb-2">
+        {[
+          { label: "⤒", title: "Bring to Front", delta: 9999 },
+          { label: "↑", title: "Bring Forward",  delta: 1 },
+          { label: "↓", title: "Send Backward",  delta: -1 },
+          { label: "⤓", title: "Send to Back",   delta: -9999 },
+        ].map(({ label, title, delta }) => (
+          <button
+            key={title}
+            title={title}
+            onClick={async () => {
+              const newZ = delta > 999 ? 9999 : delta < -999 ? 0 : Math.max(0, element.z_index + delta)
+              try { await updateElementPosition(docId, slideN, element.id, { z_index: newZ }); onCommit() }
+              catch (e) { console.error("z-order failed:", e) }
+            }}
+            className="flex-1 text-xs py-1 rounded bg-white/5 border border-edge hover:bg-white/10 text-slate-300"
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       <FieldRow label="Z-index">
         <span className="text-xs font-mono text-slate-300">{element.z_index}</span>
       </FieldRow>
