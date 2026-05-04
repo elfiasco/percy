@@ -32,13 +32,19 @@ Start the Percy Enterprise foundation without disrupting the existing local roun
 - [x] Add job model and local job lifecycle endpoints.
 - [x] Add local job runner (ECS Fargate worker + SQS long-poll loop).
 - [x] Wire existing PPTX onboarding into cloud document jobs.
-- [ ] Add frontend organization/project navigation.
+- [x] Add frontend organization/project navigation (Cloud Library tab in Studio).
 - [ ] Define first Python snippet contract for Bridge elements.
 - [x] Add Percy Studio canvas (Bridge element overlays, drag/resize, properties panel, mode toggle).
-- [ ] Add Studio: AI assistant panel.
+- [x] Deploy Percy Studio to AWS App Runner (percy-studio-dev).
+- [x] Add file upload endpoint to workspace backend.
+- [x] Add cloud reverse proxy in Studio backend for /api/cloud/* routes.
+- [ ] Add Studio: AI assistant panel (wire to Claude API).
 - [ ] Add Studio: multiplayer presence + soft element locks.
-- [ ] Add Studio: personal workspace / project library UI (wire cloud API to frontend).
+- [x] Add Studio: personal workspace / project library UI (Cloud Library tab).
 - [ ] Add Studio: Electron desktop wrapper with bundled Percy server.
+- [ ] SNS email subscription for alerts topic.
+- [ ] EventBridge Scheduler for periodic document refresh jobs.
+- [ ] Custom domain for Percy Studio + Cloud API.
 
 ## Open Questions
 
