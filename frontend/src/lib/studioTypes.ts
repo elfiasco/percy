@@ -16,6 +16,7 @@ export interface StudioElement {
   z_index: number
   locked: boolean
   hidden: boolean
+  animation: string
 }
 
 export interface SlideElementsResponse {

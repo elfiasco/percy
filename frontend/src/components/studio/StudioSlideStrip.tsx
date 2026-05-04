@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react"
-import { addSlide, deleteSlide, duplicateSlide, moveSlide, fetchNotesSummary, importSlides, fetchSlideLabels, setSlideLabel, setSlideTag } from "../../lib/studioApi"
+import { addSlide, deleteSlide, duplicateSlide, moveSlide, fetchNotesSummary, importSlides, fetchSlideLabels, setSlideLabel, setSlideTag, setSlideTransition, fetchSlideTransitions, fetchSlideSections, setSlideSection, fetchComments, exportSlideUrl } from "../../lib/studioApi"
 
 const TAG_COLORS = [
   { color: null,      label: "None" },
@@ -39,6 +39,8 @@ export default function StudioSlideStrip({
   const [hoverN, setHoverN]           = useState<number | null>(null)
   const [hoverY, setHoverY]           = useState(0)
   const [slidesWithNotes, setSlidesWithNotes] = useState<Set<number>>(new Set())
+  const [notesWordCounts, setNotesWordCounts] = useState<Record<number, number>>({})
+  const [commentCounts, setCommentCounts]   = useState<Record<number, number>>({})
   const [importing, setImporting]     = useState(false)
   const [multiSelected, setMultiSelected] = useState<Set<number>>(new Set())
   const [thumbnailSize, setThumbnailSize] = useState<"sm" | "md">("sm")
@@ -46,7 +48,8 @@ export default function StudioSlideStrip({
   const [slideTags, setSlideTags]     = useState<Record<number, string>>({})
   const [editingLabel, setEditingLabel] = useState<number | null>(null)
   const [editLabelText, setEditLabelText] = useState("")
-  const [tagMenuN, setTagMenuN]       = useState<number | null>(null)
+  const [slideTransitions, setSlideTransitions] = useState<Record<number, string>>({})
+  const [slideSections, setSlideSections]       = useState<Record<number, string>>({})
   const [filterTag, setFilterTag]     = useState<string | null>(null)
   const importInputRef                = useRef<HTMLInputElement>(null)
   const stripRef = useRef<HTMLDivElement>(null)
@@ -54,12 +57,36 @@ export default function StudioSlideStrip({
   // Fetch notes summary and slide labels on mount/refresh
   useEffect(() => {
     fetchNotesSummary(docId)
-      .then((r) => setSlidesWithNotes(new Set(r.slides_with_notes)))
+      .then((r) => {
+        setSlidesWithNotes(new Set(r.slides_with_notes))
+        if (r.word_counts) {
+          setNotesWordCounts(Object.fromEntries(Object.entries(r.word_counts).map(([k, v]) => [Number(k), v as number])))
+        }
+      })
       .catch(() => {})
     fetchSlideLabels(docId)
       .then((r) => {
         setSlideLabels(Object.fromEntries(Object.entries(r.labels).map(([k, v]) => [Number(k), v])))
         setSlideTags(Object.fromEntries(Object.entries(r.tags ?? {}).map(([k, v]) => [Number(k), v])))
+      })
+      .catch(() => {})
+    fetchSlideTransitions(docId)
+      .then((r) => setSlideTransitions(
+        Object.fromEntries(Object.entries(r.transitions).map(([k, v]) => [Number(k), v.transition]))
+      ))
+      .catch(() => {})
+    fetchSlideSections(docId)
+      .then((r) => setSlideSections(
+        Object.fromEntries(Object.entries(r.sections).map(([k, v]) => [Number(k), v as string]))
+      ))
+      .catch(() => {})
+    fetchComments(docId)
+      .then((r) => {
+        const counts: Record<number, number> = {}
+        for (const c of r.comments) {
+          if (!c.resolved) counts[c.slide_n] = (counts[c.slide_n] ?? 0) + 1
+        }
+        setCommentCounts(counts)
       })
       .catch(() => {})
   }, [docId, stripKey, refreshKey])
@@ -334,9 +361,18 @@ export default function StudioSlideStrip({
           const tagColor  = slideTags[n] ?? null
           const isDragging = dragSlide === n
           const isDropTarget = dropTarget === n && dragSlide !== null && dragSlide !== n
+          const sectionName = slideSections[n]
           return (
+            <div key={`wrap-${n}`} className="flex flex-col w-full gap-0">
+              {sectionName && (
+                <div
+                  className="w-full px-1 py-0.5 mt-1 mb-0.5 text-[9px] font-semibold uppercase tracking-widest text-violet-400/80 border-t border-violet-500/30 truncate"
+                  title={`Section: ${sectionName}`}
+                >
+                  § {sectionName}
+                </div>
+              )}
             <div
-              key={n}
               draggable
               onDragStart={(e) => handleDragStart(e, n)}
               onDragOver={(e) => handleDragOver(e, n)}
@@ -354,6 +390,7 @@ export default function StudioSlideStrip({
               onContextMenu={(e) => handleContextMenu(e, n)}
               onMouseEnter={(e) => { setHoverN(n); setHoverY((e.currentTarget as HTMLElement).getBoundingClientRect().top) }}
               onMouseLeave={() => setHoverN(null)}
+              key={n}
             >
               <div className="w-full aspect-video bg-base rounded overflow-hidden relative">
                 <img
@@ -368,20 +405,41 @@ export default function StudioSlideStrip({
                     className="absolute top-0.5 right-0.5 w-2 h-2 rounded-full bg-amber-400 shadow-sm"
                   />
                 )}
-                {hasNotes && (
-                  <span
-                    title="Has speaker notes"
-                    className="absolute bottom-0.5 right-0.5 text-[8px] text-white/60 bg-black/50 rounded px-0.5 leading-tight"
-                  >
-                    📝
-                  </span>
-                )}
+                {hasNotes && (() => {
+                  const wc = notesWordCounts[n] ?? 0
+                  const quality = wc >= 80 ? "text-emerald-400/80" : wc >= 30 ? "text-amber-400/80" : "text-white/50"
+                  const label = wc >= 80 ? "📝" : wc >= 30 ? "📋" : "✏"
+                  return (
+                    <span
+                      title={`Speaker notes: ${wc} words`}
+                      className={`absolute bottom-0.5 right-0.5 text-[8px] ${quality} bg-black/50 rounded px-0.5 leading-tight`}
+                    >
+                      {label}
+                    </span>
+                  )
+                })()}
                 {tagColor && (
                   <span
                     title={`Tagged: ${TAG_COLORS.find((t) => t.color === tagColor)?.label ?? tagColor}`}
                     className="absolute top-0.5 left-0.5 w-2.5 h-2.5 rounded-full border border-black/20"
                     style={{ background: tagColor }}
                   />
+                )}
+                {slideTransitions[n] && (
+                  <span
+                    title={`Transition: ${slideTransitions[n]}`}
+                    className="absolute bottom-0.5 left-0.5 text-[8px] text-white/50 bg-black/50 rounded px-0.5 leading-tight"
+                  >
+                    ▷
+                  </span>
+                )}
+                {commentCounts[n] > 0 && (
+                  <span
+                    title={`${commentCounts[n]} open comment${commentCounts[n] !== 1 ? "s" : ""}`}
+                    className="absolute top-0.5 right-6 text-[7px] font-bold text-white bg-orange-500 rounded-full min-w-[13px] h-[13px] flex items-center justify-center leading-none"
+                  >
+                    {commentCounts[n]}
+                  </span>
                 )}
               </div>
               <div className="w-full flex items-center justify-between gap-0.5 min-w-0">
@@ -422,6 +480,7 @@ export default function StudioSlideStrip({
                 )}
               </div>
             </div>
+            </div>
           )
         })}
       </div>
@@ -456,6 +515,22 @@ export default function StudioSlideStrip({
           <CtxItem onClick={() => { setEditingLabel(contextMenu.slideN); setEditLabelText(slideLabels[contextMenu.slideN] ?? ""); setContextMenu(null) }}>
             Rename slide
           </CtxItem>
+          <CtxItem onClick={() => {
+            const n = contextMenu.slideN
+            const current = slideSections[n] ?? ""
+            const name = window.prompt("Section name (blank to clear):", current)
+            if (name === null) { setContextMenu(null); return }
+            const trimmed = name.trim()
+            setSlideSections((prev) => {
+              const next = { ...prev }
+              if (trimmed) next[n] = trimmed; else delete next[n]
+              return next
+            })
+            setSlideSection(docId, n, trimmed || "").catch(() => {})
+            setContextMenu(null)
+          }}>
+            Set section…
+          </CtxItem>
           {/* tag color picker */}
           <div className="px-3 py-1.5">
             <div className="text-[9px] text-muted/60 mb-1.5 uppercase tracking-wider">Color tag</div>
@@ -483,6 +558,38 @@ export default function StudioSlideStrip({
               ))}
             </div>
           </div>
+          {/* transition picker */}
+          <div className="px-3 py-1.5">
+            <div className="text-[9px] text-muted/60 mb-1.5 uppercase tracking-wider">Transition</div>
+            <div className="flex flex-wrap gap-1">
+              {(["none","fade","slide","zoom","flip","push","wipe","dissolve"] as const).map((t) => {
+                const active = (slideTransitions[contextMenu.slideN] ?? "none") === t
+                return (
+                  <button
+                    key={t}
+                    title={t}
+                    onClick={() => {
+                      const n = contextMenu.slideN
+                      setSlideTransitions((prev) => {
+                        const next = { ...prev }
+                        if (t === "none") delete next[n]; else next[n] = t
+                        return next
+                      })
+                      setSlideTransition(docId, n, t).catch(() => {})
+                      setContextMenu(null)
+                    }}
+                    className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors capitalize ${
+                      active
+                        ? "bg-indigo-500/30 text-indigo-300 border-indigo-500/40"
+                        : "bg-white/5 text-muted border-edge hover:bg-white/10 hover:text-slate-300"
+                    }`}
+                  >
+                    {t}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
           <div className="border-t border-edge/50 my-1" />
           <CtxItem onClick={() => run(() => addSlide(docId, contextMenu.slideN - 1), (r) => r.new_slide_n ?? contextMenu.slideN)}>
             Insert before
@@ -501,6 +608,9 @@ export default function StudioSlideStrip({
           <div className="border-t border-edge/50 my-1" />
           <CtxItem onClick={() => { window.open(`/api/docs/${docId}/slides/${contextMenu.slideN}/bridge.png`, "_blank"); setContextMenu(null) }}>
             Download PNG
+          </CtxItem>
+          <CtxItem onClick={() => { window.open(exportSlideUrl(docId, contextMenu.slideN), "_blank"); setContextMenu(null) }}>
+            Download as PPTX
           </CtxItem>
           <div className="border-t border-edge/50 my-1" />
           <CtxItem

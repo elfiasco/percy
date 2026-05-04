@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import type { DocInfo } from "../../lib/types"
 import type { StudioElement } from "../../lib/studioTypes"
-import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement as duplicateElementApi, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, updateElementFlags, applyLayoutPreset, groupElements, ungroupElement, generateSlideContent, rerenderAllSlides } from "../../lib/studioApi"
+import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement as duplicateElementApi, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, updateElementFlags, applyLayoutPreset, groupElements, ungroupElement, generateSlideContent, rerenderAllSlides, importSlides, bulkUpdateStyle } from "../../lib/studioApi"
 import type { ElementStyleData } from "../../lib/studioTypes"
 import * as api from "../../lib/api"
 import StudioSlideStrip from "./StudioSlideStrip"
@@ -18,8 +18,10 @@ import OutlinePanel from "./OutlinePanel"
 import PresentationMode from "./PresentationMode"
 import LayersPanel from "./LayersPanel"
 import ColorSwapPanel from "./ColorSwapPanel"
+import GenerateFromOutlineModal from "./GenerateFromOutlineModal"
 import DocStatsModal from "./DocStatsModal"
 import CommentsPanel from "./CommentsPanel"
+import PresentationCheckModal from "./PresentationCheckModal"
 
 interface Props {
   doc: DocInfo
@@ -44,10 +46,13 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const [rerenderingAll, setRerenderingAll]   = useState(false)
   const [colorSwapOpen, setColorSwapOpen]     = useState(false)
   const [statsOpen, setStatsOpen]             = useState(false)
+  const [checkOpen, setCheckOpen]             = useState(false)
   const [commentsOpen, setCommentsOpen]       = useState(false)
   const [shortcutsOpen, setShortcutsOpen]       = useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [slideSorterOpen, setSlideSorterOpen]       = useState(false)
+  const [outlineGenOpen, setOutlineGenOpen]         = useState(false)
+  const [focusMode, setFocusMode]                   = useState(false)
   const [formatPaintMode, setFormatPaintMode]   = useState(false)
   const formatPaintStyleRef = useRef<ElementStyleData | null>(null)
   const [dirtySlides, setDirtySlides]         = useState<Set<number>>(new Set())
@@ -71,6 +76,13 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       .then((r) => { setUndoDepth(r.undo_depth); setRedoDepth(r.redo_depth) })
       .catch(() => {})
   }, [doc.doc_id])
+
+  // Update browser tab title when document changes
+  useEffect(() => {
+    const prev = document.title
+    document.title = `${doc.name} — Percy Studio`
+    return () => { document.title = prev }
+  }, [doc.name])
 
   // fetch slide dimensions + element list when slide changes or refreshKey bumps
   useEffect(() => {
@@ -280,6 +292,39 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       .catch((err) => console.error("format paint apply failed:", err))
   }, [selectedElement, formatPaintMode, doc.doc_id, markDirty])
 
+  const handleInsertShape = useCallback(async (shapeType: string) => {
+    const W = 3.0, H = shapeType === "text_box" ? 1.0 : 2.0
+    // Find a position that doesn't overlap too much with existing elements
+    const existing = slideElements
+    const SLIDE_W = slideWidthIn || 13.33, SLIDE_H = slideHeightIn || 7.5
+    let bestL = 1.0, bestT = 1.0, minOverlap = Infinity
+    for (let tRow = 0; tRow < 4; tRow++) {
+      for (let tCol = 0; tCol < 4; tCol++) {
+        const l = tCol * (SLIDE_W / 4), t = tRow * (SLIDE_H / 4)
+        if (l + W > SLIDE_W || t + H > SLIDE_H) continue
+        const overlap = existing.reduce((sum, e) => {
+          const ox = Math.max(0, Math.min(l + W, e.left_in + e.width_in) - Math.max(l, e.left_in))
+          const oy = Math.max(0, Math.min(t + H, e.top_in + e.height_in) - Math.max(t, e.top_in))
+          return sum + ox * oy
+        }, 0)
+        if (overlap < minOverlap) { minOverlap = overlap; bestL = l + 0.25; bestT = t + 0.25 }
+      }
+    }
+    try {
+      const el = await createNewElement(doc.doc_id, selectedSlideRef.current, {
+        shape_type: shapeType,
+        left_in: bestL, top_in: bestT, width_in: W, height_in: H,
+        fill_color: "#4472C4",
+        label: shapeType.charAt(0).toUpperCase() + shapeType.slice(1),
+      })
+      setSelectedElement(el)
+      markDirty(selectedSlideRef.current)
+      setRefreshKey((k) => k + 1)
+    } catch (e) {
+      console.error("insert failed:", e)
+    }
+  }, [doc.doc_id, markDirty, slideElements, slideWidthIn, slideHeightIn])
+
   // ── arrow key nudge + Delete/Duplicate keyboard shortcuts ─────────────────
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -303,6 +348,22 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         if (el) {
           e.preventDefault()
           clipboardRef.current = { slideN: selectedSlideRef.current, elementId: el.id }
+        }
+        return
+      }
+
+      // Ctrl+Shift+V → paste in place (no offset)
+      if ((e.key === "v" || e.key === "V") && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+        const clip = clipboardRef.current
+        if (clip) {
+          e.preventDefault()
+          copyElementToSlide(doc.doc_id, clip.slideN, clip.elementId, selectedSlideRef.current, 0, 0)
+            .then((el) => {
+              markDirty(selectedSlideRef.current)
+              setRefreshKey((k) => k + 1)
+              setSelectedElement(el)
+            })
+            .catch((err) => console.error("paste in place failed:", err))
         }
         return
       }
@@ -387,6 +448,26 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         return
       }
 
+      // Ctrl+\ → toggle focus mode (hide side panels)
+      if (e.key === "\\" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        setFocusMode((f) => !f)
+        return
+      }
+
+      // L → toggle lock on selected element
+      if ((e.key === "l" || e.key === "L") && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        const el = selectedElementRef.current
+        if (el) { e.preventDefault(); handleToggleFlags(el.id, { locked: !el.locked }); return }
+      }
+
+      // Ctrl+T → insert text box on current slide
+      if ((e.key === "t" || e.key === "T") && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+        e.preventDefault()
+        handleInsertShape("text_box")
+        return
+      }
+
       // F5 → present from current slide
       if (e.key === "F5") {
         e.preventDefault()
@@ -424,29 +505,13 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
-  }, [handleCommitPosition, handleDelete, handleDuplicate])
+  }, [handleCommitPosition, handleDelete, handleDuplicate, handleInsertShape, handleToggleFlags])
 
   const handleSlideSelect = useCallback((n: number) => {
     setSelectedSlide(n)
     setSelectedElement(null)
     setMultiSelectIds(new Set())
   }, [])
-
-  const handleInsertShape = useCallback(async (shapeType: string) => {
-    try {
-      const el = await createNewElement(doc.doc_id, selectedSlideRef.current, {
-        shape_type: shapeType,
-        left_in: 1.0, top_in: 1.0, width_in: 3.0, height_in: 2.0,
-        fill_color: "#4472C4",
-        label: shapeType.charAt(0).toUpperCase() + shapeType.slice(1),
-      })
-      setSelectedElement(el)
-      markDirty(selectedSlideRef.current)
-      setRefreshKey((k) => k + 1)
-    } catch (e) {
-      console.error("insert failed:", e)
-    }
-  }, [doc.doc_id, markDirty])
 
   const handleInsertImage = useCallback(async (file: File) => {
     try {
@@ -525,6 +590,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         redoDepth={redoDepth}
         onShowShortcuts={() => setShortcutsOpen(true)}
         onShowSlideSorter={() => setSlideSorterOpen(true)}
+        onShowOutlineGen={() => setOutlineGenOpen(true)}
         multiSelectIds={multiSelectIds}
         onAlignElements={handleAlignElements}
         onFormatPaint={handleFormatPaint}
@@ -544,13 +610,28 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         rerenderingAll={rerenderingAll}
         onColorSwap={() => setColorSwapOpen(true)}
         onShowStats={() => setStatsOpen(true)}
+        onShowCheck={() => setCheckOpen(true)}
         commentsOpen={commentsOpen}
         onToggleComments={() => setCommentsOpen((o) => !o)}
+        onImportSlides={async (file) => {
+          try {
+            const r = await importSlides(doc.doc_id, file)
+            handleSlideCountChange(r.slide_count, r.slide_count)
+            setRefreshKey((k) => k + 1)
+          } catch (e) { console.error("import slides failed:", e) }
+        }}
+        onBulkFillColor={multiSelectIds.size > 1 ? async (color) => {
+          try {
+            await bulkUpdateStyle(doc.doc_id, selectedSlideRef.current, [...multiSelectIds], { fill_color: color, fill_type: "solid" })
+            markDirty(selectedSlideRef.current)
+            setRefreshKey((k) => k + 1)
+          } catch (e) { console.error("bulk fill failed:", e) }
+        } : undefined}
       />
 
       {/* ── main area: slide strip + canvas + properties ── */}
       <div className="flex flex-1 min-h-0 min-w-0 relative">
-        {outlineOpen && (
+        {!focusMode && outlineOpen && (
           <OutlinePanel
             docId={doc.doc_id}
             slideCount={localSlideCount}
@@ -559,7 +640,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
             onJumpToSlide={handleSlideSelect}
           />
         )}
-        <StudioSlideStrip
+        {!focusMode && <StudioSlideStrip
           docId={doc.doc_id}
           slideCount={localSlideCount}
           selectedSlide={selectedSlide}
@@ -567,7 +648,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           refreshKey={refreshKey}
           onSelect={handleSlideSelect}
           onSlideCountChange={handleSlideCountChange}
-        />
+        />}
 
         <div className="flex flex-col flex-1 min-h-0 min-w-0">
           <StudioCanvas
@@ -592,11 +673,13 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
             onToggleLockElement={(id, locked) => handleToggleFlags(id, { locked })}
             onToggleHiddenElement={(id, hidden) => handleToggleFlags(id, { hidden })}
             onZIndexChange={() => { markDirty(selectedSlideRef.current); setRefreshKey((k) => k + 1) }}
+            focusMode={focusMode}
+            onToggleFocusMode={() => setFocusMode((f) => !f)}
           />
           <StudioNotesBar docId={doc.doc_id} slideN={selectedSlide} />
         </div>
 
-        {layersOpen && (
+        {!focusMode && layersOpen && (
           <LayersPanel
             docId={doc.doc_id}
             slideN={selectedSlide}
@@ -621,7 +704,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           />
         )}
 
-        <StudioPropertiesPanel
+        {!focusMode && <StudioPropertiesPanel
           element={selectedElement}
           elements={slideElements}
           multiSelectIds={multiSelectIds}
@@ -634,7 +717,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           onDeleteElement={handleDeleteById}
           onToggleLock={(id, locked) => handleToggleFlags(id, { locked })}
           onToggleHidden={(id, hidden) => handleToggleFlags(id, { hidden })}
-        />
+        />}
 
         {chatOpen && (
           <StudioChat
@@ -683,6 +766,14 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         />
       )}
 
+      {checkOpen && (
+        <PresentationCheckModal
+          docId={doc.doc_id}
+          onClose={() => setCheckOpen(false)}
+          onJumpToSlide={(n) => setSelectedSlide(n)}
+        />
+      )}
+
       {colorSwapOpen && (
         <ColorSwapPanel
           docId={doc.doc_id}
@@ -710,6 +801,17 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           onClose={() => setSlideSorterOpen(false)}
           onJump={(n) => { setSelectedSlide(n); setSelectedElement(null) }}
           onSlideCountChange={handleSlideCountChange}
+        />
+      )}
+
+      {outlineGenOpen && (
+        <GenerateFromOutlineModal
+          docId={doc.doc_id}
+          onClose={() => setOutlineGenOpen(false)}
+          onGenerated={(newCount) => {
+            handleSlideCountChange(newCount, localSlideCount + 1)
+            setRefreshKey((k) => k + 1)
+          }}
         />
       )}
     </div>

@@ -5,7 +5,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from "react"
-import { getSlideNotes } from "../../lib/studioApi"
+import { getSlideNotes, fetchSlideTransitions } from "../../lib/studioApi"
 
 interface Props {
   docId: string
@@ -78,6 +78,11 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
   const [autoProgress, setAutoProgress] = useState(0)
   const [transition, setTransition]     = useState<"fade" | "slide" | "zoom" | "none">("fade")
   const [transDir, setTransDir]         = useState<1 | -1>(1)
+  const [slideTransitions, setSlideTransitions] = useState<Record<number, string>>({})
+  const [targetMinutes, setTargetMinutes] = useState<number | null>(null)
+  const [showTeleprompter, setShowTeleprompter] = useState(false)
+  const [telepFontSize, setTelepFontSize] = useState(28)
+  const [speakerView, setSpeakerView] = useState(false)
   // Drawing tools
   const [drawMode, setDrawMode]         = useState(false)
   const [penColor, setPenColor]         = useState("#FF3B30")
@@ -128,16 +133,28 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
     if (ctx && drawCanvasRef.current) ctx.clearRect(0, 0, drawCanvasRef.current.width, drawCanvasRef.current.height)
   }, [current, autoplay])
 
-  // Fetch notes for current slide (and adjacent) when notes panel is open
+  // Fetch notes for current slide (and adjacent) when notes panel, teleprompter, or speaker view is open
   useEffect(() => {
-    if (!showNotes) return
+    if (!showNotes && !showTeleprompter && !speakerView) return
     const toFetch = [current - 1, current, current + 1].filter((n) => n >= 1 && n <= slideCount && !(n in notes))
     for (const n of toFetch) {
       getSlideNotes(docId, n)
         .then((r) => setNotes((prev) => ({ ...prev, [n]: r.notes_text })))
         .catch(() => setNotes((prev) => ({ ...prev, [n]: "" })))
     }
-  }, [current, showNotes, docId, slideCount])
+  }, [current, showNotes, showTeleprompter, speakerView, docId, slideCount])
+
+  // Load per-slide transition overrides
+  useEffect(() => {
+    fetchSlideTransitions(docId)
+      .then((r) => setSlideTransitions(
+        Object.fromEntries(Object.entries(r.transitions).map(([k, v]) => [Number(k), v.transition]))
+      ))
+      .catch(() => {})
+  }, [docId])
+
+  // Per-slide transition: use slide's stored transition if set, else global default
+  const effectiveTransition = (slideTransitions[current] as "fade" | "slide" | "zoom" | "none" | undefined) ?? transition
 
   const go = useCallback((n: number) => {
     if (transitioning) return
@@ -147,12 +164,13 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
     setSlideTimes((prev) => ({ ...prev, [current]: (prev[current] ?? 0) + (elapsed - slideStart) }))
     setSlideStart(elapsed)
     setTransitioning(true)
-    const dur = transition === "none" ? 0 : 180
+    const eff = (slideTransitions[clamped] as "fade" | "slide" | "zoom" | "none" | undefined) ?? transition
+    const dur = eff === "none" ? 0 : 180
     setTimeout(() => {
       setCurrent(clamped)
       setTransitioning(false)
     }, dur)
-  }, [current, slideCount, transitioning, elapsed, slideStart, transition])
+  }, [current, slideCount, transitioning, elapsed, slideStart, transition, slideTransitions])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -162,6 +180,8 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
       if (e.key === "p" || e.key === "P") { e.preventDefault(); toggleTimer(); return }
       if (e.key === "a" || e.key === "A") { e.preventDefault(); setAutoplay((v) => !v); return }
       if (e.key === "d" || e.key === "D") { e.preventDefault(); setDrawMode((v) => !v); return }
+      if (e.key === "z" || e.key === "Z") { e.preventDefault(); setShowTeleprompter((v) => !v); return }
+      if (e.key === "v" || e.key === "V") { e.preventDefault(); setSpeakerView((v) => !v); return }
       if (e.key === "c" || e.key === "C") {
         e.preventDefault()
         const ctx = drawCanvasRef.current?.getContext("2d")
@@ -176,10 +196,15 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
       }
       if (e.key === "Home") { e.preventDefault(); go(1) }
       if (e.key === "End")  { e.preventDefault(); go(slideCount) }
+      // Number keys 1-9 jump to slide N (or N*10 for slides > 9 with Shift)
+      if (/^[1-9]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const n = parseInt(e.key, 10)
+        if (n <= slideCount) { e.preventDefault(); go(n) }
+      }
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
-  }, [current, go, onClose, slideCount])
+  }, [current, go, onClose, slideCount, toggleTimer])
 
   useEffect(() => {
     containerRef.current?.focus()
@@ -202,13 +227,13 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
           width: "100%",
           aspectRatio: "16/9",
           maxHeight: showNotes ? "72vh" : "100vh",
-          transition: transition === "none" ? "max-height 0.2s" :
-                      transition === "fade"  ? "opacity 0.18s ease, max-height 0.2s" :
-                      transition === "slide" ? "transform 0.18s ease, opacity 0.1s, max-height 0.2s" :
-                                              "transform 0.18s ease, opacity 0.12s, max-height 0.2s",
-          opacity: transitioning && transition !== "slide" ? 0 : 1,
+          transition: effectiveTransition === "none" ? "max-height 0.2s" :
+                      effectiveTransition === "fade"  ? "opacity 0.18s ease, max-height 0.2s" :
+                      effectiveTransition === "slide" ? "transform 0.18s ease, opacity 0.1s, max-height 0.2s" :
+                                                       "transform 0.18s ease, opacity 0.12s, max-height 0.2s",
+          opacity: transitioning && effectiveTransition !== "slide" ? 0 : 1,
           transform: transitioning
-            ? transition === "slide" ? `translateX(${transDir * 8}%)` : transition === "zoom" ? "scale(0.93)" : "none"
+            ? effectiveTransition === "slide" ? `translateX(${transDir * 8}%)` : effectiveTransition === "zoom" ? "scale(0.93)" : "none"
             : "none",
         }}
         onClick={drawMode ? (e) => e.stopPropagation() : undefined}
@@ -351,6 +376,32 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
         Notes
       </button>
 
+      {/* speaker view toggle button */}
+      <button
+        onClick={(e) => { e.stopPropagation(); setSpeakerView((v) => !v) }}
+        title="Toggle speaker view (V)"
+        className={`absolute top-3 right-[13rem] text-xs px-2 py-0.5 rounded border transition-colors ${
+          speakerView
+            ? "text-teal-300 border-teal-400/40 bg-teal-500/20"
+            : "text-white/30 border-white/10 hover:text-white/60 hover:border-white/25"
+        }`}
+      >
+        Speaker
+      </button>
+
+      {/* teleprompter toggle button */}
+      <button
+        onClick={(e) => { e.stopPropagation(); setShowTeleprompter((v) => !v) }}
+        title="Toggle teleprompter (Z)"
+        className={`absolute top-3 right-[10.5rem] text-xs px-2 py-0.5 rounded border transition-colors ${
+          showTeleprompter
+            ? "text-emerald-300 border-emerald-400/40 bg-emerald-500/20"
+            : "text-white/30 border-white/10 hover:text-white/60 hover:border-white/25"
+        }`}
+      >
+        Telep
+      </button>
+
       {/* timer toggle button */}
       <button
         onClick={(e) => { e.stopPropagation(); setShowTimer((v) => !v) }}
@@ -442,33 +493,54 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
       )}
 
       {/* timer display */}
-      {showTimer && (
-        <div
-          className="absolute bottom-20 right-4 bg-black/60 rounded-lg px-3 py-2 text-right"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className={`text-2xl font-mono font-bold tracking-wider ${paused ? "text-white/40" : "text-white/90"}`}>
-            {fmtTime(elapsed)}
+      {showTimer && (() => {
+        const targetSecs = targetMinutes != null ? targetMinutes * 60 : null
+        const overTime = targetSecs != null && elapsed > targetSecs
+        const nearEnd  = targetSecs != null && elapsed > targetSecs * 0.85 && !overTime
+        const timerColor = overTime ? "text-red-400" : nearEnd ? "text-amber-300" : paused ? "text-white/40" : "text-white/90"
+        return (
+          <div
+            className="absolute bottom-20 right-4 bg-black/70 rounded-lg px-3 py-2 text-right select-none"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className={`text-2xl font-mono font-bold tracking-wider transition-colors ${timerColor}`}>
+              {fmtTime(elapsed)}
+              {targetSecs != null && (
+                <span className="text-sm font-normal ml-1 text-white/30">/ {fmtTime(targetSecs)}</span>
+              )}
+            </div>
+            <div className="text-white/30 text-[9px] font-mono mt-0.5">
+              slide {fmtTime((slideTimes[current] ?? 0) + (elapsed - slideStart))}
+            </div>
+            {overTime && (
+              <div className="text-[9px] text-red-400 mt-0.5">⏱ Over time by {fmtTime(elapsed - targetSecs!)}</div>
+            )}
+            <div className="flex gap-1 mt-1.5 justify-end items-center">
+              <input
+                type="number"
+                min={1} max={180}
+                value={targetMinutes ?? ""}
+                onChange={(e) => setTargetMinutes(e.target.value ? Number(e.target.value) : null)}
+                placeholder="min"
+                title="Set target duration in minutes"
+                className="w-12 text-[9px] text-right bg-white/10 text-white/60 rounded px-1 py-0.5 border border-white/10 focus:outline-none"
+              />
+              <button
+                onClick={toggleTimer}
+                className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/60 transition-colors"
+              >
+                {paused ? "▶" : "⏸"}
+              </button>
+              <button
+                onClick={resetTimer}
+                className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/60 transition-colors"
+              >
+                ↺
+              </button>
+            </div>
           </div>
-          <div className="text-white/30 text-[9px] font-mono mt-0.5">
-            slide {fmtTime((slideTimes[current] ?? 0) + (elapsed - slideStart))}
-          </div>
-          <div className="flex gap-1 mt-1.5 justify-end">
-            <button
-              onClick={toggleTimer}
-              className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/60 transition-colors"
-            >
-              {paused ? "▶" : "⏸"}
-            </button>
-            <button
-              onClick={resetTimer}
-              className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/60 transition-colors"
-            >
-              ↺
-            </button>
-          </div>
-        </div>
-      )}
+        )
+      })()}
 
       {/* slide dots — up to 30 slides */}
       {slideCount <= 30 && (
@@ -537,9 +609,100 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
         </button>
       </div>
 
+      {/* speaker view side panel */}
+      {speakerView && (
+        <div
+          className="absolute top-0 right-0 bottom-0 w-72 bg-neutral-950/95 border-l border-white/10 flex flex-col overflow-hidden z-10"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 shrink-0">
+            <span className="text-white/40 text-[10px] uppercase tracking-widest font-semibold">Speaker View</span>
+            <div className="flex items-center gap-1 text-white/40 text-[10px] font-mono">
+              <span>{current}</span>
+              <span>/</span>
+              <span>{slideCount}</span>
+            </div>
+          </div>
+          {/* next slide preview */}
+          <div className="px-3 pt-3 pb-2 shrink-0">
+            <div className="text-[9px] text-white/30 uppercase tracking-widest mb-1">Up next</div>
+            {current < slideCount ? (
+              <div className="w-full aspect-video rounded overflow-hidden bg-black border border-white/10">
+                <img
+                  src={slideUrl(current + 1)}
+                  alt={`Slide ${current + 1}`}
+                  className="w-full h-full object-contain"
+                />
+              </div>
+            ) : (
+              <div className="w-full aspect-video rounded bg-white/5 border border-white/10 flex items-center justify-center">
+                <span className="text-white/30 text-xs">End of presentation</span>
+              </div>
+            )}
+          </div>
+          {/* current slide notes */}
+          <div className="flex-1 overflow-y-auto px-3 pb-3 scrollbar-thin">
+            <div className="text-[9px] text-white/30 uppercase tracking-widest mb-2">Notes — Slide {current}</div>
+            {currentNotes === null ? (
+              <div className="text-white/30 text-xs animate-pulse">Loading…</div>
+            ) : currentNotes.trim() ? (
+              <p className="text-white/75 text-sm leading-relaxed whitespace-pre-wrap">{currentNotes}</p>
+            ) : (
+              <p className="text-white/20 text-xs italic">No notes</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* teleprompter overlay */}
+      {showTeleprompter && (
+        <div
+          className="absolute bottom-0 left-0 right-0 bg-black/85 backdrop-blur-sm border-t border-white/10"
+          style={{ maxHeight: "40vh", padding: "1.5rem 3rem 4rem" }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <span className="text-emerald-400/60 text-[10px] uppercase tracking-widest font-semibold">Teleprompter — Slide {current}</span>
+              <button
+                onClick={() => setTelepFontSize((s) => Math.min(64, s + 4))}
+                title="Larger text"
+                className="text-white/40 hover:text-white/70 text-xs w-5 h-5 rounded bg-white/5 hover:bg-white/10 flex items-center justify-center"
+              >A+</button>
+              <button
+                onClick={() => setTelepFontSize((s) => Math.max(16, s - 4))}
+                title="Smaller text"
+                className="text-white/40 hover:text-white/70 text-xs w-5 h-5 rounded bg-white/5 hover:bg-white/10 flex items-center justify-center"
+              >A-</button>
+            </div>
+            <button
+              onClick={() => setShowTeleprompter(false)}
+              className="text-white/30 hover:text-white/60 text-sm transition-colors"
+              title="Hide teleprompter (Z)"
+            >
+              ▾
+            </button>
+          </div>
+          <div className="overflow-y-auto" style={{ maxHeight: "calc(40vh - 4rem)" }}>
+            {currentNotes === null ? (
+              <p className="text-white/30 animate-pulse" style={{ fontSize: telepFontSize }}>Loading…</p>
+            ) : currentNotes.trim() ? (
+              <p
+                className="text-white leading-relaxed whitespace-pre-wrap font-sans"
+                style={{ fontSize: telepFontSize, lineHeight: 1.5 }}
+              >
+                {currentNotes}
+              </p>
+            ) : (
+              <p className="text-white/20 italic" style={{ fontSize: telepFontSize }}>No notes for this slide.</p>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* keyboard hint */}
       <div className="absolute top-3 left-4 text-white/25 text-[10px] font-mono">
-        ← → navigate · N notes · T timer · A auto · D draw · Esc exit
+        ← → navigate · N notes · V speaker · Z telep · T timer · A auto · D draw · Esc exit
       </div>
     </div>
   )

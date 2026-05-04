@@ -82,6 +82,24 @@ export default function DocStatsModal({ docId, onClose }: Props) {
               ))}
             </div>
 
+            {/* duration estimate */}
+            {(stats.word_count > 0 || stats.notes_word_count > 0) && (() => {
+              const totalWords = stats.word_count + stats.notes_word_count
+              const minMins = Math.max(1, Math.floor(totalWords / 130))
+              const maxMins = Math.max(1, Math.ceil(totalWords / 100))
+              return (
+                <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-lg px-4 py-3 flex items-center gap-3">
+                  <span className="text-2xl">⏱</span>
+                  <div>
+                    <div className="text-sm font-semibold text-slate-200">{minMins}–{maxMins} min</div>
+                    <div className="text-[10px] text-muted">estimated presentation time · {totalWords.toLocaleString()} total words
+                      {stats.notes_word_count > 0 && ` (${stats.notes_word_count.toLocaleString()} in notes)`}
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
+
             {/* element type breakdown */}
             {Object.keys(stats.type_counts).length > 0 && (
               <div>

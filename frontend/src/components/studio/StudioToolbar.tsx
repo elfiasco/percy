@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import type { StudioElement } from "../../lib/studioTypes"
 import type { DocInfo } from "../../lib/types"
-import { exportPptxUrl, exportPdfUrl, exportPngZipUrl, notesExportUrl, exportHtmlUrl } from "../../lib/studioApi"
+import { exportPptxUrl, exportPdfUrl, exportPngZipUrl, notesExportUrl, notesHtmlExportUrl, exportHtmlUrl } from "../../lib/studioApi"
 
 const MULTI_ALIGN_BUTTONS = [
   { title: "Align left edges",          symbol: "⫷L", alignment: "left" },
@@ -12,6 +12,9 @@ const MULTI_ALIGN_BUTTONS = [
   { title: "Align bottom edges",        symbol: "⫸B", alignment: "bottom" },
   { title: "Distribute horizontally",   symbol: "⇿H", alignment: "distribute_h" },
   { title: "Distribute vertically",     symbol: "⇿V", alignment: "distribute_v" },
+  { title: "Match width (largest)",     symbol: "↔W", alignment: "match_width" },
+  { title: "Match height (tallest)",    symbol: "↕H", alignment: "match_height" },
+  { title: "Match width & height",      symbol: "⛶S", alignment: "match_size" },
 ]
 
 // ── single labelled number input ──────────────────────────────────────────────
@@ -109,6 +112,7 @@ interface Props {
   onFormatPaint?: () => void
   formatPaintMode?: boolean
   onShowSlideSorter?: () => void
+  onShowOutlineGen?: () => void
   onCopyToSlide?: (targetN: number) => void
   onApplyLayout?: (layout: string) => void
   onGroupElements?: () => void
@@ -124,8 +128,11 @@ interface Props {
   rerenderingAll?: boolean
   onColorSwap?: () => void
   onShowStats?: () => void
+  onShowCheck?: () => void
   commentsOpen?: boolean
   onToggleComments?: () => void
+  onImportSlides?: (file: File) => void
+  onBulkFillColor?: (color: string) => void
 }
 
 export default function StudioToolbar({
@@ -141,6 +148,7 @@ export default function StudioToolbar({
   multiSelectIds, onAlignElements,
   onFormatPaint, formatPaintMode,
   onShowSlideSorter,
+  onShowOutlineGen,
   onCopyToSlide,
   onApplyLayout,
   onGroupElements,
@@ -156,9 +164,13 @@ export default function StudioToolbar({
   rerenderingAll,
   onColorSwap,
   onShowStats,
+  onShowCheck,
   commentsOpen,
   onToggleComments,
+  onImportSlides,
+  onBulkFillColor,
 }: Props) {
+  const importSlidesRef = useRef<HTMLInputElement>(null)
   const [insertOpen, setInsertOpen] = useState(false)
   const [copyToOpen, setCopyToOpen] = useState(false)
   const [layoutOpen, setLayoutOpen] = useState(false)
@@ -166,12 +178,16 @@ export default function StudioToolbar({
   const [generatePrompt, setGeneratePrompt] = useState("")
 
   const LAYOUT_OPTIONS = [
-    { id: "title",          label: "Title Slide" },
-    { id: "title-content",  label: "Title + Content" },
-    { id: "title-subtitle", label: "Title + Subtitle" },
-    { id: "two-column",     label: "Two Columns" },
-    { id: "three-boxes",    label: "Three Boxes" },
-    { id: "section-header", label: "Section Header" },
+    { id: "title",           label: "Title Slide" },
+    { id: "title-content",   label: "Title + Content" },
+    { id: "title-subtitle",  label: "Title + Subtitle" },
+    { id: "two-column",      label: "Two Columns" },
+    { id: "three-boxes",     label: "Three Boxes" },
+    { id: "section-header",  label: "Section Header" },
+    { id: "big-quote",       label: "Big Quote" },
+    { id: "image-text",      label: "Image + Text" },
+    { id: "comparison",      label: "Comparison" },
+    { id: "four-quadrants",  label: "Four Quadrants" },
   ]
   const imageInputRef = useRef<HTMLInputElement>(null)
   const [x, setX] = useState("")
@@ -296,7 +312,7 @@ export default function StudioToolbar({
                 className="w-5 h-6 flex items-center justify-center text-[9px] text-muted
                            hover:text-indigo-300 hover:bg-indigo-500/10 rounded transition-colors font-mono"
               >
-                {symbol.replace(/[⫷⫸⇿]/, "")}
+                {symbol.replace(/^[⫷⫸⇿]/, "")}
               </button>
             ))}
             {onGroupElements && (
@@ -308,6 +324,20 @@ export default function StudioToolbar({
               >
                 ⊞ Group
               </button>
+            )}
+            {onBulkFillColor && (
+              <label
+                title="Apply fill color to all selected elements"
+                className="ml-1 text-[10px] px-1.5 py-0.5 rounded border border-edge text-muted
+                           hover:bg-white/10 hover:text-slate-200 transition-colors cursor-pointer flex items-center gap-1"
+              >
+                ⬛ Fill
+                <input
+                  type="color"
+                  className="w-0 h-0 opacity-0 absolute"
+                  onChange={(e) => onBulkFillColor(e.target.value)}
+                />
+              </label>
             )}
           </div>
         </>
@@ -586,6 +616,40 @@ export default function StudioToolbar({
           ↓ Notes
         </a>
 
+        <a
+          href={notesHtmlExportUrl(doc.doc_id)}
+          download
+          title="Download all speaker notes as a styled HTML document"
+          className="flex items-center gap-1 text-xs px-3 py-1 rounded
+                     bg-slate-500/15 text-slate-300 hover:bg-slate-500/25 border border-slate-500/25
+                     transition-colors no-underline"
+        >
+          ↓ Notes (HTML)
+        </a>
+
+        {onImportSlides && (
+          <>
+            <button
+              onClick={() => importSlidesRef.current?.click()}
+              title="Import slides from another PPTX — appends all slides to this document"
+              className="flex items-center gap-1 text-xs px-3 py-1 rounded border transition-colors
+                         bg-white/5 text-muted hover:text-slate-200 border-edge hover:bg-white/10"
+            >
+              ↑ Import
+            </button>
+            <input
+              ref={importSlidesRef}
+              type="file"
+              accept=".pptx"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) { onImportSlides(f); e.target.value = "" }
+              }}
+            />
+          </>
+        )}
+
         {onColorSwap && (
           <button
             onClick={onColorSwap}
@@ -756,6 +820,17 @@ export default function StudioToolbar({
           </button>
         )}
 
+        {onShowOutlineGen && (
+          <button
+            onClick={onShowOutlineGen}
+            title="AI: Generate slides from outline"
+            className="w-7 h-7 flex items-center justify-center rounded border border-edge text-xs text-muted
+                       hover:text-indigo-300 hover:bg-indigo-500/10 hover:border-indigo-500/40 transition-colors"
+          >
+            ✨
+          </button>
+        )}
+
         {onShowStats && (
           <button
             onClick={onShowStats}
@@ -764,6 +839,17 @@ export default function StudioToolbar({
                        hover:text-slate-200 hover:bg-white/10 transition-colors"
           >
             📊
+          </button>
+        )}
+
+        {onShowCheck && (
+          <button
+            onClick={onShowCheck}
+            title="Presentation quality check"
+            className="w-7 h-7 flex items-center justify-center rounded border border-edge text-xs text-muted
+                       hover:text-slate-200 hover:bg-white/10 transition-colors"
+          >
+            ✓
           </button>
         )}
 

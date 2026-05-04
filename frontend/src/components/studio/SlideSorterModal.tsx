@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react"
-import { moveSlide, deleteSlide, duplicateSlide } from "../../lib/studioApi"
+import { moveSlide, deleteSlide, duplicateSlide, fetchSlideLabels } from "../../lib/studioApi"
 
 interface Props {
   docId: string
@@ -20,7 +20,18 @@ export default function SlideSorterModal({
   const [stripKey, setStripKey] = useState(0)
   const [selectedSlides, setSelectedSlides] = useState<Set<number>>(new Set([selectedSlide]))
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; n: number } | null>(null)
+  const [slideLabels, setSlideLabels] = useState<Record<number, string>>({})
+  const [slideTags, setSlideTags] = useState<Record<number, string>>({})
   const modalRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    fetchSlideLabels(docId)
+      .then((r) => {
+        setSlideLabels(Object.fromEntries(Object.entries(r.labels).map(([k, v]) => [Number(k), v])))
+        setSlideTags(Object.fromEntries(Object.entries(r.tags ?? {}).map(([k, v]) => [Number(k), v])))
+      })
+      .catch(() => {})
+  }, [docId, stripKey])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -169,17 +180,28 @@ export default function SlideSorterModal({
                     isDropTarget ? "ring-2 ring-indigo-400 bg-indigo-500/10 scale-105" : "",
                   ].join(" ")}
                 >
-                  <div className="w-full aspect-video bg-base rounded overflow-hidden">
+                  <div className="w-full aspect-video bg-base rounded overflow-hidden relative">
                     <img
                       src={`/api/docs/${docId}/slides/${n}/bridge.png?v=${stripKey}`}
                       alt={`Slide ${n}`}
                       className="w-full h-full object-cover"
                       draggable={false}
                     />
+                    {slideTags[n] && (
+                      <span
+                        className="absolute top-1 right-1 w-2 h-2 rounded-full border border-white/20"
+                        style={{ background: slideTags[n] }}
+                      />
+                    )}
                   </div>
-                  <span className={`text-[10px] ${active ? "text-accent-light font-semibold" : "text-muted"}`}>
-                    {n}
-                  </span>
+                  <div className="flex items-center gap-1 w-full px-0.5">
+                    <span className={`text-[10px] shrink-0 font-mono ${active ? "text-accent-light font-semibold" : "text-muted/60"}`}>
+                      {n}
+                    </span>
+                    {slideLabels[n] && (
+                      <span className="text-[10px] text-indigo-300/70 truncate">{slideLabels[n]}</span>
+                    )}
+                  </div>
                 </div>
               )
             })}

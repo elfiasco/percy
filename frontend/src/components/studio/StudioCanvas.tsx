@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react"
 import type { StudioElement } from "../../lib/studioTypes"
-import { fetchSlideElements, updateElementPosition } from "../../lib/studioApi"
+import { fetchSlideElements, updateElementPosition, createImageElement } from "../../lib/studioApi"
 import { CanvasContext } from "./CanvasContext"
 import ElementOverlay from "./ElementOverlay"
 import InlineTextEditor from "./InlineTextEditor"
@@ -19,9 +19,11 @@ interface Props {
   onToggleLockElement?: (id: string, locked: boolean) => void
   onToggleHiddenElement?: (id: string, hidden: boolean) => void
   onZIndexChange?: (id: string) => void
+  focusMode?: boolean
+  onToggleFocusMode?: () => void
 }
 
-export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightIn, refreshKey, onSelectElement, onMultiSelect, onElementRotated, onDeleteElement, onDuplicateElement, onToggleLockElement, onToggleHiddenElement, onZIndexChange }: Props) {
+export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightIn, refreshKey, onSelectElement, onMultiSelect, onElementRotated, onDeleteElement, onDuplicateElement, onToggleLockElement, onToggleHiddenElement, onZIndexChange, focusMode, onToggleFocusMode }: Props) {
   const containerRef               = useRef<HTMLDivElement>(null)
   const [elements, setElements]     = useState<StudioElement[]>([])
   const [bgColor, setBgColor]       = useState<string | null>(null)
@@ -35,9 +37,12 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
   const rbStart                     = useRef<{ x: number; y: number } | null>(null)
   const [gridOn, setGridOn]         = useState(false)
   const [snapOn, setSnapOn]         = useState(false)
+  const [rulerOn, setRulerOn]       = useState(false)
   const [snapGuides, setSnapGuides]     = useState<{ type: "h" | "v"; pos: number }[]>([])
   const [inlineEditId, setInlineEditId] = useState<string | null>(null)
   const [ctxMenu, setCtxMenu]           = useState<{ id: string; x: number; y: number } | null>(null)
+  const [dragOver, setDragOver]         = useState(false)
+  const [uploading, setUploading]       = useState(false)
   const [dragInfo, setDragInfo]         = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const GRID_IN                     = 0.25
 
@@ -79,6 +84,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
       if (e.key === "Escape") { setSelectedIds(new Set()); onSelectElement(null); onMultiSelect?.(new Set()) }
       if (e.key === "g" || e.key === "G") { if (!e.ctrlKey && !e.metaKey) setGridOn((v) => !v) }
       if (e.key === "s" || e.key === "S") { if (!e.ctrlKey && !e.metaKey) setSnapOn((v) => !v) }
+      if (e.key === "r" || e.key === "R") { if (!e.ctrlKey && !e.metaKey) setRulerOn((v) => !v) }
       // Ctrl+= / Ctrl++ zoom in, Ctrl+- zoom out, Ctrl+0 reset
       if ((e.key === "=" || e.key === "+") && (e.ctrlKey || e.metaKey)) {
         e.preventDefault()
@@ -280,6 +286,36 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
     setZoom((z) => Math.min(4, Math.max(0.25, z - e.deltaY * 0.001)))
   }, [])
 
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return
+    e.preventDefault()
+    setDragOver(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (!containerRef.current?.contains(e.relatedTarget as Node)) {
+      setDragOver(false)
+    }
+  }, [])
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault()
+    setDragOver(false)
+    const file = e.dataTransfer.files[0]
+    if (!file) return
+    if (!file.type.startsWith("image/")) return
+    setUploading(true)
+    try {
+      const el = await createImageElement(docId, slideN, file)
+      setElements((prev) => [...prev, el])
+      onSelectElement(el)
+    } catch (err) {
+      console.error("image drop upload failed:", err)
+    } finally {
+      setUploading(false)
+    }
+  }, [docId, slideN, onSelectElement])
+
   const aspectRatio = slideWidthIn > 0 && slideHeightIn > 0
     ? slideWidthIn / slideHeightIn
     : 16 / 9
@@ -297,16 +333,85 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
             aspectRatio: `${aspectRatio}`,
             height: `${zoom * 85}vh`,
             minWidth: 0,
+            overflow: rulerOn ? "visible" : "hidden",
           }}
           onClick={handleDeselect}
         >
+          {/* rulers */}
+          {rulerOn && slideWidthIn > 0 && slideHeightIn > 0 && (() => {
+            const RULER_PX = 16
+            const hTicks = Array.from({ length: Math.floor(slideWidthIn) + 1 }, (_, i) => i)
+            const vTicks = Array.from({ length: Math.floor(slideHeightIn) + 1 }, (_, i) => i)
+            const hHalves = Array.from({ length: Math.floor(slideWidthIn * 2) + 1 }, (_, i) => i * 0.5).filter((v) => v % 1 !== 0)
+            const vHalves = Array.from({ length: Math.floor(slideHeightIn * 2) + 1 }, (_, i) => i * 0.5).filter((v) => v % 1 !== 0)
+            return (
+              <>
+                {/* horizontal ruler — above the canvas */}
+                <svg
+                  className="absolute pointer-events-none"
+                  style={{ left: 0, right: 0, top: -RULER_PX, width: "100%", height: RULER_PX, zIndex: 20000 }}
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <rect width="100%" height="100%" fill="rgba(15,15,25,0.92)" />
+                  {hTicks.map((i) => {
+                    const x = `${(i / slideWidthIn) * 100}%`
+                    return (
+                      <g key={i}>
+                        <line x1={x} y1="0" x2={x} y2="10" stroke="rgba(148,163,184,0.6)" strokeWidth={0.75} />
+                        {i > 0 && i < slideWidthIn && (
+                          <text x={x} y="9" fontSize={7} fill="rgba(148,163,184,0.7)" textAnchor="middle">{i}</text>
+                        )}
+                      </g>
+                    )
+                  })}
+                  {hHalves.map((v) => (
+                    <line key={v} x1={`${(v / slideWidthIn) * 100}%`} y1="4" x2={`${(v / slideWidthIn) * 100}%`} y2="10" stroke="rgba(148,163,184,0.35)" strokeWidth={0.5} />
+                  ))}
+                </svg>
+                {/* vertical ruler — left of the canvas */}
+                <svg
+                  className="absolute pointer-events-none"
+                  style={{ top: 0, bottom: 0, left: -RULER_PX, width: RULER_PX, height: "100%", zIndex: 20000 }}
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <rect width="100%" height="100%" fill="rgba(15,15,25,0.92)" />
+                  {vTicks.map((i) => {
+                    const y = `${(i / slideHeightIn) * 100}%`
+                    return (
+                      <g key={i}>
+                        <line x1="0" y1={y} x2="10" y2={y} stroke="rgba(148,163,184,0.6)" strokeWidth={0.75} />
+                        {i > 0 && i < slideHeightIn && (
+                          <text y={y} x="9" fontSize={7} fill="rgba(148,163,184,0.7)" textAnchor="middle" dominantBaseline="middle" transform={`rotate(-90, 9, ${(i / slideHeightIn) * 100})`}>{i}</text>
+                        )}
+                      </g>
+                    )
+                  })}
+                  {vHalves.map((v) => (
+                    <line key={v} x1="4" y1={`${(v / slideHeightIn) * 100}%`} x2="10" y2={`${(v / slideHeightIn) * 100}%`} stroke="rgba(148,163,184,0.35)" strokeWidth={0.5} />
+                  ))}
+                </svg>
+              </>
+            )
+          })()}
           <div
             ref={containerRef}
             className="absolute inset-0"
             onPointerDown={handleCanvasPointerDown}
             onPointerMove={handleCanvasPointerMove}
             onPointerUp={handleCanvasPointerUp}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
           >
+            {/* drag-over overlay */}
+            {(dragOver || uploading) && (
+              <div className="absolute inset-0 z-[99000] flex items-center justify-center pointer-events-none"
+                style={{ background: "rgba(99,102,241,0.15)", border: "3px dashed rgba(99,102,241,0.8)" }}>
+                <span className="text-indigo-300 text-sm font-semibold bg-black/60 px-4 py-2 rounded-lg">
+                  {uploading ? "Uploading…" : "Drop image to insert"}
+                </span>
+              </div>
+            )}
             {/* slide background — use document background color or white */}
             <div className="absolute inset-0" style={{ background: bgColor ?? "#FFFFFF" }} />
 
@@ -480,6 +585,19 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
             { label: "Bring Forward",   action: () => { const above = sorted[idx + 1]; if (above) changeZ(above.z_index + 0.5); else setCtxMenu(null) }, dim: idx >= sorted.length - 1 },
             { label: "Send Backward",   action: () => { const below = sorted[idx - 1]; if (below) changeZ(below.z_index - 0.5); else setCtxMenu(null) }, dim: idx <= 0 },
             { label: "Send to Back",    action: () => changeZ(minZ - 1), dim: el.z_index === minZ },
+            null,
+            {
+              label: `Select all ${el.type.replace(/^Bridge/, "")}s`,
+              action: () => {
+                const sameType = elements.filter((e) => e.type === el.type)
+                const ids = new Set(sameType.map((e) => e.id))
+                setSelectedIds(ids)
+                onMultiSelect?.(ids)
+                onSelectElement(sameType.length === 1 ? sameType[0] : null)
+                setCtxMenu(null)
+              },
+              dim: elements.filter((e) => e.type === el.type).length <= 1,
+            },
           ]
           return (
             <div
@@ -562,6 +680,30 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
           >
             Snap
           </button>
+          <button
+            onClick={() => setRulerOn((r) => !r)}
+            title="Toggle rulers (R)"
+            className={`px-2 py-0.5 rounded border text-[10px] transition-colors ${
+              rulerOn
+                ? "bg-indigo-500/30 text-indigo-300 border-indigo-500/40"
+                : "bg-white/5 border-edge hover:bg-white/10"
+            }`}
+          >
+            Ruler
+          </button>
+          {onToggleFocusMode && (
+            <button
+              onClick={onToggleFocusMode}
+              title="Toggle focus mode (Ctrl+\)"
+              className={`px-2 py-0.5 rounded border text-[10px] transition-colors ${
+                focusMode
+                  ? "bg-emerald-500/30 text-emerald-300 border-emerald-500/40"
+                  : "bg-white/5 border-edge hover:bg-white/10"
+              }`}
+            >
+              {focusMode ? "⊙ Focus" : "Focus"}
+            </button>
+          )}
           <span className="ml-auto flex items-center gap-1">
             <button
               onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))}

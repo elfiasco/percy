@@ -172,6 +172,28 @@ export default function LayersPanel({
               >
                 {el.locked ? "🔒" : "○"}
               </button>
+
+              {/* z-order quick buttons (visible on hover) */}
+              <div className="hidden group-hover:flex items-center gap-0 shrink-0">
+                <button
+                  onClick={async (e) => {
+                    e.stopPropagation()
+                    const maxZ = Math.max(...elements.map((e) => e.z_index))
+                    if (el.z_index < maxZ) { await updateElementPosition(docId, slideN, el.id, { z_index: maxZ + 1 }); onReorder?.() }
+                  }}
+                  title="Bring to front"
+                  className="text-[9px] text-muted/50 hover:text-slate-200 transition-colors px-0.5"
+                >▲</button>
+                <button
+                  onClick={async (e) => {
+                    e.stopPropagation()
+                    const minZ = Math.min(...elements.map((e) => e.z_index))
+                    if (el.z_index > minZ) { await updateElementPosition(docId, slideN, el.id, { z_index: Math.max(0, minZ - 1) }); onReorder?.() }
+                  }}
+                  title="Send to back"
+                  className="text-[9px] text-muted/50 hover:text-slate-200 transition-colors px-0.5"
+                >▼</button>
+              </div>
             </div>
           )
         })}

@@ -244,6 +244,18 @@ export async function updateElementFlags(
   )
 }
 
+export async function setElementAnimation(
+  docId: string,
+  slideN: number,
+  elementId: string,
+  animation: string,
+): Promise<StudioElement> {
+  return apiFetch<StudioElement>(
+    `${BASE}/docs/${docId}/slides/${slideN}/elements/${encodeURIComponent(elementId)}/animation`,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ animation }) },
+  )
+}
+
 export async function updateElementPosition(
   docId: string,
   slideN: number,
@@ -318,6 +330,7 @@ export interface DocStats {
   total_elements: number
   type_counts: Record<string, number>
   word_count: number
+  notes_word_count: number
 }
 
 export async function fetchDocStats(docId: string): Promise<DocStats> {
@@ -398,6 +411,18 @@ export async function generateSlideContent(
   })
 }
 
+export async function generateFromOutline(
+  docId: string,
+  outline: string,
+  append = true,
+): Promise<{ created: number; slide_count: number; topics: string[] }> {
+  return apiFetch(`${BASE}/docs/${docId}/generate-from-outline`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ outline, append }),
+  })
+}
+
 export interface SlideCommentData {
   id: string
   slide_n: number
@@ -442,6 +467,10 @@ export function notesExportUrl(docId: string): string {
   return `${BASE}/docs/${docId}/notes-export`
 }
 
+export function notesHtmlExportUrl(docId: string): string {
+  return `${BASE}/docs/${docId}/notes-html-export`
+}
+
 export async function fetchColorPalette(docId: string): Promise<{ colors: string[] }> {
   return apiFetch(`${BASE}/docs/${docId}/color-palette`)
 }
@@ -463,7 +492,7 @@ export async function replaceColor(
   })
 }
 
-export async function fetchNotesSummary(docId: string): Promise<{ slides_with_notes: number[] }> {
+export async function fetchNotesSummary(docId: string): Promise<{ slides_with_notes: number[]; word_counts?: Record<string, number> }> {
   return apiFetch(`${BASE}/docs/${docId}/notes-summary`)
 }
 
@@ -487,6 +516,23 @@ export async function setSlideTag(docId: string, n: number, color: string | null
   })
 }
 
+export async function setSlideTransition(
+  docId: string,
+  n: number,
+  transition: string,
+  durationMs = 500,
+): Promise<{ slide_n: number; transition: string; duration_ms: number }> {
+  return apiFetch(`${BASE}/docs/${docId}/slides/${n}/transition`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ transition, duration_ms: durationMs }),
+  })
+}
+
+export async function fetchSlideTransitions(docId: string): Promise<{ transitions: Record<string, { transition: string; duration_ms: number }> }> {
+  return apiFetch(`${BASE}/docs/${docId}/slide-transitions`)
+}
+
 export async function importSlides(
   docId: string,
   file: File,
@@ -507,4 +553,37 @@ export async function setSlideBackgroundImage(
     method: "POST",
     body: form,
   })
+}
+
+export async function setSlideSection(
+  docId: string,
+  slideN: number,
+  sectionName: string | null,
+): Promise<{ slide_n: number; section_name: string | null }> {
+  return apiFetch(`${BASE}/docs/${docId}/slides/${slideN}/section`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ section_name: sectionName }),
+  })
+}
+
+export async function fetchSlideSections(
+  docId: string,
+): Promise<{ sections: Record<string, string> }> {
+  return apiFetch(`${BASE}/docs/${docId}/slide-sections`)
+}
+
+export interface PresentationIssue {
+  slide_n: number
+  type: string
+  severity: "info" | "warning" | "error"
+  message: string
+}
+
+export async function fetchPresentationCheck(docId: string): Promise<{ issues: PresentationIssue[]; slide_count: number; issue_count: number }> {
+  return apiFetch(`${BASE}/docs/${docId}/presentation-check`)
+}
+
+export function exportSlideUrl(docId: string, slideN: number): string {
+  return `${BASE}/docs/${docId}/slides/${slideN}/export-slide`
 }

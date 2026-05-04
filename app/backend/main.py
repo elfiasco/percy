@@ -77,16 +77,26 @@ async def log_requests(request: Request, call_next):
     return response
 
 # ── dirs ──────────────────────────────────────────────────────────────────────
-# Scan both dump_pptx (scraper output) and any manual_dump_pptx folder
-_WORKSPACE_DIRS = [
-    _ROOT / "outreach" / "dump_pptx",
-    _ROOT / "outreach" / "manual_dump_pptx",
-    _ROOT / "outreach" / "downloads",          # legacy / future
-    _ROOT / "outreach" / "tableau",
-]
-_CACHE_DIR   = _ROOT / "outreach" / ".rendercache"
-_REBUILD_DIR = _ROOT / "outreach" / "rebuilt"
-_HISTORY_FILE = _ROOT / "outreach" / ".percy_workspace_history.json"
+# In cloud/container mode (S3_BUCKET set), use ephemeral /tmp paths.
+# Locally, use the legacy outreach/ directory tree.
+_S3_BUCKET = os.environ.get("S3_BUCKET", "")
+if _S3_BUCKET:
+    _WORKSPACE_DIRS = [
+        Path("/tmp/percy/uploads"),
+    ]
+    _CACHE_DIR    = Path("/tmp/percy/.rendercache")
+    _REBUILD_DIR  = Path("/tmp/percy/rebuilt")
+    _HISTORY_FILE = Path("/tmp/percy/.percy_workspace_history.json")
+else:
+    _WORKSPACE_DIRS = [
+        _ROOT / "outreach" / "dump_pptx",
+        _ROOT / "outreach" / "manual_dump_pptx",
+        _ROOT / "outreach" / "downloads",
+        _ROOT / "outreach" / "tableau",
+    ]
+    _CACHE_DIR   = _ROOT / "outreach" / ".rendercache"
+    _REBUILD_DIR = _ROOT / "outreach" / "rebuilt"
+    _HISTORY_FILE = _ROOT / "outreach" / ".percy_workspace_history.json"
 _LARGE_PDF_BYTES = 50 * 1024 * 1024
 _LARGE_PDF_PAGES = 40
 
@@ -2925,9 +2935,17 @@ def export_html_slideshow(doc_id: str):
 
     stem = Path(d.get("name", "presentation")).stem
 
+    # Build HTML — include per-slide transition metadata
+    slide_transitions_map: dict[int, str] = {}
+    for slide in doc.slides:
+        cp = getattr(slide, "custom_properties", None) or {}
+        t = cp.get("transition", "none")
+        if t and t != "none":
+            slide_transitions_map[slide.slide_number] = t
+
     # Build HTML
     slides_js = ",\n".join(
-        f'{{n:{n}, title:{json.dumps(t)}, src:"data:image/png;base64,{b64}"}}'
+        f'{{n:{n}, title:{json.dumps(t)}, src:"data:image/png;base64,{b64}", transition:{json.dumps(slide_transitions_map.get(n, "fade"))}}}'
         for n, t, b64 in slides_data
     )
 
@@ -2941,7 +2959,8 @@ def export_html_slideshow(doc_id: str):
   *{{ box-sizing:border-box; margin:0; padding:0 }}
   body{{ background:#111; color:#eee; font-family:system-ui,sans-serif; height:100vh; overflow:hidden }}
   #stage{{ width:100vw; height:100vh; display:flex; align-items:center; justify-content:center; position:relative }}
-  #slide-img{{ max-width:100%; max-height:100%; object-fit:contain; display:block; user-select:none }}
+  #slide-img{{ max-width:100%; max-height:100%; object-fit:contain; display:block; user-select:none;
+               transition: opacity 0.18s ease, transform 0.18s ease }}
   #controls{{ position:fixed; bottom:16px; left:50%; transform:translateX(-50%);
               display:flex; gap:8px; align-items:center; background:rgba(0,0,0,0.6);
               padding:6px 12px; border-radius:999px; backdrop-filter:blur(4px) }}
@@ -2983,14 +3002,40 @@ if (slides.length <= 30) {{
   }});
 }}
 
+let transitioning = false;
 function go(n) {{
-  cur = Math.max(0, Math.min(slides.length-1, n));
-  img.src = slides[cur].src;
-  ctr.textContent = (cur+1) + ' / ' + slides.length;
-  ttl.textContent = slides[cur].title;
-  document.getElementById('prev').disabled = cur === 0;
-  document.getElementById('next').disabled = cur === slides.length-1;
-  document.querySelectorAll('.dot').forEach((d,i) => d.classList.toggle('active', i===cur));
+  const target = Math.max(0, Math.min(slides.length-1, n));
+  if (target === cur || transitioning) return;
+  const dir = target > cur ? 1 : -1;
+  const t = slides[target].transition || 'fade';
+  transitioning = true;
+  // exit animation
+  if (t === 'fade') {{ img.style.opacity = '0'; }}
+  else if (t === 'slide') {{ img.style.transform = `translateX(${{dir * -8}}%)`; img.style.opacity = '0'; }}
+  else if (t === 'zoom') {{ img.style.transform = 'scale(0.93)'; img.style.opacity = '0'; }}
+  else {{ img.style.opacity = '0'; }}
+  setTimeout(() => {{
+    cur = target;
+    img.src = slides[cur].src;
+    ctr.textContent = (cur+1) + ' / ' + slides.length;
+    ttl.textContent = slides[cur].title;
+    document.getElementById('prev').disabled = cur === 0;
+    document.getElementById('next').disabled = cur === slides.length-1;
+    document.querySelectorAll('.dot').forEach((d,i) => d.classList.toggle('active', i===cur));
+    // enter: reset style first (no transition), then animate in
+    img.style.transition = 'none';
+    if (t === 'slide') {{ img.style.transform = `translateX(${{dir * 8}}%)`; }}
+    else {{ img.style.transform = 'none'; }}
+    img.style.opacity = '0';
+    requestAnimationFrame(() => {{
+      requestAnimationFrame(() => {{
+        img.style.transition = 'opacity 0.18s ease, transform 0.18s ease';
+        img.style.opacity = '1';
+        img.style.transform = 'none';
+        setTimeout(() => {{ transitioning = false; }}, 200);
+      }});
+    }});
+  }}, 180);
 }}
 
 document.addEventListener('keydown', e => {{
@@ -3153,6 +3198,7 @@ def _serialize_element(el: Any, index: int, slide_w: float, slide_h: float) -> d
         "z_index":     z_index,
         "locked":      bool(custom.get("studio_locked", False)),
         "hidden":      bool(custom.get("studio_hidden", False)),
+        "animation":   custom.get("studio_animation", "none"),
     }
 
 
@@ -3449,6 +3495,115 @@ def set_slide_tag(doc_id: str, n: int, req: SlideTagUpdate):
     return {"slide_n": n, "tag_color": req.color}
 
 
+# ── Slide transition metadata ──────────────────────────────────────────────────
+
+VALID_TRANSITIONS = {"none", "fade", "slide", "zoom", "flip", "push", "wipe", "dissolve"}
+
+
+class SlideTransitionUpdate(BaseModel):
+    transition: str = "none"   # must be one of VALID_TRANSITIONS
+    duration_ms: int = 500     # animation duration in milliseconds
+
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/transition")
+def set_slide_transition(doc_id: str, n: int, req: SlideTransitionUpdate):
+    """Set the transition animation for slide n."""
+    if req.transition not in VALID_TRANSITIONS:
+        raise HTTPException(400, f"Unknown transition {req.transition!r}. Valid: {sorted(VALID_TRANSITIONS)}")
+    d = _require(doc_id)
+    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+    if not hasattr(slide, "custom_properties") or slide.custom_properties is None:
+        slide.custom_properties = {}
+    slide.custom_properties["transition"] = req.transition
+    slide.custom_properties["transition_duration_ms"] = req.duration_ms
+    return {"slide_n": n, "transition": req.transition, "duration_ms": req.duration_ms}
+
+
+class SlideSectionUpdate(BaseModel):
+    section_name: str = ""   # empty string removes the section header
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/section")
+def set_slide_section(doc_id: str, n: int, req: SlideSectionUpdate):
+    """Set or clear a section name on a slide (shown as a divider in the slide strip)."""
+    d = _require(doc_id)
+    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+    if not hasattr(slide, "custom_properties") or slide.custom_properties is None:
+        slide.custom_properties = {}
+    if req.section_name.strip():
+        slide.custom_properties["section_name"] = req.section_name.strip()
+    else:
+        slide.custom_properties.pop("section_name", None)
+    return {"slide_n": n, "section_name": req.section_name.strip()}
+
+
+@app.get("/api/docs/{doc_id}/slide-sections")
+def get_slide_sections(doc_id: str):
+    """Return section names keyed by slide number."""
+    d = _require(doc_id)
+    result: dict[str, str] = {}
+    for slide in d["doc"].slides:
+        cp = getattr(slide, "custom_properties", None) or {}
+        name = cp.get("section_name", "")
+        if name:
+            result[str(slide.slide_number)] = name
+    return {"sections": result}
+
+
+@app.get("/api/docs/{doc_id}/slide-transitions")
+def get_slide_transitions(doc_id: str):
+    """Return transitions and durations for all slides that have them set."""
+    d = _require(doc_id)
+    result: dict[str, dict] = {}
+    for slide in d["doc"].slides:
+        cp = getattr(slide, "custom_properties", None) or {}
+        t = cp.get("transition", "none")
+        dur = cp.get("transition_duration_ms", 500)
+        if t and t != "none":
+            result[str(slide.slide_number)] = {"transition": t, "duration_ms": dur}
+    return {"transitions": result}
+
+
+@app.get("/api/docs/{doc_id}/slides/{n}/export-slide")
+def export_single_slide(doc_id: str, n: int):
+    """Export a single slide as its own PPTX file by rebuilding only that slide."""
+    import traceback as _tb
+    import copy as _copy
+    d = _require(doc_id)
+    if d.get("source_format") != "pptx":
+        raise HTTPException(400, "Slide export is only supported for PPTX documents")
+    if n < 1 or n > len(d["doc"].slides):
+        raise HTTPException(404, f"Slide {n} not found")
+
+    _REBUILD_DIR.mkdir(parents=True, exist_ok=True)
+    stem     = Path(d["name"]).stem
+    out_path = _REBUILD_DIR / f"{stem}_{doc_id}_slide{n}.pptx"
+
+    try:
+        # Build a single-slide document subset and rebuild it
+        single_doc = _copy.deepcopy(d["doc"])
+        target_slide = next((s for s in single_doc.slides if s.slide_number == n), None)
+        if target_slide is None:
+            raise HTTPException(404, f"Slide {n} not found in document")
+        single_doc.slides = [target_slide]
+        target_slide.slide_number = 1
+        _rebuild_pptx(single_doc, out_path)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, detail=f"Slide export failed: {exc}\n{_tb.format_exc()}")
+
+    return FileResponse(
+        str(out_path),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=f"{stem}_slide{n}.pptx",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.get("/api/docs/{doc_id}/notes-export")
 def export_all_notes(doc_id: str):
     """Export all slides' speaker notes as a plain-text download."""
@@ -3472,16 +3627,85 @@ def export_all_notes(doc_id: str):
     )
 
 
+@app.get("/api/docs/{doc_id}/notes-html-export")
+def export_notes_html(doc_id: str):
+    """Export all slides' speaker notes as a styled HTML document."""
+    from fastapi.responses import HTMLResponse
+
+    d = _require(doc_id)
+    doc = d["doc"]
+    stem = Path(d.get("name", "notes")).stem
+
+    def _slide_title(slide: Any) -> str:
+        for el in slide.elements:
+            tf = getattr(el, "text_frame", None) or getattr(el, "body", None)
+            if tf:
+                paras = getattr(tf, "paragraphs", []) or []
+                if paras:
+                    txt = "".join(r.text for r in (getattr(paras[0], "runs", []) or []))
+                    if txt.strip():
+                        return txt.strip()[:80]
+        return ""
+
+    slide_items: list[tuple[int, str, str]] = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        cp    = getattr(slide, "custom_properties", None) or {}
+        note  = cp.get("notes_text", "").strip()
+        title = _slide_title(slide)
+        slide_items.append((slide.slide_number, title, note))
+
+    rows = ""
+    for n, title, note in slide_items:
+        if not note:
+            continue
+        note_html = "<br>".join(line or "&nbsp;" for line in note.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").split("\n"))
+        rows += f"""
+        <div class="slide">
+          <h2>Slide {n}{f" — {title}" if title else ""}</h2>
+          <div class="notes">{note_html}</div>
+        </div>"""
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{stem} — Speaker Notes</title>
+<style>
+  body {{ font-family: Georgia, serif; max-width: 800px; margin: 40px auto; padding: 0 20px;
+         color: #1e293b; line-height: 1.6; }}
+  h1   {{ font-size: 1.4em; color: #334155; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; }}
+  .slide {{ margin: 2em 0; padding: 1.5em; border: 1px solid #e2e8f0; border-radius: 8px;
+            break-inside: avoid; }}
+  h2   {{ font-size: 1em; color: #3b82f6; margin: 0 0 0.8em; }}
+  .notes {{ font-size: 0.95em; color: #374151; }}
+  @media print {{ body {{ margin: 0; }} .slide {{ border-color: #ccc; }} }}
+</style>
+</head>
+<body>
+<h1>Speaker Notes — {stem}</h1>
+{rows or "<p><em>No speaker notes found.</em></p>"}
+</body>
+</html>"""
+
+    return HTMLResponse(
+        content=html,
+        headers={"Content-Disposition": f'attachment; filename="{stem}_notes.html"'},
+    )
+
+
 @app.get("/api/docs/{doc_id}/notes-summary")
 def notes_summary(doc_id: str):
-    """Return a list of slide numbers that have non-empty speaker notes."""
+    """Return a list of slide numbers that have non-empty speaker notes, plus word counts."""
     d = _require(doc_id)
     slides_with_notes: list[int] = []
+    word_counts: dict[str, int] = {}
     for slide in d["doc"].slides:
         cp = getattr(slide, "custom_properties", None) or {}
-        if cp.get("notes_text", "").strip():
+        text = cp.get("notes_text", "").strip()
+        if text:
             slides_with_notes.append(slide.slide_number)
-    return {"slides_with_notes": slides_with_notes}
+            word_counts[str(slide.slide_number)] = len(text.split())
+    return {"slides_with_notes": slides_with_notes, "word_counts": word_counts}
 
 
 @app.post("/api/docs/{doc_id}/import-slides")
@@ -3688,6 +3912,21 @@ def align_elements(doc_id: str, n: int, req: AlignElementsRequest):
             for top_val, (e, _) in sorted_pairs:
                 e.position.top = cursor
                 cursor += e.position.height + gap
+    elif a == "match_width":
+        # Make all elements the same width as the first/largest element
+        target_w = max(widths)
+        for (e, _) in els:
+            e.position.width = target_w
+    elif a == "match_height":
+        target_h = max(heights)
+        for (e, _) in els:
+            e.position.height = target_h
+    elif a == "match_size":
+        target_w = max(widths)
+        target_h = max(heights)
+        for (e, _) in els:
+            e.position.width = target_w
+            e.position.height = target_h
     else:
         raise HTTPException(400, f"Unknown alignment: {req.alignment!r}")
 
@@ -3828,6 +4067,36 @@ def update_element_flags(doc_id: str, n: int, element_id: str, req: ElementFlags
     if req.locked is not None: custom["studio_locked"] = req.locked
     if req.hidden is not None: custom["studio_hidden"] = req.hidden
 
+    w, h = _get_slide_dims(doc, slide)
+    return _serialize_element(el, el_index, w, h)
+
+
+_VALID_ANIMATIONS = {"none", "fade-in", "slide-left", "slide-right", "slide-up", "slide-down", "zoom-in", "bounce"}
+
+class ElementAnimationUpdate(BaseModel):
+    animation: str = "none"
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/animation")
+def set_element_animation(doc_id: str, n: int, element_id: str, req: ElementAnimationUpdate):
+    """Set entrance animation for an element (used in HTML export)."""
+    if req.animation not in _VALID_ANIMATIONS:
+        raise HTTPException(400, f"Invalid animation {req.animation!r}. Valid: {sorted(_VALID_ANIMATIONS)}")
+    d    = _require(doc_id)
+    doc  = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
+    el = el_index = None
+    for i, e in enumerate(slide.elements):
+        if _element_id(e, i) == element_id:
+            el, el_index = e, i
+            break
+    if el is None:
+        raise HTTPException(404, f"Element {element_id!r} not found on slide {n}")
+    custom = getattr(el, "custom_properties", None)
+    if custom is None:
+        raise HTTPException(400, "Element does not support custom_properties")
+    custom["studio_animation"] = req.animation
     w, h = _get_slide_dims(doc, slide)
     return _serialize_element(el, el_index, w, h)
 
@@ -4084,6 +4353,30 @@ _LAYOUT_PRESETS: dict[str, list[dict]] = {
         {"shape_type": "rect", "label": "Box 1", "left_in": 0.5, "top_in": 1.5, "width_in": 3.7, "height_in": 5.0, "fill_color": "#3B82F6"},
         {"shape_type": "rect", "label": "Box 2", "left_in": 4.8, "top_in": 1.5, "width_in": 3.7, "height_in": 5.0, "fill_color": "#8B5CF6"},
         {"shape_type": "rect", "label": "Box 3", "left_in": 9.1, "top_in": 1.5, "width_in": 3.7, "height_in": 5.0, "fill_color": "#EC4899"},
+    ],
+    "big-quote": [
+        {"shape_type": "text_box", "label": "Quote Mark", "left_in": 1.0, "top_in": 0.8, "width_in": 2.0, "height_in": 2.0},
+        {"shape_type": "text_box", "label": "Quote Text", "left_in": 1.0, "top_in": 2.3, "width_in": 11.33, "height_in": 3.0},
+        {"shape_type": "text_box", "label": "Attribution", "left_in": 5.0, "top_in": 5.7, "width_in": 7.33, "height_in": 0.8},
+    ],
+    "image-text": [
+        {"shape_type": "text_box", "label": "Title", "left_in": 0.5, "top_in": 0.4, "width_in": 12.33, "height_in": 0.8},
+        {"shape_type": "rect", "label": "Image Placeholder", "left_in": 0.5, "top_in": 1.5, "width_in": 5.9, "height_in": 5.5, "fill_color": "#1E293B"},
+        {"shape_type": "text_box", "label": "Body Text", "left_in": 6.93, "top_in": 1.5, "width_in": 5.9, "height_in": 5.5},
+    ],
+    "comparison": [
+        {"shape_type": "text_box", "label": "Title", "left_in": 0.5, "top_in": 0.3, "width_in": 12.33, "height_in": 0.7},
+        {"shape_type": "rect", "label": "Left Header", "left_in": 0.5, "top_in": 1.2, "width_in": 5.9, "height_in": 0.6, "fill_color": "#3B82F6"},
+        {"shape_type": "text_box", "label": "Left Points", "left_in": 0.5, "top_in": 2.0, "width_in": 5.9, "height_in": 5.0},
+        {"shape_type": "rect", "label": "Right Header", "left_in": 6.93, "top_in": 1.2, "width_in": 5.9, "height_in": 0.6, "fill_color": "#EC4899"},
+        {"shape_type": "text_box", "label": "Right Points", "left_in": 6.93, "top_in": 2.0, "width_in": 5.9, "height_in": 5.0},
+    ],
+    "four-quadrants": [
+        {"shape_type": "text_box", "label": "Title", "left_in": 0.5, "top_in": 0.3, "width_in": 12.33, "height_in": 0.7},
+        {"shape_type": "rect", "label": "Q1", "left_in": 0.5, "top_in": 1.2, "width_in": 5.9, "height_in": 2.7, "fill_color": "#1E293B"},
+        {"shape_type": "rect", "label": "Q2", "left_in": 6.93, "top_in": 1.2, "width_in": 5.9, "height_in": 2.7, "fill_color": "#1E293B"},
+        {"shape_type": "rect", "label": "Q3", "left_in": 0.5, "top_in": 4.1, "width_in": 5.9, "height_in": 2.8, "fill_color": "#1E293B"},
+        {"shape_type": "rect", "label": "Q4", "left_in": 6.93, "top_in": 4.1, "width_in": 5.9, "height_in": 2.8, "fill_color": "#1E293B"},
     ],
 }
 
@@ -4617,6 +4910,7 @@ def get_doc_stats(doc_id: str):
     doc = d["doc"]
     type_counts: dict[str, int] = {}
     word_count = 0
+    notes_word_count = 0
     for slide in doc.slides:
         for el in slide.elements:
             et = getattr(el, "element_type", "Unknown")
@@ -4624,11 +4918,15 @@ def get_doc_stats(doc_id: str):
             plain = _element_plain_text(el)
             if plain.strip():
                 word_count += len(plain.split())
+        notes_text = (slide.custom_properties or {}).get("notes_text", "")
+        if notes_text.strip():
+            notes_word_count += len(notes_text.split())
     return {
-        "slide_count":  len(doc.slides),
-        "total_elements": sum(type_counts.values()),
-        "type_counts":  type_counts,
-        "word_count":   word_count,
+        "slide_count":       len(doc.slides),
+        "total_elements":    sum(type_counts.values()),
+        "type_counts":       type_counts,
+        "word_count":        word_count,
+        "notes_word_count":  notes_word_count,
     }
 
 
@@ -5438,6 +5736,130 @@ def generate_slide(doc_id: str, req: GenerateSlideRequest):
     return {"elements": created, "prompt": req.prompt}
 
 
+# ── Bulk generate slides from outline ─────────────────────────────────────────
+
+class GenerateFromOutlineRequest(BaseModel):
+    outline: str          # newline-separated topics; one slide per line (or per blank-line-separated section)
+    append: bool = True   # True → add slides after last; False → replace all slides
+
+
+@app.post("/api/docs/{doc_id}/generate-from-outline")
+def generate_from_outline(doc_id: str, req: GenerateFromOutlineRequest):
+    """Use Claude to generate one slide per line of the given outline text.
+
+    Each non-empty line becomes a slide prompt and Claude fills in content.
+    Returns the number of slides created.
+    """
+    import anthropic as _anthropic
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    # Parse outline into individual slide topics
+    lines = [l.strip().lstrip("•-*1234567890.) ") for l in req.outline.splitlines()]
+    topics = [l for l in lines if l]
+    if not topics:
+        raise HTTPException(400, "Outline is empty or has no valid lines")
+    if len(topics) > 25:
+        raise HTTPException(400, "Outline may not exceed 25 slides at a time")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    from percy.bridge.elements import (  # type: ignore[attr-defined]
+        BridgeSlide, BridgeShape, Position, Transform, Stacking, Identification, Accessibility,
+        ShapeIdentification, ShapeFill, ShapeLine, ShapeShadow,
+        ShapeTextContent, ShapeTextFrame, ShapeBorders, TextParagraph, TextRun,
+    )
+
+    _snapshot_doc(doc_id)
+
+    existing_max = max((s.slide_number for s in doc.slides), default=0) if req.append else 0
+
+    system = (
+        "You are a presentation content designer. The slide is 13.33\" × 7.5\".\n"
+        "Given a slide topic, respond with ONLY a JSON array of text elements to place on the slide.\n"
+        "Each element: {\"label\": str, \"text\": str, \"left_in\": float, \"top_in\": float, \"width_in\": float, \"height_in\": float}\n"
+        "Create 2-4 elements: a title near top, and content body below. Keep text concise.\n"
+        "Respond with ONLY the JSON array, no other text."
+    )
+    client = _anthropic.Anthropic(api_key=api_key)
+
+    created_slides = 0
+    for idx, topic in enumerate(topics):
+        slide_n = existing_max + idx + 1 if req.append else idx + 1
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            system=system,
+            messages=[{"role": "user", "content": topic}],
+        )
+        raw = resp.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = "\n".join(raw.split("\n")[1:])
+            if raw.endswith("```"):
+                raw = raw[:-3]
+        try:
+            specs = json.loads(raw)
+        except Exception:
+            specs = [{"label": "Title", "text": topic, "left_in": 0.5, "top_in": 2.5, "width_in": 12.33, "height_in": 1.5}]
+
+        # Create the slide in the Bridge doc
+        new_slide = BridgeSlide(
+            slide_number=slide_n,
+            width=13.333,
+            height=7.5,
+            elements=[],
+        )
+
+        max_id = 0; max_z = 0
+        for spec in specs:
+            max_id += 1; max_z += 1
+            is_text_box = True
+            el = BridgeShape(
+                position=Position(
+                    left=float(spec.get("left_in", 0.5)),
+                    top=float(spec.get("top_in", 0.5)),
+                    width=float(spec.get("width_in", 12.33)),
+                    height=float(spec.get("height_in", 1.5)),
+                ),
+                transforms=Transform(),
+                stacking=Stacking(z_index=max_z),
+                identification=Identification(shape_id=max_id, shape_name=spec.get("label", "Text")),
+                accessibility=Accessibility(alt_text=spec.get("label", "")),
+                shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+                fill=ShapeFill(fill_type="none"),
+                line=ShapeLine(visible=False),
+                shadow=ShapeShadow(),
+                text_content=ShapeTextContent(
+                    has_text=True,
+                    paragraphs=[TextParagraph(runs=[TextRun(text=line)])
+                                 for line in str(spec.get("text", "")).split("\n")],
+                ),
+                text_frame=ShapeTextFrame(),
+                borders=ShapeBorders(),
+            )
+            new_slide.elements.append(el)
+
+        if req.append:
+            doc.slides.append(new_slide)
+        else:
+            # Replace slide at idx
+            while len(doc.slides) <= idx:
+                doc.slides.append(BridgeSlide(slide_number=len(doc.slides)+1, width=13.333, height=7.5, elements=[]))
+            doc.slides[idx] = new_slide
+
+        created_slides += 1
+
+    # Re-number all slides sequentially
+    for i, s in enumerate(sorted(doc.slides, key=lambda s: s.slide_number)):
+        s.slide_number = i + 1
+
+    d["slide_count"] = len(doc.slides)
+    log.info("generate-from-outline: created %d slides for %s", created_slides, doc_id)
+    return {"created": created_slides, "slide_count": len(doc.slides), "topics": topics}
+
+
 # ── slide comments ─────────────────────────────────────────────────────────────
 
 class SlideComment(BaseModel):
@@ -5502,6 +5924,51 @@ def delete_comment(doc_id: str, comment_id: str):
     if len(d["comments"]) == before:
         raise HTTPException(404, f"Comment {comment_id!r} not found")
     return {"ok": True, "deleted": comment_id}
+
+
+@app.get("/api/docs/{doc_id}/presentation-check")
+def presentation_check(doc_id: str):
+    """Run a quality check on the presentation and return a list of issues."""
+    d = _require(doc_id)
+    doc = d["doc"]
+    issues = []
+    for slide in doc.slides:
+        n = slide.slide_number
+        cp = getattr(slide, "custom_properties", None) or {}
+        notes = cp.get("notes_text", "").strip()
+        elements = slide.elements
+
+        # Check: no notes
+        if not notes:
+            issues.append({"slide_n": n, "type": "no_notes", "severity": "info",
+                           "message": f"Slide {n} has no speaker notes"})
+
+        # Check: no visible text
+        has_text = any(
+            getattr(el, "element_type", "") in ("BridgeText", "BridgeShape")
+            and _element_plain_text(el).strip()
+            for el in elements
+        )
+        if not elements or not has_text:
+            issues.append({"slide_n": n, "type": "no_text", "severity": "warning",
+                           "message": f"Slide {n} has no text content"})
+
+        # Check: too many elements (cluttered)
+        visible = [el for el in elements if not (getattr(el, "custom_properties", None) or {}).get("studio_hidden")]
+        if len(visible) > 12:
+            issues.append({"slide_n": n, "type": "too_many_elements", "severity": "info",
+                           "message": f"Slide {n} has {len(visible)} elements (may be cluttered)"})
+
+        # Check: images without alt text (name is default placeholder)
+        for el in elements:
+            if getattr(el, "element_type", "") == "BridgeImage":
+                name = getattr(el, "name", "") or ""
+                if not name or name.lower().startswith(("picture", "image", "placeholder")):
+                    issues.append({"slide_n": n, "type": "missing_alt_text", "severity": "info",
+                                   "message": f"Slide {n} has an image with no descriptive name (accessibility)"})
+                    break
+
+    return {"issues": issues, "slide_count": len(doc.slides), "issue_count": len(issues)}
 
 
 # ── serve built frontend in production ────────────────────────────────────────

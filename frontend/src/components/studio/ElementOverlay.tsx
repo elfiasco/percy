@@ -125,8 +125,8 @@ export default function ElementOverlay({
       l = Math.max(0, Math.min(100 - w, l + dxPct))
       t = Math.max(0, Math.min(100 - h, t + dyPct))
 
-      // snap to other element edges/centers when snap is enabled
-      if (snapEnabled && otherElements && otherElements.length > 0 && !isMultiSelected) {
+      // snap to other element edges/centers + slide guides when snap is enabled
+      if (snapEnabled && !isMultiSelected) {
         const THRESH = 1.0  // percent
         const elRight  = l + w
         const elCenterX = l + w / 2
@@ -136,27 +136,49 @@ export default function ElementOverlay({
         let bestDx = THRESH + 1
         let bestDy = THRESH + 1
 
-        for (const other of otherElements) {
-          const oL = other.left_pct, oT = other.top_pct
-          const oR = oL + other.width_pct, oB = oT + other.height_pct
-          const oCX = oL + other.width_pct / 2, oCY = oT + other.height_pct / 2
-
-          // X axis: snap left/right/center to other's left/right/center
+        // Snap to slide center lines and thirds
+        const slideGuideX = [50, 100/3, 200/3]
+        const slideGuideY = [50, 100/3, 200/3]
+        for (const gx of slideGuideX) {
           for (const selfX of [l, elRight, elCenterX]) {
-            for (const otherX of [oL, oR, oCX]) {
-              const d = Math.abs(selfX - otherX)
-              if (d < THRESH && d < Math.abs(bestDx)) {
-                bestDx = selfX === l ? otherX - l : selfX === elRight ? otherX - elRight : otherX - elCenterX
-              }
+            const d = Math.abs(selfX - gx)
+            if (d < THRESH && d < Math.abs(bestDx)) {
+              bestDx = selfX === l ? gx - l : selfX === elRight ? gx - elRight : gx - elCenterX
             }
           }
-
-          // Y axis
+        }
+        for (const gy of slideGuideY) {
           for (const selfY of [t, elBottom, elCenterY]) {
-            for (const otherY of [oT, oB, oCY]) {
-              const d = Math.abs(selfY - otherY)
-              if (d < THRESH && d < Math.abs(bestDy)) {
-                bestDy = selfY === t ? otherY - t : selfY === elBottom ? otherY - elBottom : otherY - elCenterY
+            const d = Math.abs(selfY - gy)
+            if (d < THRESH && d < Math.abs(bestDy)) {
+              bestDy = selfY === t ? gy - t : selfY === elBottom ? gy - elBottom : gy - elCenterY
+            }
+          }
+        }
+
+        if (otherElements && otherElements.length > 0) {
+          for (const other of otherElements) {
+            const oL = other.left_pct, oT = other.top_pct
+            const oR = oL + other.width_pct, oB = oT + other.height_pct
+            const oCX = oL + other.width_pct / 2, oCY = oT + other.height_pct / 2
+
+            // X axis: snap left/right/center to other's left/right/center
+            for (const selfX of [l, elRight, elCenterX]) {
+              for (const otherX of [oL, oR, oCX]) {
+                const d = Math.abs(selfX - otherX)
+                if (d < THRESH && d < Math.abs(bestDx)) {
+                  bestDx = selfX === l ? otherX - l : selfX === elRight ? otherX - elRight : otherX - elCenterX
+                }
+              }
+            }
+
+            // Y axis
+            for (const selfY of [t, elBottom, elCenterY]) {
+              for (const otherY of [oT, oB, oCY]) {
+                const d = Math.abs(selfY - otherY)
+                if (d < THRESH && d < Math.abs(bestDy)) {
+                  bestDy = selfY === t ? otherY - t : selfY === elBottom ? otherY - elBottom : otherY - elCenterY
+                }
               }
             }
           }
@@ -209,13 +231,13 @@ export default function ElementOverlay({
       const GUIDE_THRESH = 0.8
       const cx = l + w / 2, cy = t + h / 2
       const r = l + w, b = t + h
-      // Slide edge/center guides
-      for (const xPos of [0, 50, 100]) {
+      // Slide edge/center/thirds guides
+      for (const xPos of [0, 100/3, 50, 200/3, 100]) {
         for (const self of [l, cx, r]) {
           if (Math.abs(self - xPos) < GUIDE_THRESH) { guides.push({ type: "v", pos: xPos }); break }
         }
       }
-      for (const yPos of [0, 50, 100]) {
+      for (const yPos of [0, 100/3, 50, 200/3, 100]) {
         for (const self of [t, cy, b]) {
           if (Math.abs(self - yPos) < GUIDE_THRESH) { guides.push({ type: "h", pos: yPos }); break }
         }

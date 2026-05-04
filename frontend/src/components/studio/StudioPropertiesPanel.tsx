@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import type { StudioElement, ElementStyleData } from "../../lib/studioTypes"
-import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, setAllSlidesBackground, setGradientBackground, replaceImage, fetchThemeColors, fetchDocStats, setSlideBackgroundImage, bulkUpdateStyle } from "../../lib/studioApi"
+import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, setAllSlidesBackground, setGradientBackground, replaceImage, fetchThemeColors, fetchDocStats, setSlideBackgroundImage, bulkUpdateStyle, setSlideTransition, fetchSlideTransitions, setElementAnimation } from "../../lib/studioApi"
 import type { DocStats } from "../../lib/studioApi"
 import StudioTextPanel from "./StudioTextPanel"
 
@@ -257,6 +257,36 @@ function PositionTab({ element, docId, slideN, onCommit }: PositionTabProps) {
           }}
         />
       </FieldRow>
+
+      <SectionHead title="Entrance Animation" />
+      <div className="flex flex-wrap gap-1 mt-1">
+        {(["none","fade-in","slide-left","slide-right","slide-up","slide-down","zoom-in","bounce"] as const).map((anim) => {
+          const ANIM_ICONS: Record<string, string> = {
+            "none": "—", "fade-in": "◌", "slide-left": "←", "slide-right": "→",
+            "slide-up": "↑", "slide-down": "↓", "zoom-in": "⊕", "bounce": "⬍",
+          }
+          return (
+            <button
+              key={anim}
+              onClick={async () => {
+                try {
+                  await setElementAnimation(docId, slideN, element.id, anim)
+                  onCommit()
+                } catch (e) { console.error("set animation failed:", e) }
+              }}
+              className={`text-[10px] px-1.5 py-0.5 rounded border capitalize transition-colors flex items-center gap-0.5 ${
+                (element.animation ?? "none") === anim
+                  ? "bg-violet-500/30 text-violet-300 border-violet-500/40"
+                  : "bg-white/5 text-muted border-edge hover:bg-white/10 hover:text-slate-300"
+              }`}
+              title={`${anim} entrance animation (used in HTML export)`}
+            >
+              <span className="text-[9px] opacity-70">{ANIM_ICONS[anim] ?? "·"}</span>
+              {anim === "none" ? "none" : anim.replace("-", " ")}
+            </button>
+          )
+        })}
+      </div>
 
       <SectionHead title="Info" />
       <FieldRow label="Type">
@@ -568,6 +598,8 @@ const TYPE_ICON_MAP: Record<string, string> = {
 
 interface GradStop { color: string; position: number }
 
+const TRANSITIONS = ["none","fade","slide","zoom","flip","push","wipe","dissolve"] as const
+
 function SlidePropertiesPanel({ docId, slideN, onCommit }: { docId: string; slideN: number; onCommit: () => void }) {
   const [bgColor, setBgColor]     = useState("#FFFFFF")
   const [saving, setSaving]       = useState(false)
@@ -577,6 +609,7 @@ function SlidePropertiesPanel({ docId, slideN, onCommit }: { docId: string; slid
   const [stats, setStats]         = useState<DocStats | null>(null)
   const [gradStops, setGradStops] = useState<GradStop[]>([{ color: "#4472C4", position: 0 }, { color: "#1a1a2e", position: 1 }])
   const [gradAngle, setGradAngle] = useState(90)
+  const [slideTransition, setSlideTransition_] = useState("none")
 
   useEffect(() => {
     fetchThemeColors(docId)
@@ -585,7 +618,19 @@ function SlidePropertiesPanel({ docId, slideN, onCommit }: { docId: string; slid
     fetchDocStats(docId)
       .then(setStats)
       .catch(() => {})
-  }, [docId])
+    fetchSlideTransitions(docId)
+      .then((r) => {
+        const t = r.transitions[String(slideN)]?.transition ?? "none"
+        setSlideTransition_(t)
+      })
+      .catch(() => {})
+  }, [docId, slideN])
+
+  const applyTransition = useCallback(async (t: string) => {
+    setSlideTransition_(t)
+    try { await setSlideTransition(docId, slideN, t) }
+    catch (e) { console.error("transition update failed:", e) }
+  }, [docId, slideN])
 
   const applyBg = useCallback(async (color: string | null) => {
     setSaving(true)
@@ -642,6 +687,29 @@ function SlidePropertiesPanel({ docId, slideN, onCommit }: { docId: string; slid
 
       {/* Gradient background */}
       <SectionHead title="Gradient Background" />
+      {/* Quick presets */}
+      <div className="flex flex-wrap gap-1 mb-2">
+        {[
+          { label: "Indigo", stops: [{ color: "#312e81", position: 0 }, { color: "#1e1b4b", position: 1 }], angle: 135 },
+          { label: "Sunset", stops: [{ color: "#f97316", position: 0 }, { color: "#ec4899", position: 1 }], angle: 120 },
+          { label: "Ocean",  stops: [{ color: "#0ea5e9", position: 0 }, { color: "#6366f1", position: 1 }], angle: 135 },
+          { label: "Forest", stops: [{ color: "#166534", position: 0 }, { color: "#14532d", position: 1 }], angle: 160 },
+          { label: "Rose",   stops: [{ color: "#be185d", position: 0 }, { color: "#9d174d", position: 1 }], angle: 135 },
+          { label: "Slate",  stops: [{ color: "#1e293b", position: 0 }, { color: "#0f172a", position: 1 }], angle: 180 },
+          { label: "Gold",   stops: [{ color: "#ca8a04", position: 0 }, { color: "#92400e", position: 1 }], angle: 135 },
+          { label: "Teal",   stops: [{ color: "#0d9488", position: 0 }, { color: "#115e59", position: 1 }], angle: 135 },
+        ].map((p) => (
+          <button
+            key={p.label}
+            title={p.label}
+            onClick={() => { setGradStops(p.stops); setGradAngle(p.angle) }}
+            className="text-[9px] px-1.5 py-0.5 rounded border border-edge text-muted hover:text-slate-200 transition-colors"
+            style={{ background: `linear-gradient(${p.angle}deg, ${p.stops.map((s) => `${s.color} ${s.position * 100}%`).join(", ")})` }}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
       <div className="space-y-1 mb-2">
         {gradStops.map((stop, idx) => (
           <div key={idx} className="flex items-center gap-1.5">
@@ -739,6 +807,31 @@ function SlidePropertiesPanel({ docId, slideN, onCommit }: { docId: string; slid
         {bgImgUploading ? "Uploading…" : "🖼 Upload Background Image"}
       </button>
       <p className="text-[10px] text-muted/60 mt-1">Fills slide; becomes bottom-most element</p>
+
+      {/* Slide transition */}
+      <SectionHead title="Slide Transition" />
+      <div className="flex flex-wrap gap-1 mt-1">
+        {TRANSITIONS.map((t) => {
+          const ICONS: Record<string, string> = {
+            none: "—", fade: "◌", slide: "→", zoom: "⊕", flip: "⟲", push: "⇒", wipe: "▶", dissolve: "∿",
+          }
+          return (
+            <button
+              key={t}
+              onClick={() => applyTransition(t)}
+              title={`${t} transition`}
+              className={`text-[10px] px-1.5 py-0.5 rounded border capitalize transition-colors flex items-center gap-1 ${
+                slideTransition === t
+                  ? "bg-indigo-500/30 text-indigo-300 border-indigo-500/40"
+                  : "bg-white/5 text-muted border-edge hover:bg-white/10 hover:text-slate-300"
+              }`}
+            >
+              <span className="text-[9px] opacity-70">{ICONS[t] ?? "·"}</span>
+              {t}
+            </button>
+          )
+        })}
+      </div>
 
       {themeColors && Object.keys(themeColors).length > 0 && (
         <>
