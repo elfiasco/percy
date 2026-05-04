@@ -105,10 +105,8 @@ def db_start_job(job_id: str) -> None:
     with _get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """UPDATE jobs
-                   SET status='running', worker_id=%s, started_at=NOW()
-                   WHERE id=%s AND status='queued'""",
-                (WORKER_ID, job_id),
+                "UPDATE jobs SET status='running', started_at=NOW() WHERE id=%s AND status='queued'",
+                (job_id,),
             )
 
 
