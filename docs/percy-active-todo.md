@@ -15,10 +15,18 @@ Start the Percy Enterprise foundation without disrupting the existing local roun
 - [x] Add smoke checks for the API.
 - [x] Create scoped Git backup commit for source/docs changes.
 - [x] Push backup commit to GitHub remote.
+- [x] Add first AWS CDK/App Runner deployment scaffold.
+- [x] Install AWS CLI locally.
+- [x] Install AWS CDK CLI locally.
+- [x] Install CDK Python dependencies into `percy-env`.
+- [x] Validate App Runner stack with `cdk synth`.
+- [ ] Install Docker Desktop locally.
+- [ ] Authenticate local AWS CLI against `percy-dev`.
 
 ## Next
 
 - [x] Add AWS hosting plan.
+- [x] Add local AWS setup notes.
 - [ ] Add persistent Postgres-backed repository design.
 - [x] Add document registration model.
 - [x] Add job model and local job lifecycle endpoints.
@@ -33,3 +41,4 @@ Start the Percy Enterprise foundation without disrupting the existing local roun
 - Should Percy Studio Desktop use Tauri or Electron?
 - Which file format should replace pickle-backed `.percy` for external use?
 - What is the first customer workflow: QBRs, board decks, sales reporting, or general report refresh?
+- Do we want to use IAM Identity Center immediately, or use a temporary IAM admin access key for the first dev deploy?

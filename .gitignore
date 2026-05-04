@@ -23,6 +23,9 @@ tags
 /all_slides/
 /frontend/dist/
 /frontend/node_modules/
+/infra/.tmp/
+/infra/cdk.out/
+/infra/.venv/
 
 # Runtime logs
 *.log

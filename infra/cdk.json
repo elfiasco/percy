@@ -1,0 +1,6 @@
+{
+  "app": "C:\\Users\\benst\\anaconda3\\envs\\percy-env\\python.exe app.py",
+  "context": {
+    "@aws-cdk/core:newStyleStackSynthesis": true
+  }
+}
