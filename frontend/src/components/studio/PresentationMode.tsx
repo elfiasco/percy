@@ -14,11 +14,61 @@ interface Props {
   onClose: () => void
 }
 
+function useTimer() {
+  const [elapsed, setElapsed]     = useState(0)
+  const startRef                  = useRef(Date.now())
+  const pausedRef                 = useRef(false)
+  const [paused, setPaused]       = useState(false)
+  const savedRef                  = useRef(0)
+
+  useEffect(() => {
+    if (paused) return
+    const id = setInterval(() => {
+      setElapsed(savedRef.current + Math.floor((Date.now() - startRef.current) / 1000))
+    }, 500)
+    return () => clearInterval(id)
+  }, [paused])
+
+  const toggle = useCallback(() => {
+    if (pausedRef.current) {
+      startRef.current = Date.now()
+      pausedRef.current = false
+      setPaused(false)
+    } else {
+      savedRef.current = elapsed
+      pausedRef.current = true
+      setPaused(true)
+    }
+  }, [elapsed])
+
+  const reset = useCallback(() => {
+    savedRef.current = 0
+    startRef.current = Date.now()
+    pausedRef.current = false
+    setPaused(false)
+    setElapsed(0)
+  }, [])
+
+  return { elapsed, paused, toggle, reset }
+}
+
+function fmtTime(secs: number) {
+  const h = Math.floor(secs / 3600)
+  const m = Math.floor((secs % 3600) / 60)
+  const s = secs % 60
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+  return `${m}:${String(s).padStart(2, "0")}`
+}
+
 export default function PresentationMode({ docId, slideCount, startSlide = 1, onClose }: Props) {
   const [current, setCurrent]           = useState(startSlide)
   const [transitioning, setTransitioning] = useState(false)
   const [showNotes, setShowNotes]       = useState(false)
   const [notes, setNotes]               = useState<Record<number, string>>({})
+  const [showTimer, setShowTimer]       = useState(false)
+  const { elapsed, paused, toggle: toggleTimer, reset: resetTimer } = useTimer()
+  const [slideStart, setSlideStart]     = useState(0)
+  const [slideTimes, setSlideTimes]     = useState<Record<number, number>>({})
   const containerRef = useRef<HTMLDivElement>(null)
 
   const slideUrl = (n: number) => `/api/docs/${docId}/slides/${n}/bridge.png`
@@ -47,17 +97,22 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
     if (transitioning) return
     const clamped = Math.max(1, Math.min(slideCount, n))
     if (clamped === current) return
+    // record time spent on current slide
+    setSlideTimes((prev) => ({ ...prev, [current]: (prev[current] ?? 0) + (elapsed - slideStart) }))
+    setSlideStart(elapsed)
     setTransitioning(true)
     setTimeout(() => {
       setCurrent(clamped)
       setTransitioning(false)
     }, 120)
-  }, [current, slideCount, transitioning])
+  }, [current, slideCount, transitioning, elapsed, slideStart])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") { onClose(); return }
       if (e.key === "n" || e.key === "N") { e.preventDefault(); setShowNotes((v) => !v); return }
+      if (e.key === "t" || e.key === "T") { e.preventDefault(); setShowTimer((v) => !v); return }
+      if (e.key === "p" || e.key === "P") { e.preventDefault(); toggleTimer(); return }
       if (e.key === "ArrowRight" || e.key === "ArrowDown" || e.key === "PageDown" || e.key === " ") {
         e.preventDefault(); go(current + 1)
       }
@@ -177,6 +232,48 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
         Notes
       </button>
 
+      {/* timer toggle button */}
+      <button
+        onClick={(e) => { e.stopPropagation(); setShowTimer((v) => !v) }}
+        title="Toggle timer (T)"
+        className={`absolute top-3 right-[7.5rem] text-xs px-2 py-0.5 rounded border transition-colors ${
+          showTimer
+            ? "text-white/70 border-white/30 bg-white/10"
+            : "text-white/30 border-white/10 hover:text-white/60 hover:border-white/25"
+        }`}
+      >
+        Timer
+      </button>
+
+      {/* timer display */}
+      {showTimer && (
+        <div
+          className="absolute bottom-20 right-4 bg-black/60 rounded-lg px-3 py-2 text-right"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className={`text-2xl font-mono font-bold tracking-wider ${paused ? "text-white/40" : "text-white/90"}`}>
+            {fmtTime(elapsed)}
+          </div>
+          <div className="text-white/30 text-[9px] font-mono mt-0.5">
+            slide {fmtTime((slideTimes[current] ?? 0) + (elapsed - slideStart))}
+          </div>
+          <div className="flex gap-1 mt-1.5 justify-end">
+            <button
+              onClick={toggleTimer}
+              className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/60 transition-colors"
+            >
+              {paused ? "▶" : "⏸"}
+            </button>
+            <button
+              onClick={resetTimer}
+              className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/60 transition-colors"
+            >
+              ↺
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* slide dots — up to 30 slides */}
       {slideCount <= 30 && (
         <div
@@ -197,7 +294,7 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
 
       {/* keyboard hint */}
       <div className="absolute top-3 left-4 text-white/25 text-[10px] font-mono">
-        ← → navigate · N notes · Esc exit
+        ← → navigate · N notes · T timer · P pause · Esc exit
       </div>
     </div>
   )

@@ -198,6 +198,7 @@ export default function ElementOverlay({
       const GUIDE_THRESH = 0.8
       const cx = l + w / 2, cy = t + h / 2
       const r = l + w, b = t + h
+      // Slide edge/center guides
       for (const xPos of [0, 50, 100]) {
         for (const self of [l, cx, r]) {
           if (Math.abs(self - xPos) < GUIDE_THRESH) { guides.push({ type: "v", pos: xPos }); break }
@@ -206,6 +207,32 @@ export default function ElementOverlay({
       for (const yPos of [0, 50, 100]) {
         for (const self of [t, cy, b]) {
           if (Math.abs(self - yPos) < GUIDE_THRESH) { guides.push({ type: "h", pos: yPos }); break }
+        }
+      }
+      // Element-to-element guides (when snap is on)
+      if (snapEnabled && otherElements) {
+        for (const other of otherElements) {
+          const oL = other.left_pct, oT = other.top_pct
+          const oR = oL + other.width_pct, oB = oT + other.height_pct
+          const oCX = oL + other.width_pct / 2, oCY = oT + other.height_pct / 2
+          for (const otherX of [oL, oR, oCX]) {
+            for (const self of [l, cx, r]) {
+              if (Math.abs(self - otherX) < GUIDE_THRESH) {
+                if (!guides.some((g) => g.type === "v" && g.pos === otherX))
+                  guides.push({ type: "v", pos: otherX })
+                break
+              }
+            }
+          }
+          for (const otherY of [oT, oB, oCY]) {
+            for (const self of [t, cy, b]) {
+              if (Math.abs(self - otherY) < GUIDE_THRESH) {
+                if (!guides.some((g) => g.type === "h" && g.pos === otherY))
+                  guides.push({ type: "h", pos: otherY })
+                break
+              }
+            }
+          }
         }
       }
       onSnapLines(guides)
