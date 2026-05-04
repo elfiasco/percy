@@ -1,0 +1,496 @@
+{
+  "_description": "Complete schema of all BridgeElement types and their supported properties",
+  "_version": "1.0",
+
+  "BridgeElement": {
+    "_description": "Abstract base class - all elements inherit these properties",
+    "position": {
+      "left": {"type": "float", "unit": "inches", "description": "X position from top-left of slide"},
+      "top": {"type": "float", "unit": "inches", "description": "Y position from top-left of slide"},
+      "width": {"type": "float", "unit": "inches", "description": "Element width"},
+      "height": {"type": "float", "unit": "inches", "description": "Element height"}
+    },
+    "transforms": {
+      "rotation": {"type": "float", "unit": "degrees", "default": 0.0, "description": "Rotation angle (0-360, clockwise)"},
+      "flip_h": {"type": "bool", "default": false, "description": "Horizontal flip"},
+      "flip_v": {"type": "bool", "default": false, "description": "Vertical flip"}
+    },
+    "stacking": {
+      "z_index": {"type": "int", "default": 1, "description": "Z-index for layering (higher = on top)"}
+    },
+    "identification": {
+      "slide_number": {"type": "int", "description": "1-indexed slide number"},
+      "shape_name": {"type": "string", "description": "PowerPoint shape name"},
+      "shape_id": {"type": "int", "description": "PowerPoint shape ID"},
+      "group_id": {"type": "string", "description": "UUID if part of a group"}
+    },
+    "accessibility": {
+      "alt_text": {"type": "string", "description": "Alternative text for accessibility"}
+    },
+    "custom_properties": {"type": "dict", "description": "Additional metadata"}
+  },
+
+  "BridgeChart": {
+    "_inherits": "BridgeElement",
+    "_description": "Chart with data, axes, legend, and series formatting",
+
+    "chart_type": {"type": "string", "values": ["COLUMN_CLUSTERED", "BAR_STACKED", "LINE", "PIE", "AREA", "XY_SCATTER", "etc."]},
+
+    "title": {
+      "title": {"type": "string", "description": "Chart title text"},
+      "title_font_size": {"type": "float", "unit": "points"},
+      "title_font_name": {"type": "string"},
+      "title_font_bold": {"type": "bool"},
+      "title_position_x": {"type": "float", "range": "0.0-1.0", "description": "Horizontal position relative to chart area"},
+      "title_position_y": {"type": "float", "range": "0.0-1.0", "description": "Vertical position relative to chart area"},
+      "title_width": {"type": "float", "range": "0.0-1.0"},
+      "title_height": {"type": "float", "range": "0.0-1.0"},
+      "auto_title_deleted": {"type": "bool"}
+    },
+
+    "categories": {
+      "categories": {"type": "list[string]", "description": "X-axis labels"},
+      "categories_raw": {"type": "list[string]", "description": "Raw category values"},
+      "categories_are_numeric": {"type": "bool", "default": false},
+      "category_levels": {"type": "list[dict]", "description": "Multi-level categories"}
+    },
+
+    "series": {
+      "_description": "List of series, each with these properties",
+      "name": {"type": "string"},
+      "values": {"type": "list[float]"},
+      "color": {"type": "string", "format": "hex"},
+      "negative_color": {"type": "string", "format": "hex"},
+      "point_colors": {"type": "list[string]", "description": "Per-point colors"},
+      "plot_type": {"type": "string"},
+      "plot_index": {"type": "int", "default": 0},
+      "invert_if_negative": {"type": "bool", "default": false},
+      "line": {
+        "line_visible": {"type": "bool", "default": true},
+        "line_width": {"type": "float", "unit": "points"},
+        "line_style": {"type": "string"},
+        "line_color": {"type": "string", "format": "hex"}
+      },
+      "marker": {
+        "marker_style": {"type": "string", "values": ["circle", "square", "diamond", "triangle", "x", "star", "dot", "dash", "none"]},
+        "marker_size": {"type": "float"},
+        "marker_color": {"type": "string", "format": "hex"},
+        "marker_line_visible": {"type": "bool", "default": true}
+      },
+      "data_labels": {
+        "show": {"type": "bool", "default": false},
+        "format": {"type": "string", "description": "Number format string"},
+        "position": {"type": "string", "values": ["t", "b", "ctr", "inBase", "outEnd", "l", "r", "bestFit"]},
+        "point_positions": {"type": "dict", "description": "Per-point label positions"},
+        "font_name": {"type": "string"},
+        "font_size": {"type": "float", "unit": "points"},
+        "font_bold": {"type": "bool"},
+        "font_color": {"type": "string", "format": "hex"}
+      },
+      "x_values": {"type": "list[float]", "description": "For XY scatter charts"},
+      "point_formatting": {"type": "dict", "description": "Per-point formatting: {point_idx: {fill_color, line_color, line_width, marker_style, marker_size, marker_color}}"},
+      "custom_labels": {"type": "dict", "description": "Per-point custom text labels: {point_idx: text}"}
+    },
+
+    "category_axis": {
+      "visible": {"type": "bool", "default": true},
+      "axis_type": {"type": "string", "values": ["date", "category"]},
+      "min_value": {"type": "float"},
+      "max_value": {"type": "float"},
+      "gridlines": {
+        "has_major_gridlines": {"type": "bool", "default": false},
+        "gridline_style": {"type": "string"},
+        "gridline_color": {"type": "string", "format": "hex"},
+        "gridline_width": {"type": "float"}
+      },
+      "title": {
+        "title_text": {"type": "string"},
+        "title_font_size": {"type": "float"},
+        "title_font_name": {"type": "string"},
+        "title_font_bold": {"type": "bool"}
+      },
+      "tick_labels": {
+        "number_format": {"type": "string"},
+        "tick_label_font_size": {"type": "float"},
+        "tick_label_font_name": {"type": "string"},
+        "tick_label_font_bold": {"type": "bool"},
+        "tick_label_font_color": {"type": "string", "format": "hex"},
+        "tick_label_position": {"type": "string"},
+        "tick_label_rotation": {"type": "float"},
+        "tick_label_bodypr_attrs": {"type": "dict"}
+      },
+      "tick_marks": {
+        "major_tick_mark": {"type": "string", "values": ["none", "inside", "outside", "cross"]},
+        "minor_tick_mark": {"type": "string", "values": ["none", "inside", "outside", "cross"]},
+        "tick_label_skip": {"type": "int"},
+        "tick_mark_skip": {"type": "int"}
+      },
+      "units": {
+        "major_unit": {"type": "float"},
+        "minor_unit": {"type": "float"},
+        "major_time_unit": {"type": "string", "values": ["days", "months", "years"]},
+        "minor_time_unit": {"type": "string", "values": ["days", "months", "years"]},
+        "base_time_unit": {"type": "string", "values": ["days", "months", "years"]}
+      },
+      "axis_line": {
+        "line_visible": {"type": "bool", "default": true},
+        "line_color": {"type": "string", "format": "hex"},
+        "line_width": {"type": "float"}
+      }
+    },
+
+    "value_axis": {
+      "_description": "Same structure as category_axis"
+    },
+
+    "plot_properties": {
+      "grouping": {"type": "string", "values": ["clustered", "stacked", "percentStacked"]},
+      "bar_width_ratio": {"type": "float", "range": "0.0-1.0"},
+      "overlap": {"type": "int", "range": "-100 to 100"},
+      "is_horizontal": {"type": "bool", "default": false},
+      "area_border": {
+        "has_border": {"type": "bool", "default": false},
+        "border_width": {"type": "float"},
+        "border_color": {"type": "string", "format": "hex"},
+        "has_fill": {"type": "bool", "default": false},
+        "fill_color": {"type": "string", "format": "hex"},
+        "no_line": {"type": "bool", "default": false}
+      }
+    },
+
+    "legend": {
+      "visible": {"type": "bool", "default": true},
+      "position": {"type": "string", "values": ["t", "b", "l", "r", "tr"]},
+      "overlay": {"type": "bool", "default": true},
+      "font_name": {"type": "string"},
+      "font_size": {"type": "float"},
+      "font_bold": {"type": "bool"},
+      "font_color": {"type": "string", "format": "hex"},
+      "fill_type": {"type": "string"},
+      "fill_color": {"type": "string", "format": "hex"},
+      "border_type": {"type": "string"},
+      "border_width": {"type": "float"}
+    },
+
+    "chart_space_fill": {"type": "dict", "description": "Background fill of entire chart area"},
+    "figsize": {"type": "tuple", "description": "For matplotlib rendering"},
+
+    "overlay_files": {
+      "chart_user_shapes": {"type": "bytes", "description": "chartUserShapes XML (arrows, text boxes on chart)"},
+      "chart_style": {"type": "bytes", "description": "Chart style XML"},
+      "chart_colors": {"type": "bytes", "description": "Chart colors XML"},
+      "theme_override": {"type": "bytes", "description": "themeOverride XML"}
+    },
+
+    "reconstruction_blobs": {
+      "chart_xml_blob": {"type": "bytes", "description": "Complete chart XML for exact reconstruction"},
+      "chart_excel_blob": {"type": "bytes", "description": "Embedded Excel data"}
+    }
+  },
+
+  "BridgeTable": {
+    "_inherits": "BridgeElement",
+    "_description": "Table with cell data, formatting, and borders",
+
+    "data": {"type": "list[list[any]]", "description": "2D array [row][col] of cell values"},
+
+    "cell_formats": {
+      "_description": "2D array [row][col] of CellFormat objects",
+      "text": {"type": "string"},
+      "font": {
+        "font_name": {"type": "string"},
+        "font_size": {"type": "float", "unit": "points"},
+        "font_bold": {"type": "bool"},
+        "font_italic": {"type": "bool"},
+        "text_color": {"type": "string", "format": "hex"}
+      },
+      "alignment": {
+        "text_alignment": {"type": "string", "values": ["left", "center", "right"], "default": "left"},
+        "vertical_alignment": {"type": "string", "values": ["top", "middle", "bottom"], "default": "top"}
+      },
+      "fill_color": {"type": "string", "format": "hex"},
+      "borders": {
+        "border_top": {"type": "dict", "properties": {"style": "string", "width": "float", "color": "hex"}},
+        "border_bottom": {"type": "dict"},
+        "border_left": {"type": "dict"},
+        "border_right": {"type": "dict"}
+      },
+      "margins": {
+        "margin_left": {"type": "float", "unit": "inches"},
+        "margin_right": {"type": "float", "unit": "inches"},
+        "margin_top": {"type": "float", "unit": "inches"},
+        "margin_bottom": {"type": "float", "unit": "inches"}
+      },
+      "text_autofit": {"type": "string", "values": [null, "shrink", "none"]},
+      "number_format": {"type": "string"},
+      "merge": {
+        "is_merged": {"type": "bool", "default": false},
+        "merge_span_rows": {"type": "int", "default": 1},
+        "merge_span_cols": {"type": "int", "default": 1}
+      }
+    },
+
+    "dimensions": {
+      "column_widths": {"type": "list[float]", "unit": "inches"},
+      "row_heights": {"type": "list[float]", "unit": "inches"}
+    },
+
+    "table_properties": {
+      "first_row_header": {"type": "bool", "default": false},
+      "first_col_header": {"type": "bool", "default": false},
+      "last_row_total": {"type": "bool", "default": false},
+      "banded_rows": {"type": "bool", "default": false},
+      "banded_cols": {"type": "bool", "default": false},
+      "table_style_id": {"type": "string", "description": "GUID for table style"}
+    },
+
+    "defaults": {
+      "text_autofit": {"type": "string", "values": [null, "shrink", "none"]},
+      "default_font_name": {"type": "string"},
+      "default_font_size": {"type": "float"}
+    }
+  },
+
+  "BridgeText": {
+    "_inherits": "BridgeElement",
+    "_description": "Textbox or text shape with rich formatting",
+
+    "paragraphs": {
+      "_description": "List of paragraphs",
+      "runs": {
+        "_description": "List of text runs within paragraph",
+        "text": {"type": "string"},
+        "font_name": {"type": "string"},
+        "font_size": {"type": "float", "unit": "points"},
+        "font_bold": {"type": "bool"},
+        "font_italic": {"type": "bool"},
+        "font_underline": {"type": "bool"},
+        "font_color": {"type": "string", "format": "hex"},
+        "hyperlink": {"type": "string", "format": "url"},
+        "is_line_break": {"type": "bool", "default": false},
+        "char_spacing": {"type": "float", "unit": "points", "description": "Character spacing (kerning/tracking)"}
+      },
+      "alignment": {"type": "string", "values": ["left", "center", "right", "justify", "distributed"]},
+      "line_spacing": {"type": "float", "description": "1.0 = single, 1.5 = 1.5 lines"},
+      "space_before": {"type": "float", "unit": "points"},
+      "space_after": {"type": "float", "unit": "points"},
+      "indent_level": {"type": "int", "range": "0-8", "default": 0},
+      "left_indent": {"type": "float", "unit": "inches"},
+      "first_line_indent": {"type": "float", "unit": "inches"},
+      "bullet_type": {"type": "string", "values": ["none", "bullet", "number", "custom"], "default": "none"},
+      "bullet_char": {"type": "string", "description": "Custom bullet character"}
+    },
+
+    "text_frame": {
+      "word_wrap": {"type": "bool", "default": true},
+      "autofit_type": {"type": "string", "values": ["none", "shrink_text", "resize_shape"], "default": "shrink"},
+      "vertical_anchor": {"type": "string", "values": ["top", "middle", "bottom"]},
+      "text_direction": {"type": "string", "values": ["horizontal", "vertical", "etc."], "default": "horizontal"}
+    },
+
+    "margins": {
+      "margin_left": {"type": "float", "unit": "inches"},
+      "margin_right": {"type": "float", "unit": "inches"},
+      "margin_top": {"type": "float", "unit": "inches"},
+      "margin_bottom": {"type": "float", "unit": "inches"}
+    },
+
+    "fill_and_border": {
+      "fill_color": {"type": "string", "format": "hex"},
+      "has_fill": {"type": "bool", "default": false},
+      "border_color": {"type": "string", "format": "hex"},
+      "border_width": {"type": "float", "unit": "points"},
+      "has_border": {"type": "bool", "default": false},
+      "borders": {"type": "dict", "description": "Per-side borders (preferred over uniform)"}
+    },
+
+    "effects": {"type": "dict", "description": "Shadow and other effects, e.g., {'outerShadow': {...}}"},
+
+    "shape_info": {
+      "shape_type": {"type": "string", "values": ["textbox", "title", "subtitle", "body", "custom"], "default": "textbox"},
+      "is_placeholder": {"type": "bool", "default": false}
+    },
+
+    "lst_style_xml": {"type": "string", "description": "List style XML for paragraph level formatting"}
+  },
+
+  "BridgeShape": {
+    "_inherits": "BridgeElement",
+    "_description": "Basic PowerPoint shapes (rectangles, ellipses, arrows, etc.)",
+
+    "shape_identification": {
+      "shape_type": {"type": "string", "default": "auto_shape"},
+      "geometry_preset": {"type": "string", "values": ["rect", "ellipse", "roundRect", "triangle", "rightArrow", "etc."], "default": "rect"},
+      "geometry_adjustments": {"type": "dict", "description": "avLst adjustments like {'adj': '0'}"}
+    },
+
+    "fill": {
+      "fill_type": {"type": "string", "values": ["solid", "none", "gradient", "pattern"]},
+      "color": {"type": "string", "format": "hex or scheme:name"},
+      "transparency": {"type": "float", "range": "0.0-1.0", "default": 0.0}
+    },
+
+    "line": {
+      "visible": {"type": "bool", "default": true},
+      "color": {"type": "string", "format": "hex or scheme:name"},
+      "width": {"type": "float", "unit": "points"},
+      "dash_style": {"type": "string", "values": ["solid", "dash", "dot", "dashDot", "etc."], "default": "solid"},
+      "head_end": {"type": "string", "values": ["none", "triangle", "arrow", "diamond", "oval"]},
+      "tail_end": {"type": "string", "values": ["none", "triangle", "arrow", "diamond", "oval"]},
+      "head_size": {"type": "string", "values": ["sm", "med", "lg"]},
+      "tail_size": {"type": "string", "values": ["sm", "med", "lg"]}
+    },
+
+    "borders": {
+      "all": {"type": "dict", "description": "Uniform border"},
+      "left": {"type": "dict"},
+      "right": {"type": "dict"},
+      "top": {"type": "dict"},
+      "bottom": {"type": "dict"},
+      "tl_to_br": {"type": "dict", "description": "Diagonal top-left to bottom-right"},
+      "bl_to_tr": {"type": "dict", "description": "Diagonal bottom-left to top-right"}
+    },
+
+    "text_content": {
+      "has_text": {"type": "bool", "default": false},
+      "text_content": {"type": "string"},
+      "paragraphs": {"type": "list[dict]", "description": "Same structure as BridgeText paragraphs"}
+    },
+
+    "text_frame": {
+      "vertical_anchor": {"type": "string", "values": ["top", "middle", "bottom"]},
+      "word_wrap": {"type": "bool", "default": true},
+      "text_insets": {"type": "dict", "properties": {"left": "inches", "right": "inches", "top": "inches", "bottom": "inches"}},
+      "autofit_type": {"type": "string", "values": ["none", "shrink", "resize_shape"]},
+      "anchor_center": {"type": "bool", "description": "Centers text horizontally in shape"}
+    }
+  },
+
+  "BridgeImage": {
+    "_inherits": "BridgeElement",
+    "_description": "Image with binary data and metadata",
+
+    "image_data": {
+      "image_bytes": {"type": "bytes", "description": "Raw image bytes"},
+      "image_base64": {"type": "string", "description": "Base64-encoded image (alternative)"},
+      "image_format": {"type": "string", "values": ["PNG", "JPEG", "GIF", "BMP", "TIFF"]}
+    },
+
+    "file_info": {
+      "original_filename": {"type": "string"},
+      "original_path": {"type": "string"}
+    },
+
+    "dimensions": {
+      "width_px": {"type": "int", "unit": "pixels"},
+      "height_px": {"type": "int", "unit": "pixels"},
+      "dpi": {"type": "int"}
+    },
+
+    "cropping": {
+      "crop_left": {"type": "float", "range": "0.0-1.0", "default": 0.0},
+      "crop_right": {"type": "float", "range": "0.0-1.0", "default": 0.0},
+      "crop_top": {"type": "float", "range": "0.0-1.0", "default": 0.0},
+      "crop_bottom": {"type": "float", "range": "0.0-1.0", "default": 0.0}
+    },
+
+    "border": {
+      "has_border": {"type": "bool", "default": false},
+      "border_color": {"type": "string", "format": "hex"},
+      "border_width": {"type": "float", "unit": "points"}
+    },
+
+    "shadow": {
+      "has_shadow": {"type": "bool", "default": false},
+      "shadow_offset_x": {"type": "float"},
+      "shadow_offset_y": {"type": "float"},
+      "shadow_blur": {"type": "float"},
+      "shadow_color": {"type": "string", "format": "hex"},
+      "shadow_transparency": {"type": "float", "default": 0.5}
+    },
+
+    "hyperlink": {"type": "string", "format": "url"}
+  },
+
+  "BridgeGroup": {
+    "_inherits": "BridgeElement",
+    "_description": "Group shape containing multiple child shapes",
+
+    "children": {"type": "list[BridgeElement]", "description": "List of child bridge objects (BridgeText, BridgeShape, BridgeImage, etc.)"}
+  },
+
+  "BridgeConnector": {
+    "_inherits": "BridgeElement",
+    "_description": "Lines and connectors",
+
+    "connector_type": {"type": "string", "values": ["straight", "elbow", "curved"], "default": "straight"},
+
+    "endpoints": {
+      "start_x": {"type": "float", "unit": "inches"},
+      "start_y": {"type": "float", "unit": "inches"},
+      "end_x": {"type": "float", "unit": "inches"},
+      "end_y": {"type": "float", "unit": "inches"}
+    },
+
+    "line": {
+      "color": {"type": "string", "format": "hex or scheme:name"},
+      "width": {"type": "float", "unit": "points"},
+      "dash_style": {"type": "string", "values": ["solid", "dash", "dot", "dashDot", "etc."], "default": "solid"},
+      "head_end": {"type": "string", "values": ["none", "triangle", "arrow", "diamond", "oval"]},
+      "tail_end": {"type": "string", "values": ["none", "triangle", "arrow", "diamond", "oval"]},
+      "head_size": {"type": "string", "values": ["sm", "med", "lg"]},
+      "tail_size": {"type": "string", "values": ["sm", "med", "lg"]}
+    }
+  },
+
+  "BridgeFreeform": {
+    "_inherits": "BridgeElement",
+    "_description": "Freeform/custom geometry shapes with path commands",
+
+    "paths": {
+      "_description": "List of FreeformPath objects",
+      "width": {"type": "int", "unit": "EMUs", "description": "Path coordinate space width"},
+      "height": {"type": "int", "unit": "EMUs", "description": "Path coordinate space height"},
+      "commands": {
+        "_description": "List of PathCommand objects",
+        "command": {"type": "string", "values": ["moveTo", "lnTo", "cubicBezTo", "quadBezTo", "arcTo", "close"]},
+        "points": {"type": "list[tuple[int, int]]", "description": "Raw EMU coordinates"},
+        "arc_params": {"type": "dict", "properties": {"wR": "int", "hR": "int", "stAng": "int", "swAng": "int"}}
+      },
+      "fill_mode": {"type": "string", "values": ["norm", "none"]},
+      "stroke": {"type": "bool", "default": true}
+    },
+
+    "geometry_xml": {"type": "string", "description": "Raw a:custGeom XML for perfect reconstruction"},
+
+    "fill": {
+      "fill_type": {"type": "string", "values": ["solid", "gradient", "pattern", "none"]},
+      "fill_color": {"type": "string", "format": "hex"},
+      "fill_scheme": {"type": "string", "description": "Original scheme name"}
+    },
+
+    "line": {
+      "line_color": {"type": "string", "format": "hex"},
+      "line_scheme": {"type": "string"},
+      "line_width": {"type": "float", "unit": "points"},
+      "line_cap": {"type": "string", "values": ["flat", "round", "square"]},
+      "line_join": {"type": "string", "values": ["miter", "round", "bevel"]},
+      "line_dash": {"type": "string", "values": ["solid", "dash", "dot", "etc."]}
+    },
+
+    "transform_emus": {
+      "offset_x": {"type": "int", "unit": "EMUs"},
+      "offset_y": {"type": "int", "unit": "EMUs"},
+      "extent_cx": {"type": "int", "unit": "EMUs"},
+      "extent_cy": {"type": "int", "unit": "EMUs"}
+    },
+
+    "fallback": {
+      "image_bytes": {"type": "bytes", "description": "Image-based reconstruction fallback"},
+      "image_format": {"type": "string", "default": "PNG"}
+    },
+
+    "description": {"type": "string", "description": "Alt text for icons like checkmarks"},
+    "style_xml": {"type": "string", "description": "Theme-based styling XML"}
+  }
+}

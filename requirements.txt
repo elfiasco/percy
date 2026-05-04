@@ -1,0 +1,13 @@
+behave>=1.2.5
+flake8>=2.0
+lxml>=3.1.0
+mock>=1.0.1
+Pillow>=3.3.2
+pyparsing>=2.0.1
+pytest>=2.5
+XlsxWriter>=0.5.7
+pandas>=2.0.0
+pantab>=3.0.0
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9

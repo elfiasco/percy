@@ -1,0 +1,2436 @@
+"""Percy workspace API — FastAPI backend.
+
+Start with:
+    uvicorn app.backend.main:app --reload --port 8000
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import sys
+import threading
+import time
+import uuid
+import json
+import base64
+import re
+import zipfile
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from PIL import Image, ImageChops, ImageGrab, ImageStat
+
+# ── logging ───────────────────────────────────────────────────────────────────
+_LOG_FILE = Path(__file__).resolve().parent.parent.parent / "percy_server.log"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(str(_LOG_FILE), encoding="utf-8"),
+    ],
+)
+log = logging.getLogger("percy.api")
+log.info("Percy server starting — log file: %s", _LOG_FILE)
+
+# ── path setup ────────────────────────────────────────────────────────────────
+_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(_ROOT / "src"))
+
+from percy.diagnostics.onboard import onboard_pptx
+from percy.diagnostics.pdf_onboard import onboard_pdf
+from percy.diagnostics.rebuild import rebuild_pptx as _rebuild_pptx
+from percy.diagnostics.render_png import SlideRenderer
+from percy.bridge import BridgeSlide, PercyDocument, PresentationMetadata
+from percy.tableau import onboard_tableau
+import fitz  # PyMuPDF
+
+# ── app ───────────────────────────────────────────────────────────────────────
+app = FastAPI(title="Percy Workspace API", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── request logging middleware ────────────────────────────────────────────────
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    ms = (time.perf_counter() - start) * 1000
+    log.info("%-6s %-45s → %d  (%.0f ms)",
+             request.method, request.url.path, response.status_code, ms)
+    return response
+
+# ── dirs ──────────────────────────────────────────────────────────────────────
+# Scan both dump_pptx (scraper output) and any manual_dump_pptx folder
+_WORKSPACE_DIRS = [
+    _ROOT / "outreach" / "dump_pptx",
+    _ROOT / "outreach" / "manual_dump_pptx",
+    _ROOT / "outreach" / "downloads",          # legacy / future
+    _ROOT / "outreach" / "tableau",
+]
+_CACHE_DIR   = _ROOT / "outreach" / ".rendercache"
+_REBUILD_DIR = _ROOT / "outreach" / "rebuilt"
+_HISTORY_FILE = _ROOT / "outreach" / ".percy_workspace_history.json"
+_LARGE_PDF_BYTES = 50 * 1024 * 1024
+_LARGE_PDF_PAGES = 40
+
+# ── in-memory state ───────────────────────────────────────────────────────────
+_docs: dict[str, dict[str, Any]] = {}
+_history_lock = threading.Lock()
+_vision_lock = threading.Lock()
+
+# ── models ────────────────────────────────────────────────────────────────────
+class OnboardRequest(BaseModel):
+    path: str
+
+class GradeRequest(BaseModel):
+    slide_n: int
+    grade: str  # "good" | "partial" | "bad"
+
+class VisionGradeRequest(BaseModel):
+    target: str  # "bridge" | "rebuilt"
+    lmstudio_url: str = "http://127.0.0.1:1234/v1/chat/completions"
+    model: str = "google/gemma-4-e4b"
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _grade_summary(grades: dict[Any, str], total: int) -> dict[str, int]:
+    counts = {"good": 0, "partial": 0, "bad": 0}
+    for grade in grades.values():
+        if grade in counts:
+            counts[grade] += 1
+    graded = sum(counts.values())
+    return {**counts, "graded": graded, "ungraded": max(total - graded, 0)}
+
+
+def _diagnostic_summary(diagnostics: list[dict[str, Any]]) -> dict[str, Any]:
+    by_code: dict[str, int] = {}
+    by_slide: dict[str, int] = {}
+    for diag in diagnostics:
+        code = str(diag.get("code") or "unknown")
+        by_code[code] = by_code.get(code, 0) + 1
+        slide = diag.get("slide_number")
+        if slide is not None:
+            key = str(slide)
+            by_slide[key] = by_slide.get(key, 0) + 1
+    top_codes = [
+        {"code": code, "count": count}
+        for code, count in sorted(by_code.items(), key=lambda item: (-item[1], item[0]))[:8]
+    ]
+    top_slides = [
+        {"slide": int(slide), "count": count}
+        for slide, count in sorted(by_slide.items(), key=lambda item: (-item[1], int(item[0])))[:8]
+    ]
+    return {"total": len(diagnostics), "top_codes": top_codes, "top_slides": top_slides}
+
+
+def _load_history_unlocked() -> dict[str, Any]:
+    if not _HISTORY_FILE.exists():
+        return {"version": 1, "docs": {}}
+    try:
+        with _HISTORY_FILE.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {"version": 1, "docs": {}}
+        data.setdefault("version", 1)
+        data.setdefault("docs", {})
+        return data
+    except Exception as e:
+        log.warning("history: failed to load %s: %s", _HISTORY_FILE, e)
+        return {"version": 1, "docs": {}}
+
+
+def _save_history_unlocked(history: dict[str, Any]) -> None:
+    try:
+        _HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _HISTORY_FILE.with_suffix(".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2, sort_keys=True)
+        tmp.replace(_HISTORY_FILE)
+    except Exception as e:
+        log.warning("history: failed to save %s: %s", _HISTORY_FILE, e)
+
+
+def _history_key(source_path: str) -> str:
+    return str(Path(source_path).resolve()).lower()
+
+
+def _ensure_history_doc_unlocked(
+    history: dict[str, Any], source_path: str, name: str, source_format: str, slide_count: int
+) -> dict[str, Any]:
+    key = _history_key(source_path)
+    docs = history.setdefault("docs", {})
+    entry = docs.setdefault(key, {
+        "source_path": source_path,
+        "name": name,
+        "source_format": source_format,
+        "slide_count": slide_count,
+        "created_at": _now_iso(),
+        "updated_at": _now_iso(),
+        "grades": {},
+        "grade_summary": _grade_summary({}, slide_count),
+        "diagnostic_summary": _diagnostic_summary([]),
+        "events": [],
+        "run_count": 0,
+    })
+    entry.update({
+        "source_path": source_path,
+        "name": name,
+        "source_format": source_format,
+        "slide_count": slide_count,
+        "updated_at": _now_iso(),
+    })
+    entry.setdefault("events", [])
+    entry.setdefault("grades", {})
+    return entry
+
+
+def _record_event(
+    source_path: str, name: str, source_format: str, slide_count: int,
+    event_type: str, message: str, details: dict[str, Any] | None = None, status: str = "ok",
+) -> None:
+    with _history_lock:
+        history = _load_history_unlocked()
+        entry = _ensure_history_doc_unlocked(history, source_path, name, source_format, slide_count)
+        event = {
+            "id": str(uuid.uuid4())[:8],
+            "ts": _now_iso(),
+            "type": event_type,
+            "status": status,
+            "message": message,
+            "details": details or {},
+        }
+        entry["events"].insert(0, event)
+        entry["events"] = entry["events"][:120]
+        if event_type in {"onboard", "rebuild", "rerender"}:
+            entry["run_count"] = int(entry.get("run_count", 0)) + 1
+        entry["last_event"] = event
+        entry["updated_at"] = event["ts"]
+        _save_history_unlocked(history)
+
+
+def _update_history_snapshot(doc_id: str) -> None:
+    if doc_id not in _docs:
+        return
+    d = _docs[doc_id]
+    with _history_lock:
+        history = _load_history_unlocked()
+        entry = _ensure_history_doc_unlocked(
+            history, d["source_path"], d["name"], d.get("source_format", "pptx"), d["slide_count"]
+        )
+        entry["grades"] = {str(k): v for k, v in d["grades"].items()}
+        entry["grade_summary"] = _grade_summary(d["grades"], d["slide_count"])
+        entry["diagnostic_summary"] = _diagnostic_summary(d["diagnostics"])
+        entry["render_status"] = {
+            "has_originals": bool(d["orig_paths"]),
+            "has_bridge": bool(d["bridge_paths"]),
+            "has_rebuild": bool(d["rebuilt_path"]),
+            "has_rebuilt_renders": bool(d["rebuilt_paths"]),
+        }
+        entry["rebuilt_path"] = d["rebuilt_path"]
+        entry["updated_at"] = _now_iso()
+        _save_history_unlocked(history)
+
+
+def _doc_summary(doc_id: str) -> dict[str, Any]:
+    d = _require(doc_id)
+    with _history_lock:
+        history = _load_history_unlocked()
+        hist = history.get("docs", {}).get(_history_key(d["source_path"]), {})
+    return {
+        "doc_id": doc_id,
+        "name": d["name"],
+        "source_path": d["source_path"],
+        "source_format": d.get("source_format", "pptx"),
+        "slide_count": d["slide_count"],
+        "grade_summary": _grade_summary(d["grades"], d["slide_count"]),
+        "diagnostic_summary": _diagnostic_summary(d["diagnostics"]),
+        "render_status": {
+            "has_originals": bool(d["orig_paths"]),
+            "has_bridge": bool(d["bridge_paths"]),
+            "has_rebuild": bool(d["rebuilt_path"]),
+            "has_rebuilt_renders": bool(d["rebuilt_paths"]),
+        },
+        "rebuilt_path": d["rebuilt_path"],
+        "events": hist.get("events", [])[:24],
+        "run_count": hist.get("run_count", 0),
+        "updated_at": hist.get("updated_at"),
+        "tableau": _tableau_overview(d) if d.get("source_format") == "tableau" else None,
+    }
+
+
+def _tableau_overview(d: dict[str, Any]) -> dict[str, Any] | None:
+    doc = d.get("doc")
+    props = getattr(doc, "custom_properties", {}) or {}
+    tableau = props.get("tableau")
+    if not isinstance(tableau, dict):
+        return None
+    return {
+        "workbook_name": tableau.get("workbook_name"),
+        "version": tableau.get("version"),
+        "source_build": tableau.get("source_build"),
+        "source_platform": tableau.get("source_platform"),
+        "worksheet_count": tableau.get("worksheet_count", 0),
+        "dashboard_count": tableau.get("dashboard_count", 0),
+        "datasource_count": tableau.get("datasource_count", 0),
+        "datasources": tableau.get("datasources", []),
+        "packaged_files": tableau.get("packaged_files", []),
+        "packaged_extracts": tableau.get("packaged_extracts", []),
+        "packaged_images": tableau.get("packaged_images", []),
+        "color_palettes": tableau.get("color_palettes", []),
+    }
+
+
+def _obj_dict(obj: Any) -> dict[str, Any]:
+    return {
+        key: getattr(obj, key)
+        for key in getattr(obj, "__slots__", [])
+        if hasattr(obj, key)
+    }
+
+
+def _tableau_payload(d: dict[str, Any]) -> dict[str, Any]:
+    if d.get("source_format") != "tableau":
+        raise HTTPException(400, "Document is not a Tableau workbook")
+    doc = d["doc"]
+    artifacts = []
+    for slide in doc.slides:
+        slide_props = slide.custom_properties or {}
+        info = slide_props.get("tableau", {})
+        kind = slide_props.get("tableau_kind", "artifact")
+        element_counts: dict[str, int] = {}
+        elements = []
+        for element in slide.elements:
+            element_counts[element.element_type] = element_counts.get(element.element_type, 0) + 1
+            element_props = getattr(element, "custom_properties", {}) or {}
+            zone = element_props.get("tableau_zone") or {}
+            elements.append({
+                "type": element.element_type,
+                "tableau_kind": element_props.get("tableau_kind"),
+                "position": _obj_dict(getattr(element, "position", None)),
+                "name": (
+                    element_props.get("tableau_name")
+                    or zone.get("name")
+                    or getattr(getattr(element, "title", None), "title", None)
+                    or getattr(getattr(element, "file_info", None), "original_filename", None)
+                ),
+                "tableau": element_props.get("tableau"),
+                "tableau_zone": zone,
+            })
+        artifacts.append({
+            "number": slide.slide_number,
+            "kind": kind,
+            "name": info.get("name") or info.get("title") or f"Artifact {slide.slide_number}",
+            "title": info.get("title"),
+            "mark_types": info.get("mark_types", []),
+            "primary_mark_type": info.get("primary_mark_type"),
+            "datasources": info.get("datasources", []),
+            "columns": info.get("columns", []),
+            "column_instances": info.get("column_instances", []),
+            "column_instance_model": info.get("column_instance_model", {}),
+            "filters": info.get("filters", []),
+            "sorts": info.get("sorts", []),
+            "rows": info.get("rows", []),
+            "cols": info.get("cols", []),
+            "shelves": info.get("shelves", {}),
+            "used_fields": info.get("used_fields", []),
+            "visual_items": info.get("visual_items", []),
+            "pythonic_model": info.get("pythonic_model", {}),
+            "style_summary": info.get("style_summary", {}),
+            "style_model": info.get("style_model", {}),
+            "layout": info.get("layout", {}),
+            "reconstruction": info.get("reconstruction", {}),
+            "size": info.get("size", {}),
+            "zones": info.get("zones", []),
+            "element_counts": element_counts,
+            "elements": elements,
+        })
+    return {"overview": _tableau_overview(d), "artifacts": artifacts}
+
+
+def _pad_image(image: Image.Image, size: tuple[int, int]) -> Image.Image:
+    padded = Image.new("RGB", size, "white")
+    padded.paste(image, (0, 0))
+    return padded
+
+
+def _image_diff(expected: Path, actual: Path, diff_path: Path) -> float:
+    expected_image = Image.open(expected).convert("RGB")
+    actual_image = Image.open(actual).convert("RGB")
+    if expected_image.size != actual_image.size:
+        size = (
+            max(expected_image.width, actual_image.width),
+            max(expected_image.height, actual_image.height),
+        )
+        expected_image = _pad_image(expected_image, size)
+        actual_image = _pad_image(actual_image, size)
+    diff = ImageChops.difference(expected_image, actual_image)
+    diff_path.parent.mkdir(parents=True, exist_ok=True)
+    diff.save(diff_path)
+    stat = ImageStat.Stat(diff)
+    return sum(value**2 for value in stat.rms) ** 0.5
+
+
+def _compute_pixel_scores(doc_id: str, orig_paths: list[str], rebuilt_paths: list[str]) -> dict[int, float]:
+    """Compute per-pixel RMS diff for each original/rebuilt slide pair. Returns {slide_n: rms}."""
+    diff_dir = _CACHE_DIR / doc_id / "diffs"
+    scores: dict[int, float] = {}
+    for i, (orig, rebuilt) in enumerate(zip(orig_paths, rebuilt_paths)):
+        slide_n = i + 1
+        diff_path = diff_dir / f"slide-{slide_n:03d}-diff.png"
+        try:
+            rms = _image_diff(Path(orig), Path(rebuilt), diff_path)
+            scores[slide_n] = round(rms, 2)
+        except Exception as e:
+            log.warning("pixel_scores: slide %d failed: %s", slide_n, e)
+    return scores
+
+
+def _vision_image_part(label: str, path: Path) -> dict[str, Any]:
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return {
+        "type": "image_url",
+        "image_url": {"url": f"data:image/png;base64,{encoded}", "detail": "high"},
+        "metadata": {"label": label},
+    }
+
+
+def _parse_vision_content(content: str) -> Any:
+    text = content.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text.strip())
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match is not None:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return text
+    return text
+
+
+def _lmstudio_models_url(chat_url: str) -> str:
+    if chat_url.endswith("/chat/completions"):
+        return chat_url[: -len("/chat/completions")] + "/models"
+    return chat_url.rstrip("/") + "/models"
+
+
+def _check_lmstudio_model(lmstudio_url: str, model: str) -> dict[str, Any]:
+    models_url = _lmstudio_models_url(lmstudio_url)
+    request = urllib.request.Request(models_url, headers={"Accept": "application/json"}, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        model_ids = [str(item.get("id")) for item in data.get("data", []) if isinstance(item, dict)]
+        return {"status": "ok", "models": model_ids, "available": model in model_ids}
+    except Exception as e:
+        return {"status": "error", "error": str(e), "models": [], "available": False}
+
+
+def _http_error_text(exc: urllib.error.HTTPError) -> str:
+    try:
+        body = exc.read().decode("utf-8", errors="replace")
+    except Exception:
+        body = ""
+    return f"HTTP {exc.code}: {body or exc.reason}"
+
+
+def _call_lmstudio_slide_grade(
+    original: Path, candidate: Path, diff: Path, *,
+    slide_n: int, target: str, lmstudio_url: str, model: str, rms: float,
+) -> dict[str, Any]:
+    prompt = (
+        "You are a strict PowerPoint visual round-trip evaluator. Compare the ORIGINAL slide "
+        f"against the {target.upper()} render and the visual diff. Think element-by-element, not just "
+        "as an overall image. Inspect these categories in order: background, large shapes, text blocks, "
+        "logos/images/icons, charts/tables, lines/connectors, alignment/spacing, color/fill, and missing "
+        "or extra objects. Return valid JSON only. Required schema: "
+        "{"
+        "\"grade\":\"good|partial|bad\","
+        "\"score_0_to_10\":number,"
+        "\"summary\":\"one sentence\","
+        "\"element_comparisons\":["
+        "{"
+        "\"element\":\"short human name, e.g. blue diagonal shape\","
+        "\"type\":\"background|shape|text|image|chart|table|line|layout|other\","
+        "\"location\":\"top-left|top|top-right|left|center|right|bottom-left|bottom|bottom-right or approximate\","
+        "\"status\":\"match|minor_mismatch|major_mismatch|missing|extra\","
+        "\"severity\":\"low|medium|high\","
+        "\"original\":\"what is visible in the original\","
+        "\"candidate\":\"what is visible in the candidate\","
+        "\"difference\":\"specific visual delta\","
+        "\"likely_cause\":\"probable Percy/render/rebuild cause\""
+        "}"
+        "],"
+        "\"top_priority_fixes\":[\"ordered concrete fixes\"],"
+        "\"confidence\":number"
+        "}. "
+        "Name specific elements. Avoid vague wording like 'some areas' unless paired with a location. "
+        "If an element matches, include only important matches needed for context; focus on mismatches. "
+        "grade must be one of good, partial, bad. Use bad for major layout, background, missing-object, "
+        "or content failures."
+    )
+    payload = {
+        "model": model,
+        "temperature": 0.1,
+        "max_tokens": 2200,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "text", "text": f"Slide {slide_n}; target={target}; pixel_rms={rms:.2f}"},
+                _vision_image_part("original", original),
+                _vision_image_part(target, candidate),
+                _vision_image_part("diff", diff),
+            ],
+        }],
+    }
+    request = urllib.request.Request(
+        lmstudio_url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    preflight = _check_lmstudio_model(lmstudio_url, model)
+    if preflight["status"] != "ok":
+        return {"status": "error", "error": f"LM Studio unavailable: {preflight.get('error')}", "preflight": preflight}
+    if not preflight["available"]:
+        return {
+            "status": "error",
+            "error": f"Model {model!r} is not available from LM Studio /v1/models.",
+            "preflight": preflight,
+        }
+    try:
+        with urllib.request.urlopen(request, timeout=180) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        raw = data["choices"][0]["message"]["content"].strip()
+        return {"status": "ok", "raw": raw, "parsed": _parse_vision_content(raw)}
+    except urllib.error.HTTPError as e:
+        return {"status": "error", "error": _http_error_text(e), "preflight": preflight}
+    except (urllib.error.URLError, TimeoutError, KeyError, json.JSONDecodeError) as e:
+        return {"status": "error", "error": str(e)}
+
+
+def _require(doc_id: str) -> dict[str, Any]:
+    if doc_id not in _docs:
+        raise HTTPException(404, f"Document not found: {doc_id!r}")
+    return _docs[doc_id]
+
+
+def _render_originals(pptx_path: Path, out_dir: Path) -> list[str]:
+    """Render every slide via PowerPoint COM. Returns PNG paths. Slow (~60s/deck)."""
+    log.info("  render_originals: %s → %s", pptx_path.name, out_dir)
+    try:
+        from percy.diagnostics.render import render_pptx
+        out_dir.mkdir(parents=True, exist_ok=True)
+        result = render_pptx(pptx_path, out_dir)
+        status = result.get("status")
+        slides = result.get("slides", [])
+        log.info("  render_originals: status=%s  slides=%d", status, len(slides))
+        if status == "ok":
+            return slides
+        log.warning("  render_originals failed: %s", result.get("error", "unknown"))
+    except Exception as e:
+        log.warning("  render_originals exception: %s", e)
+    return []
+
+
+def _render_originals_bg(doc_id: str, pptx_path: Path, out_dir: Path, key: str) -> None:
+    """Start a background thread that runs COM render and populates _docs[doc_id][key]."""
+    def _worker():
+        t0 = time.perf_counter()
+        paths = _render_originals(pptx_path, out_dir)
+        elapsed = time.perf_counter() - t0
+        if doc_id in _docs:
+            _docs[doc_id][key] = paths
+            log.info("bg_render[%s/%s]: %d slides in %.1fs", doc_id, key, len(paths), elapsed)
+            d = _docs[doc_id]
+            _record_event(
+                d["source_path"], d["name"], d.get("source_format", "pptx"), d["slide_count"],
+                "render",
+                f"{key} render completed: {len(paths)} slides",
+                {"target": key, "slide_count": len(paths), "elapsed_sec": round(elapsed, 1)},
+                "ok" if paths else "warn",
+            )
+            if key == "rebuilt_paths" and d.get("orig_paths") and paths:
+                t_px = time.perf_counter()
+                scores = _compute_pixel_scores(doc_id, d["orig_paths"], paths)
+                _docs[doc_id]["pixel_scores"] = scores
+                avg = round(sum(scores.values()) / len(scores), 2) if scores else 0
+                log.info("bg_render[%s]: pixel scores: %d slides, avg RMS=%.2f in %.1fs",
+                         doc_id, len(scores), avg, time.perf_counter() - t_px)
+            _update_history_snapshot(doc_id)
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+_render_bridge_tls = threading.local()
+
+
+def _render_bridge(doc: Any, out_dir: Path, dpi: int = 96) -> list[str]:
+    """Render every slide via matplotlib in parallel. Returns PNG paths in slide order."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from percy.diagnostics.render_png import _register_embedded_fonts
+
+    log.info("  render_bridge: %d slides -> %s", len(doc.slides), out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    theme = getattr(doc, "theme_colors", None) or None
+    embedded_fonts = getattr(doc, "embedded_fonts", None)
+    is_tableau = (getattr(doc, "custom_properties", {}) or {}).get("source_format") == "tableau"
+
+    # Register fonts in the main thread before workers start (font manager is shared)
+    if embedded_fonts:
+        _register_embedded_fonts(embedded_fonts)
+
+    def _worker(slide: Any) -> tuple[int, str] | tuple[int, None]:
+        dest = out_dir / f"slide-{slide.slide_number:03d}.png"
+        # Thread-local renderer so _default_text_color state is not shared
+        if not hasattr(_render_bridge_tls, "renderer") or _render_bridge_tls.renderer is None:
+            _render_bridge_tls.renderer = SlideRenderer(dpi=dpi, theme=theme)
+        renderer = _render_bridge_tls.renderer
+        # Provide full document for Tableau dashboard zone reconstruction
+        if is_tableau:
+            renderer.set_document(doc)
+        try:
+            fig = renderer.render_slide(slide)
+            fig.savefig(str(dest), dpi=dpi, bbox_inches="tight", pad_inches=0)
+            fig.clf()
+            return (slide.slide_number, str(dest))
+        except Exception as e:
+            log.warning("  render_bridge slide %d failed: %s", slide.slide_number, e)
+            return (slide.slide_number, None)
+
+    results: dict[int, str] = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {pool.submit(_worker, slide): slide.slide_number for slide in doc.slides}
+        for future in as_completed(futures):
+            n, path = future.result()
+            if path:
+                results[n] = path
+
+    paths = [results[n] for n in sorted(results)]
+    log.info("  render_bridge: wrote %d/%d PNGs", len(paths), len(doc.slides))
+    return paths
+
+
+def _render_pdf_pages(pdf_path: Path, out_dir: Path, dpi: int = 150) -> list[str]:
+    """Render every page of a PDF using PyMuPDF. Fast, no COM required."""
+    log.info("  render_pdf_pages: %s → %s", pdf_path.name, out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[str] = []
+    try:
+        pdf = fitz.open(str(pdf_path))
+        zoom = dpi / 72.0
+        mat = fitz.Matrix(zoom, zoom)
+        for i, page in enumerate(pdf):
+            dest = out_dir / f"slide-{i + 1:03d}.png"
+            pix = page.get_pixmap(matrix=mat, alpha=False)
+            pix.save(str(dest))
+            paths.append(str(dest))
+        pdf.close()
+        log.info("  render_pdf_pages: wrote %d PNGs", len(paths))
+    except Exception as e:
+        log.warning("  render_pdf_pages failed: %s", e)
+    return paths
+
+
+# ── routes ────────────────────────────────────────────────────────────────────
+
+def _pdf_page_count(pdf_path: Path) -> int:
+    try:
+        with fitz.open(str(pdf_path)) as pdf:
+            return len(pdf)
+    except Exception:
+        return 0
+
+
+def _use_fast_pdf_preview(pdf_path: Path, page_count: int) -> bool:
+    try:
+        size = pdf_path.stat().st_size
+    except OSError:
+        size = 0
+    return size >= _LARGE_PDF_BYTES or page_count >= _LARGE_PDF_PAGES
+
+
+def _empty_pdf_document(pdf_path: Path, page_count: int) -> PercyDocument:
+    with fitz.open(str(pdf_path)) as pdf:
+        first = pdf[0] if len(pdf) else None
+        width = (first.rect.width / 72.0) if first else 16.0
+        height = (first.rect.height / 72.0) if first else 9.0
+        slides = [
+            BridgeSlide(
+                slide_number=i + 1,
+                width=pdf[i].rect.width / 72.0,
+                height=pdf[i].rect.height / 72.0,
+                custom_properties={
+                    "source_format": "pdf",
+                    "pdf_onboard_mode": "visual_preview",
+                },
+            )
+            for i in range(len(pdf))
+        ]
+    return PercyDocument(
+        slides=slides,
+        metadata=PresentationMetadata(
+            slide_width=width,
+            slide_height=height,
+            slide_count=page_count,
+            source_path=str(pdf_path),
+            notes={
+                "pdf_onboard_mode": "visual_preview",
+                "message": "Large PDF loaded as raster preview; semantic extraction skipped for interactive responsiveness.",
+            },
+        ),
+        source_path=str(pdf_path),
+        custom_properties={
+            "source_format": "pdf",
+            "pdf_onboard_mode": "visual_preview",
+            "semantic_extraction": "skipped_large_pdf",
+        },
+    )
+
+
+@app.get("/api/workspace")
+def list_workspace():
+    """Scan workspace directories for PPTX, PDF, and Tableau files."""
+    files = []
+    for workspace in _WORKSPACE_DIRS:
+        if not workspace.exists():
+            log.debug("workspace dir not found: %s", workspace)
+            continue
+        patterns = [
+            ("*.pptx", "pptx"),
+            ("*.pdf", "pdf"),
+            ("*.twbx", "tableau"),
+            ("*.twb", "tableau"),
+        ]
+        for pattern, fmt in patterns:
+            iterator = workspace.rglob(pattern)
+            for f in sorted(iterator):
+                if "rejected" in f.parts:
+                    continue
+                try:
+                    size_kb = f.stat().st_size // 1024
+                except OSError:
+                    size_kb = 0
+                files.append({"name": f.name, "path": str(f), "size_kb": size_kb,
+                              "folder": f.parent.name, "format": fmt})
+    files.sort(key=lambda x: x["name"].lower())
+    log.info("list_workspace: found %d files", len(files))
+    return {"files": files}
+
+
+@app.post("/api/onboard")
+def onboard(req: OnboardRequest):
+    """Onboard PPTX or PDF → PercyDocument, render bridge + original slides."""
+    path = Path(req.path)
+    log.info("onboard: %s", path)
+    if not path.exists():
+        log.error("onboard: file not found: %s", path)
+        raise HTTPException(404, f"File not found: {path}")
+
+    suffix = path.suffix.lower()
+    is_pdf = suffix == ".pdf"
+    is_tableau = suffix in {".twb", ".twbx"}
+    source_format = "tableau" if is_tableau else "pdf" if is_pdf else "pptx"
+    pdf_page_count = _pdf_page_count(path) if is_pdf else 0
+    fast_pdf_preview = is_pdf and _use_fast_pdf_preview(path, pdf_page_count)
+    t0 = time.perf_counter()
+    if is_tableau:
+        doc = onboard_tableau(path)
+    elif fast_pdf_preview:
+        doc = _empty_pdf_document(path, pdf_page_count)
+        log.info(
+            "onboard: large PDF fast preview selected size=%.1fMB pages=%d",
+            path.stat().st_size / (1024 * 1024),
+            pdf_page_count,
+        )
+    elif is_pdf:
+        doc = onboard_pdf(path)
+    else:
+        doc = onboard_pptx(path)
+    log.info("onboard: loaded %d slides in %.1fs", len(doc.slides), time.perf_counter() - t0)
+
+    doc_id = str(uuid.uuid4())[:8]
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    orig_dir   = _CACHE_DIR / doc_id / "original"
+
+    if fast_pdf_preview:
+        t2 = time.perf_counter()
+        orig_paths = _render_pdf_pages(path, orig_dir, dpi=96)
+        bridge_paths = list(orig_paths)
+        log.info("onboard: large PDF visual preview render done in %.1fs", time.perf_counter() - t2)
+    else:
+        t1 = time.perf_counter()
+        bridge_paths = _render_bridge(doc, bridge_dir)
+        log.info("onboard: bridge render done in %.1fs", time.perf_counter() - t1)
+
+    if is_pdf and not fast_pdf_preview:
+        # PyMuPDF render is fast and synchronous — do it now
+        t2 = time.perf_counter()
+        orig_paths = _render_pdf_pages(path, orig_dir)
+        log.info("onboard: PDF page render done in %.1fs", time.perf_counter() - t2)
+    elif not fast_pdf_preview:
+        orig_paths = []
+
+    _docs[doc_id] = {
+        "doc":           doc,
+        "source_path":   str(path),
+        "source_format": source_format,
+        "name":          path.stem,
+        "slide_count":   len(doc.slides),
+        "bridge_paths":  bridge_paths,
+        "orig_paths":    orig_paths,
+        "rebuilt_path":  None,
+        "rebuilt_paths": [],
+        "diagnostics":   [],
+        "grades":        {},
+        "pixel_scores":  {},
+        "pdf_onboard_mode": "visual_preview" if fast_pdf_preview else "semantic" if is_pdf else None,
+    }
+
+    with _history_lock:
+        history = _load_history_unlocked()
+        hist = history.get("docs", {}).get(_history_key(str(path)), {})
+        saved_grades = hist.get("grades", {})
+    if isinstance(saved_grades, dict):
+        _docs[doc_id]["grades"] = {
+            int(slide): grade for slide, grade in saved_grades.items()
+            if str(slide).isdigit() and grade in {"good", "partial", "bad"}
+        }
+
+    if source_format == "pptx":
+        # COM render is slow (~60s/deck) — fire and forget in background
+        _render_originals_bg(doc_id, path, orig_dir, "orig_paths")
+
+    result = {
+        "doc_id":        doc_id,
+        "name":          path.stem,
+        "slide_count":   len(doc.slides),
+        "has_originals": bool(orig_paths),
+        "bridge_slides": len(bridge_paths),
+        "source_format": source_format,
+        "pdf_onboard_mode": _docs[doc_id].get("pdf_onboard_mode"),
+        "tableau": _tableau_overview(_docs[doc_id]) if is_tableau else None,
+    }
+    log.info("onboard: complete → doc_id=%s  %s", doc_id, result)
+    _record_event(
+        str(path), path.stem, source_format, len(doc.slides),
+        "onboard",
+        f"Onboarded {len(doc.slides)} {'Tableau artifacts' if is_tableau else 'pages' if is_pdf else 'slides'}",
+        {
+            "doc_id": doc_id,
+            "bridge_slides": len(bridge_paths),
+            "has_originals": bool(orig_paths),
+            "restored_grades": len(_docs[doc_id]["grades"]),
+            "pdf_onboard_mode": _docs[doc_id].get("pdf_onboard_mode"),
+        },
+    )
+    _update_history_snapshot(doc_id)
+    return result
+
+
+@app.get("/api/docs")
+def list_docs():
+    result = [
+        {
+            "doc_id":        doc_id,
+            "name":          d["name"],
+            "slide_count":   d["slide_count"],
+            "source_path":   d["source_path"],
+            "source_format": d.get("source_format", "pptx"),
+            "has_rebuild":   bool(d["rebuilt_path"]),
+            "has_originals": bool(d["orig_paths"]),
+            "has_rebuilt_renders": bool(d["rebuilt_paths"]),
+            "grade_summary": _grade_summary(d["grades"], d["slide_count"]),
+            "diagnostic_summary": _diagnostic_summary(d["diagnostics"]),
+            "tableau": _tableau_overview(d) if d.get("source_format") == "tableau" else None,
+        }
+        for doc_id, d in _docs.items()
+    ]
+    log.info("list_docs: %d loaded docs", len(result))
+    return result
+
+
+@app.get("/api/docs/{doc_id}")
+def get_doc(doc_id: str):
+    d = _require(doc_id)
+    return {
+        "doc_id":        doc_id,
+        "name":          d["name"],
+        "slide_count":   d["slide_count"],
+        "source_path":   d["source_path"],
+        "source_format": d.get("source_format", "pptx"),
+        "has_rebuild":   bool(d["rebuilt_path"]),
+        "has_originals": bool(d["orig_paths"]),
+        "has_rebuilt_renders": bool(d["rebuilt_paths"]),
+        "grade_summary": _grade_summary(d["grades"], d["slide_count"]),
+        "diagnostic_summary": _diagnostic_summary(d["diagnostics"]),
+        "grades":        d["grades"],
+        "tableau": _tableau_overview(d) if d.get("source_format") == "tableau" else None,
+    }
+
+
+@app.get("/api/history")
+def get_history():
+    with _history_lock:
+        history = _load_history_unlocked()
+    docs = list(history.get("docs", {}).values())
+    docs.sort(key=lambda d: d.get("updated_at", ""), reverse=True)
+    return {"docs": docs}
+
+
+@app.get("/api/docs/{doc_id}/summary")
+def get_summary(doc_id: str):
+    return _doc_summary(doc_id)
+
+
+@app.get("/api/docs/{doc_id}/tableau")
+def get_tableau(doc_id: str):
+    return _tableau_payload(_require(doc_id))
+
+
+@app.get("/api/docs/{doc_id}/tableau/images/{image_index}")
+def get_tableau_image(doc_id: str, image_index: int):
+    d = _require(doc_id)
+    if d.get("source_format") != "tableau":
+        raise HTTPException(400, "Document is not a Tableau workbook")
+    tableau = (d["doc"].custom_properties or {}).get("tableau", {})
+    images = tableau.get("packaged_images", [])
+    if image_index < 0 or image_index >= len(images):
+        raise HTTPException(404, f"Tableau packaged image {image_index} out of range")
+    image = images[image_index]
+    source_path = Path(d["source_path"])
+    if source_path.suffix.lower() != ".twbx":
+        raise HTTPException(404, "Packaged Tableau images only exist for .twbx files")
+    image_path = str(image.get("path") or "").replace("\\", "/")
+    if not image_path:
+        raise HTTPException(404, "Packaged image path is missing")
+    try:
+        with zipfile.ZipFile(source_path) as package:
+            payload = package.read(image_path)
+    except KeyError:
+        raise HTTPException(404, f"Packaged image not found: {image_path}")
+    media_type = "image/jpeg" if str(image.get("format", "")).lower() in {"jpg", "jpeg"} else "image/png"
+    return Response(content=payload, media_type=media_type, headers={"Cache-Control": "max-age=60"})
+
+
+@app.post("/api/docs/{doc_id}/tableau/native-screenshot")
+def capture_tableau_native_screenshot(doc_id: str, wait_sec: int = 45):
+    d = _require(doc_id)
+    if d.get("source_format") != "tableau":
+        raise HTTPException(400, "Document is not a Tableau workbook")
+    if sys.platform != "win32":
+        raise HTTPException(400, "Native Tableau screenshot capture currently requires Windows/Tableau Desktop")
+    source_path = Path(d["source_path"])
+    if not source_path.exists():
+        raise HTTPException(404, f"Source workbook missing: {source_path}")
+
+    out_dir = _CACHE_DIR / doc_id / "tableau-native"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "native-window.png"
+    result = _capture_tableau_desktop_window(source_path, out_path, wait_sec=max(5, min(wait_sec, 120)))
+    d["tableau_native_screenshot"] = str(out_path)
+    _record_event(
+        d["source_path"], d["name"], "tableau", d["slide_count"],
+        "native_tableau_screenshot",
+        f"Captured Tableau Desktop window: {result.get('title')}",
+        {"doc_id": doc_id, **result},
+        "ok",
+    )
+    _update_history_snapshot(doc_id)
+    return result
+
+
+@app.get("/api/docs/{doc_id}/tableau/native-screenshot.png")
+def get_tableau_native_screenshot(doc_id: str):
+    d = _require(doc_id)
+    path = d.get("tableau_native_screenshot")
+    if not path:
+        raise HTTPException(404, "Native Tableau screenshot has not been captured yet")
+    p = Path(path)
+    if not p.exists():
+        raise HTTPException(404, f"Native Tableau screenshot missing: {p}")
+    return FileResponse(str(p), media_type="image/png", headers={"Cache-Control": "max-age=30"})
+
+
+@app.post("/api/docs/{doc_id}/tableau/artifacts/{artifact_n}/capture")
+def capture_tableau_artifact(doc_id: str, artifact_n: int, wait_sec: int = 60):
+    """Open Tableau Desktop, navigate to a specific worksheet/artifact, and capture a screenshot."""
+    d = _require(doc_id)
+    if d.get("source_format") != "tableau":
+        raise HTTPException(400, "Document is not a Tableau workbook")
+    if sys.platform != "win32":
+        raise HTTPException(400, "Native Tableau screenshot capture requires Windows/Tableau Desktop")
+    source_path = Path(d["source_path"])
+    if not source_path.exists():
+        raise HTTPException(404, f"Source workbook missing: {source_path}")
+
+    # Find the artifact name for this slide number
+    doc = d["doc"]
+    artifact_slide = next((s for s in doc.slides if s.slide_number == artifact_n), None)
+    if artifact_slide is None:
+        raise HTTPException(404, f"Artifact {artifact_n} not found in document")
+
+    props = artifact_slide.custom_properties or {}
+    tab_info = props.get("tableau", {}) or {}
+    artifact_name = tab_info.get("name") or tab_info.get("title") or f"Artifact {artifact_n}"
+    artifact_kind = props.get("tableau_kind", "artifact")
+
+    out_dir = _CACHE_DIR / doc_id / "tableau-artifacts"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"artifact-{artifact_n:03d}.png"
+
+    result = _capture_tableau_artifact_window(
+        source_path, artifact_name, artifact_kind, out_path,
+        wait_sec=max(5, min(wait_sec, 120)),
+    )
+
+    # Cache per-artifact path in doc state
+    artifact_captures = d.setdefault("tableau_artifact_captures", {})
+    artifact_captures[artifact_n] = str(out_path)
+
+    _record_event(
+        d["source_path"], d["name"], "tableau", d["slide_count"],
+        "tableau_artifact_capture",
+        f"Captured Tableau artifact {artifact_n}: {artifact_name}",
+        {"doc_id": doc_id, "artifact_n": artifact_n, "artifact_name": artifact_name, **result},
+        "ok",
+    )
+    _update_history_snapshot(doc_id)
+    return result
+
+
+@app.get("/api/docs/{doc_id}/tableau/artifacts/{artifact_n}/capture.png")
+def get_tableau_artifact_capture(doc_id: str, artifact_n: int):
+    d = _require(doc_id)
+    captures = d.get("tableau_artifact_captures", {})
+    path = captures.get(artifact_n)
+    if not path:
+        raise HTTPException(404, f"No capture for artifact {artifact_n} — call POST first")
+    p = Path(path)
+    if not p.exists():
+        raise HTTPException(404, f"Capture image missing: {p}")
+    return FileResponse(str(p), media_type="image/png", headers={"Cache-Control": "max-age=30"})
+
+
+@app.post("/api/docs/{doc_id}/tableau/capture-all")
+def capture_all_tableau_sheets(doc_id: str, wait_sec: int = 60, render_wait: float = 2.0):
+    """Open Tableau Desktop once and screenshot every worksheet and dashboard in order.
+
+    Navigates via Ctrl+PgDn cycling — no per-sheet Tableau instance needed.
+    Returns a mapping of slide_number → capture path.
+    """
+    d = _require(doc_id)
+    if d.get("source_format") != "tableau":
+        raise HTTPException(400, "Document is not a Tableau workbook")
+    if sys.platform != "win32":
+        raise HTTPException(400, "Requires Windows + Tableau Desktop")
+    source_path = Path(d["source_path"])
+    if not source_path.exists():
+        raise HTTPException(404, f"Source workbook missing: {source_path}")
+
+    doc = d["doc"]
+    # Collect ordered artifacts (worksheets then dashboards, as they appear in the TWB tab strip)
+    artifacts = []
+    for slide in doc.slides:
+        props = slide.custom_properties or {}
+        kind = props.get("tableau_kind")
+        if kind not in {"worksheet", "dashboard"}:
+            continue
+        info = props.get("tableau", {}) or {}
+        name = info.get("name") or info.get("title") or f"Sheet {slide.slide_number}"
+        artifacts.append({"slide_number": slide.slide_number, "name": name, "kind": kind})
+
+    if not artifacts:
+        raise HTTPException(400, "No worksheet or dashboard artifacts found in this document")
+
+    out_dir = _CACHE_DIR / doc_id / "tableau-artifacts"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    results = _capture_all_tableau_sheets(
+        source_path, artifacts, out_dir,
+        wait_sec=max(10, min(wait_sec, 180)),
+        render_wait=max(0.5, min(render_wait, 10.0)),
+    )
+
+    # Cache results per artifact_n
+    artifact_captures = d.setdefault("tableau_artifact_captures", {})
+    captured_count = 0
+    for r in results:
+        sn = r.get("slide_number")
+        path = r.get("path")
+        if sn and path and Path(path).exists():
+            artifact_captures[sn] = path
+            captured_count += 1
+
+    _record_event(
+        d["source_path"], d["name"], "tableau", d["slide_count"],
+        "tableau_capture_all",
+        f"Batch-captured {captured_count}/{len(artifacts)} sheets from Tableau Desktop",
+        {"doc_id": doc_id, "captured": captured_count, "total": len(artifacts)},
+        "ok",
+    )
+    _update_history_snapshot(doc_id)
+    return {"captured": captured_count, "total": len(artifacts), "results": results}
+
+
+# ─── Smart capture helpers ────────────────────────────────────────────────────
+
+def _pixel_quality_score(img: Image.Image) -> float:
+    """0–100 quality score. 0 = black/blank, 100 = rich rendered content.
+
+    Uses mean brightness and standard deviation of the grayscale image.
+    A fully-black screenshot has mean≈0; a fully-white blank has std≈0.
+    A rendered chart has mean in a middle range and meaningful std.
+    """
+    import math
+    gray = img.convert("L")
+    stat = ImageStat.Stat(gray)
+    mean = stat.mean[0]
+    std  = stat.stddev[0]
+    brightness_score = min(50.0, max(0.0, (mean - 10.0) / 4.0))   # mean 10→50 maps to 0→10; 210→50
+    texture_score    = min(50.0, std * 50.0 / 70.0)                # std=70 → 50 points
+    return brightness_score + texture_score
+
+
+def _images_rms_diff(img1: Image.Image, img2: Image.Image) -> float:
+    """RMS pixel difference between two images (downsampled for speed)."""
+    import math
+    s1 = img1.convert("L").resize((80, 45), Image.BILINEAR)
+    s2 = img2.convert("L").resize((80, 45), Image.BILINEAR)
+    diff = ImageChops.difference(s1, s2)
+    stat = ImageStat.Stat(diff)
+    return stat.rms[0]
+
+
+def _wait_until_stable(
+    grab_fn: "Any",
+    *,
+    max_wait: float = 8.0,
+    stability_hold: float = 0.8,
+    rms_threshold: float = 1.2,
+    min_quality: float = 12.0,
+    poll_interval: float = 0.35,
+) -> Image.Image:
+    """Poll screenshots until two consecutive frames are nearly identical AND quality is ok.
+
+    Returns the stable (best-quality) frame. Falls back to whatever we have at timeout.
+    """
+    deadline = time.time() + max_wait
+    prev = grab_fn()
+    stable_since: float | None = None
+    best = prev
+    best_q = _pixel_quality_score(prev)
+
+    while time.time() < deadline:
+        time.sleep(poll_interval)
+        curr = grab_fn()
+        q = _pixel_quality_score(curr)
+        rms = _images_rms_diff(prev, curr)
+
+        if q > best_q:
+            best = curr
+            best_q = q
+
+        if rms <= rms_threshold and q >= min_quality:
+            if stable_since is None:
+                stable_since = time.time()
+            elif time.time() - stable_since >= stability_hold:
+                return curr  # held stable long enough
+        else:
+            stable_since = None
+
+        prev = curr
+
+    return best  # return highest-quality frame seen, even if not fully stable
+
+
+def _lm_studio_vision_check(
+    img_path: Path,
+    lm_url: str = "http://localhost:1234/v1/chat/completions",
+) -> dict[str, Any]:
+    """Ask the LM Studio vision model if the screenshot looks fully rendered.
+
+    Returns {ok: bool|None, score: int 1-5, reason: str, description: str}.
+    ok=None means the vision call itself failed (network/model error).
+    """
+    import json as _json
+    import urllib.request as _req
+
+    try:
+        with open(img_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+
+        prompt = (
+            "You are reviewing a screenshot of Tableau Desktop to decide if the visualization "
+            "is fully rendered and ready to save.\n\n"
+            "Answer ONLY with valid JSON — no extra text:\n"
+            '{"ok": true_or_false, "score": 1_to_5, "reason": "one sentence", "description": "what you see"}\n\n'
+            "ok=true  → chart/dashboard is fully rendered with real data visible\n"
+            "ok=false → screen is black, blank, still loading a spinner, or shows an error\n"
+            "score    → 1=completely black/blank, 5=fully rendered with clear data"
+        )
+
+        payload = _json.dumps({
+            "model": "google/gemma-3-27b",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                ],
+            }],
+            "max_tokens": 150,
+            "temperature": 0.05,
+        }).encode()
+
+        req = _req.Request(lm_url, data=payload, headers={"Content-Type": "application/json"})
+        with _req.urlopen(req, timeout=60) as resp:
+            body = _json.loads(resp.read())
+
+        text = body["choices"][0]["message"]["content"].strip()
+        m = re.search(r"\{.*?\}", text, re.DOTALL)
+        if m:
+            result = _json.loads(m.group())
+            # normalise keys
+            return {
+                "ok":          bool(result.get("ok", False)),
+                "score":       int(result.get("score", 0)),
+                "reason":      str(result.get("reason", "")),
+                "description": str(result.get("description", "")),
+            }
+        ok = ("true" in text.lower()) and ("false" not in text.lower())
+        return {"ok": ok, "score": 3 if ok else 1, "reason": text[:200], "description": ""}
+
+    except Exception as exc:
+        log.warning("vision_check failed for %s: %s", img_path.name, exc)
+        return {"ok": None, "score": None, "reason": str(exc)[:200], "description": "vision unavailable"}
+
+
+def _smart_capture_one(
+    grab_fn: "Any",
+    out_path: Path,
+    sheet_name: str,
+    *,
+    max_render_wait: float = 10.0,
+    quality_threshold: float = 14.0,
+    max_retries: int = 3,
+    use_vision: bool = True,
+) -> dict[str, Any]:
+    """Capture one sheet with stability wait, quality check, and optional vision verification."""
+    attempt = 0
+    best_img: Image.Image | None = None
+    best_q = -1.0
+
+    while attempt < max_retries:
+        wait_this_round = max_render_wait * (attempt + 1)
+        img = _wait_until_stable(
+            grab_fn,
+            max_wait=wait_this_round,
+            min_quality=quality_threshold,
+        )
+        q = _pixel_quality_score(img)
+        if best_img is None or q > best_q:
+            best_img = img
+            best_q = q
+
+        if q >= quality_threshold:
+            break
+
+        attempt += 1
+        log.warning("smart_capture: %s attempt %d quality=%.1f < %.1f, retrying", sheet_name, attempt, q, quality_threshold)
+        if attempt < max_retries:
+            time.sleep(1.5)  # brief pause before re-checking
+
+    assert best_img is not None
+    best_img.save(out_path)
+
+    vision: dict[str, Any] = {}
+    if use_vision:
+        vision = _lm_studio_vision_check(out_path)
+        # If vision says bad and we have retries left, try one last grab
+        if vision.get("ok") is False and best_q < 50.0:
+            log.warning(
+                "smart_capture: vision rejected %s (score=%s, reason=%s) — final grab",
+                sheet_name, vision.get("score"), vision.get("reason"),
+            )
+            time.sleep(max_render_wait)
+            final_img = grab_fn()
+            final_q = _pixel_quality_score(final_img)
+            if final_q > best_q:
+                final_img.save(out_path)
+                best_q = final_q
+                vision = _lm_studio_vision_check(out_path)
+
+    return {
+        "quality_score": round(best_q, 1),
+        "vision":        vision,
+        "ok":            best_q >= quality_threshold,
+    }
+
+
+def _pil_to_bytes(img: Image.Image, fmt: str = "PNG") -> bytes:
+    import io
+    buf = io.BytesIO()
+    img.save(buf, format=fmt)
+    return buf.getvalue()
+
+
+def _force_hwnd_topmost(hwnd: int) -> None:
+    """Force window above all other windows so ImageGrab captures it, not what's in front."""
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    HWND_TOPMOST = ctypes.c_void_p(-1)
+    SWP_NOMOVE    = 0x0002
+    SWP_NOSIZE    = 0x0001
+    SWP_SHOWWINDOW = 0x0040
+    user32.SetWindowPos(
+        wintypes.HWND(hwnd), HWND_TOPMOST,
+        0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+    )
+    # Thread-input attachment trick so SetForegroundWindow works from background threads
+    current_tid = ctypes.windll.kernel32.GetCurrentThreadId()
+    fg_hwnd = user32.GetForegroundWindow()
+    fg_tid  = user32.GetWindowThreadProcessId(fg_hwnd, None)
+    if fg_tid and fg_tid != current_tid:
+        user32.AttachThreadInput(current_tid, fg_tid, True)
+        user32.SetForegroundWindow(wintypes.HWND(hwnd))
+        user32.AttachThreadInput(current_tid, fg_tid, False)
+    else:
+        user32.SetForegroundWindow(wintypes.HWND(hwnd))
+    user32.BringWindowToTop(wintypes.HWND(hwnd))
+
+
+def _restore_hwnd_notopmost(hwnd: int) -> None:
+    """Remove topmost flag from window after capture is complete."""
+    import ctypes
+    from ctypes import wintypes
+    HWND_NOTOPMOST = ctypes.c_void_p(-2)
+    SWP_NOMOVE = 0x0002
+    SWP_NOSIZE = 0x0001
+    ctypes.windll.user32.SetWindowPos(
+        wintypes.HWND(hwnd), HWND_NOTOPMOST,
+        0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE,
+    )
+
+
+def _get_window_title(hwnd: int) -> str:
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    length = user32.GetWindowTextLengthW(wintypes.HWND(hwnd))
+    if length <= 0:
+        return ""
+    buf = ctypes.create_unicode_buffer(length + 1)
+    user32.GetWindowTextW(wintypes.HWND(hwnd), buf, length + 1)
+    return buf.value
+
+
+def _sendinput_key_combo(vk_mod: int, vk_key: int) -> None:
+    """Send modifier+key via SendInput — goes to the globally-focused window.
+
+    This is the correct way to simulate keystrokes in modern Windows apps
+    (SendMessageW WM_KEYDOWN is ignored by apps that use TranslateMessage/DispatchMessage).
+    Caller must ensure the target window is the foreground window first.
+    """
+    import ctypes
+
+    INPUT_KEYBOARD = 1
+    KEYEVENTF_KEYUP = 0x0002
+
+    class _KI(ctypes.Structure):
+        _fields_ = [
+            ("wVk",         ctypes.c_ushort),
+            ("wScan",       ctypes.c_ushort),
+            ("dwFlags",     ctypes.c_ulong),
+            ("time",        ctypes.c_ulong),
+            ("dwExtraInfo", ctypes.c_ulong),
+        ]
+
+    class _INPUT(ctypes.Structure):
+        _fields_ = [
+            ("type", ctypes.c_ulong),
+            ("ki",   _KI),
+            ("_pad", ctypes.c_ubyte * 8),
+        ]
+
+    seq = [
+        _INPUT(type=INPUT_KEYBOARD, ki=_KI(wVk=vk_mod)),
+        _INPUT(type=INPUT_KEYBOARD, ki=_KI(wVk=vk_key)),
+        _INPUT(type=INPUT_KEYBOARD, ki=_KI(wVk=vk_key, dwFlags=KEYEVENTF_KEYUP)),
+        _INPUT(type=INPUT_KEYBOARD, ki=_KI(wVk=vk_mod, dwFlags=KEYEVENTF_KEYUP)),
+    ]
+    arr = (_INPUT * len(seq))(*seq)
+    ctypes.windll.user32.SendInput(len(seq), arr, ctypes.sizeof(_INPUT))
+
+
+def _send_ctrl_pgup(user32: Any, hwnd: int, canvas_xy: tuple[int, int] | None = None) -> None:
+    """Send Ctrl+PgUp to navigate to the previous Tableau tab."""
+    import pyautogui
+    _force_hwnd_topmost(hwnd)
+    time.sleep(0.05)
+    pyautogui.hotkey("ctrl", "pageup")
+
+
+def _mouse_click_screen(x: int, y: int) -> None:
+    """Perform a real left-click at absolute screen coordinates."""
+    import ctypes
+    ctypes.windll.user32.SetCursorPos(x, y)
+    time.sleep(0.06)
+    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
+    time.sleep(0.06)
+    ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
+
+
+def _find_tab_via_ocr(sheet_name: str, win_rect: tuple[int, int, int, int]) -> tuple[int, int] | None:
+    """Tesseract-OCR the Tableau tab strip to find (screen_x, screen_y) of the named tab.
+
+    Tesseract must be installed at C:\\Program Files\\Tesseract-OCR\\tesseract.exe.
+    Returns None if the tab is not found or Tesseract is unavailable.
+    """
+    try:
+        import pytesseract
+        pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+        win_l, win_t, win_r, win_b = win_rect
+        tab_h = 38
+        tab_bbox = (win_l, win_b - tab_h, win_r, win_b)
+        tab_img = ImageGrab.grab(bbox=tab_bbox)
+
+        # 2× upscale for better OCR on small tab text
+        w, h = tab_img.size
+        tab_big = tab_img.resize((w * 2, h * 2), Image.LANCZOS)
+
+        data = pytesseract.image_to_data(tab_big, output_type=pytesseract.Output.DICT)
+
+        texts = [str(t).strip() for t in data["text"]]
+        name_lower = sheet_name.lower().strip()
+        target_words = name_lower.split()
+
+        # Helper: screen coords from OCR pixel coords inside the 2× upscaled crop
+        def to_screen(px: int, py: int) -> tuple[int, int]:
+            return win_l + px // 2, win_b - tab_h + py // 2
+
+        # Exact single-token match
+        for i, word in enumerate(texts):
+            if word.lower() == name_lower:
+                cx = data["left"][i] + data["width"][i] // 2
+                cy = data["top"][i]  + data["height"][i] // 2
+                return to_screen(cx, cy)
+
+        # Multi-word contiguous match
+        n = len(target_words)
+        for i in range(len(texts) - n + 1):
+            window_words = [texts[j].lower() for j in range(i, i + n)]
+            if window_words == target_words:
+                left  = data["left"][i]
+                right = data["left"][i + n - 1] + data["width"][i + n - 1]
+                cx = (left + right) // 2
+                cy = data["top"][i] + data["height"][i] // 2
+                return to_screen(cx, cy)
+
+        # Substring fallback: join all tokens and look for the name
+        joined = " ".join(t.lower() for t in texts if t)
+        log.info("smart_capture: OCR tab strip tokens=%r (looking for %r)", joined[:200], sheet_name)
+        return None
+
+    except ImportError:
+        log.warning("smart_capture: pytesseract not installed; OCR tab navigation unavailable")
+        return None
+    except Exception as exc:
+        log.warning("smart_capture: OCR tab find failed for '%s': %s", sheet_name, exc)
+        return None
+
+
+def _find_tab_via_vision(sheet_name: str, win_rect: tuple[int, int, int, int]) -> tuple[int, int] | None:
+    """Ask LM Studio vision model for the screen position of the named tab in the tab strip.
+
+    Returns (screen_x, screen_y) or None if not found / model unavailable.
+    """
+    try:
+        import json as _json, urllib.request as _req
+        win_l, win_t, win_r, win_b = win_rect
+        tab_bbox = (win_l, win_b - 44, win_r, win_b)
+        tab_img = ImageGrab.grab(bbox=tab_bbox)
+        b64 = base64.b64encode(_pil_to_bytes(tab_img)).decode()
+
+        prompt = (
+            f'This is the tab strip at the bottom of Tableau Desktop. '
+            f'Find the tab named exactly "{sheet_name}" (case-insensitive). '
+            f'The image is {tab_img.width}×{tab_img.height} px. '
+            f'Reply ONLY with JSON: {{"found": true_or_false, "x": pixel_x_of_tab_center}} '
+            f'(x is in image pixels, 0=left edge). If not found set found=false and x=0.'
+        )
+        payload = _json.dumps({
+            "model": "google/gemma-3-27b",
+            "messages": [{"role": "user", "content": [
+                {"type": "text",      "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+            ]}],
+            "max_tokens": 60, "temperature": 0.05,
+        }).encode()
+        req = _req.Request(
+            "http://localhost:1234/v1/chat/completions",
+            data=payload, headers={"Content-Type": "application/json"},
+        )
+        with _req.urlopen(req, timeout=25) as resp:
+            body = _json.loads(resp.read())
+        text = body["choices"][0]["message"]["content"].strip()
+        m = re.search(r"\{.*?\}", text, re.DOTALL)
+        if m:
+            jd = _json.loads(m.group())
+            if jd.get("found") and jd.get("x"):
+                screen_x = win_l + int(jd["x"])
+                screen_y = win_b - 22
+                log.info("smart_capture: vision tab found '%s' at x=%d", sheet_name, jd["x"])
+                return screen_x, screen_y
+        return None
+    except Exception as exc:
+        log.warning("smart_capture: vision tab-find failed for '%s': %s", sheet_name, exc)
+        return None
+
+
+def _prep_capture_twbx(source_path: Path) -> tuple[Path, list[str]]:
+    """Create an unhidden copy of the .twbx with all worksheet tabs visible.
+
+    Returns (temp_twbx_path, tab_order) where tab_order lists sheet names
+    in the order they will appear in Tableau Desktop's tab strip (from <windows>).
+    The temp file is written alongside the source; caller must delete it.
+    """
+    import zipfile, re, xml.etree.ElementTree as ET
+
+    with zipfile.ZipFile(source_path, "r") as zin:
+        twb_name = next(n for n in zin.namelist() if n.endswith(".twb"))
+        twb_bytes = zin.read(twb_name)
+
+    xml_str = twb_bytes.decode("utf-8", errors="replace")
+
+    # Extract tab order from <windows> section (this is the order Tableau shows tabs)
+    root = ET.fromstring(xml_str)
+    windows_el = root.find("windows")
+    tab_order: list[str] = []
+    if windows_el is not None:
+        for w in windows_el:
+            cls = w.get("class", "")
+            name = w.get("name", "")
+            if cls in ("worksheet", "dashboard") and name:
+                tab_order.append(name)
+
+    # Remove hidden='true' from <window> elements to make all worksheets visible
+    def _strip_hidden(m: re.Match) -> str:
+        return m.group(0).replace(" hidden='true'", "")
+
+    xml_str = re.sub(r"<window[^>]+>", _strip_hidden, xml_str)
+
+    # Write temp file in the same directory as source (so Tableau finds any sidecar files)
+    temp_path = source_path.with_name("_percy_capture.twbx")
+    with zipfile.ZipFile(source_path, "r") as zin:
+        with zipfile.ZipFile(temp_path, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                data = xml_str.encode("utf-8") if item.filename == twb_name else zin.read(item.filename)
+                zout.writestr(item, data)
+
+    return temp_path, tab_order
+
+
+def _dismiss_blocking_dialogs(tableau_hwnd: int) -> None:
+    """Close non-Tableau system dialog windows (e.g. OneDrive) that could steal keyboard focus.
+
+    Only targets non-resizable windows (no WS_THICKFRAME) with known blocking titles,
+    so browser windows and other main application windows are never closed.
+    """
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    WM_CLOSE = 0x0010
+    WS_THICKFRAME = 0x00040000  # Resizable windows are main apps, not dialogs
+
+    blockers: list[int] = []
+
+    def _cb(hwnd: int, _: int) -> bool:
+        if hwnd == tableau_hwnd or not user32.IsWindowVisible(hwnd):
+            return True
+        # Skip resizable (main application) windows
+        if user32.GetWindowLongW(hwnd, -16) & WS_THICKFRAME:
+            return True
+        l = user32.GetWindowTextLengthW(hwnd)
+        if l <= 0:
+            return True
+        buf = ctypes.create_unicode_buffer(l + 1)
+        user32.GetWindowTextW(hwnd, buf, l + 1)
+        title = buf.value.lower()
+        if any(k in title for k in ("onedrive", "file recovery")):
+            blockers.append(hwnd)
+        return True
+
+    user32.EnumWindows(ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)(_cb), 0)
+    for h in blockers:
+        log.info("smart_capture: dismissing blocking dialog hwnd=%d", h)
+        user32.PostMessageW(wintypes.HWND(h), WM_CLOSE, 0, 0)
+        time.sleep(0.3)
+
+
+def _smart_capture_all_tableau(
+    source_path: Path,
+    artifacts: list[dict],
+    out_dir: Path,
+    *,
+    wait_sec: int = 60,
+    max_render_wait: float = 10.0,
+    use_vision: bool = True,
+    quality_threshold: float = 14.0,
+    max_retries: int = 3,
+) -> list[dict]:
+    """Open Tableau Desktop once and smart-capture every artifact.
+
+    For each sheet:
+      1. Force Tableau window topmost (fixes browser-covers-Tableau capture bug)
+      2. Navigate tab by name: OCR → vision-model → keyboard Ctrl+PgDn
+      3. Wait for rendering to stabilize (frame-diff analysis)
+      4. Pixel quality check — retry with longer wait if too dark/blank
+      5. Vision model verify (LM Studio) — final retry if vision rejects
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+
+    # Unhide all worksheet tabs so every artifact is keyboard-navigable.
+    # This rewrites the <windows> section to remove hidden='true'.
+    open_path, tab_order = _prep_capture_twbx(source_path)
+    target_stem = open_path.stem.lower()   # "_percy_capture"
+    log.info("smart_capture: prep'd unhidden workbook %s (tab_order=%s)", open_path.name, tab_order)
+
+    # Re-order artifacts to match Tableau's tab strip order so keyboard nav is sequential.
+    name_to_artifact: dict[str, dict] = {a["name"]: a for a in artifacts}
+    sorted_artifacts: list[dict] = []
+    for tab_name in tab_order:
+        if tab_name in name_to_artifact:
+            sorted_artifacts.append(name_to_artifact.pop(tab_name))
+    sorted_artifacts.extend(name_to_artifact.values())  # any not in tab_order at the end
+
+    # Kill any existing Tableau processes so we start clean (no file-recovery dialogs).
+    import subprocess
+    subprocess.run(["taskkill", "/F", "/IM", "tableau.exe"], capture_output=True)
+    time.sleep(1.5)
+
+    log.info("smart_capture: opening %s", open_path.name)
+    os.startfile(str(open_path))  # type: ignore[attr-defined]
+
+    # Wait for the actual Tableau Desktop workbook window — NOT the "Opening workbook..." loader.
+    # The real window title is "Tableau - <WorkbookName>"; loading dialogs start with "Opening".
+    hwnd = 0
+    win_title = ""
+    deadline = time.time() + wait_sec
+    while time.time() < deadline:
+        for w in _visible_windows(user32):
+            if not _is_tableau_window(w):
+                continue
+            t = w["title"].lower()
+            if target_stem not in t:
+                continue
+            if t.startswith("opening") or t.startswith("tableau - opening"):
+                continue  # skip "Opening workbook '...'" loader
+            # Verify the window has actual non-zero bounds (not a hidden/unrendered window)
+            r = wintypes.RECT()
+            user32.GetWindowRect(wintypes.HWND(w["hwnd"]), ctypes.byref(r))
+            if r.right - r.left < 100:
+                continue
+            hwnd = int(w["hwnd"])
+            win_title = str(w["title"])
+            break
+        if hwnd:
+            break
+        time.sleep(1.5)
+
+    if not hwnd:
+        err = (
+            f"Timed out waiting for Tableau Desktop to open '{source_path.name}' ({wait_sec}s). "
+            "Ensure Tableau Desktop is installed and .twbx files are associated with it."
+        )
+        return [{"error": err, "slide_number": a["slide_number"], "ok": False} for a in artifacts]
+
+    log.info("smart_capture: found Tableau window hwnd=%s title=%r", hwnd, win_title)
+
+    # Maximize, then force topmost so the browser can't cover it during capture
+    user32.ShowWindow(wintypes.HWND(hwnd), 3)  # SW_MAXIMIZE
+    time.sleep(2.0)
+    _force_hwnd_topmost(hwnd)
+    time.sleep(1.0)
+
+    # Dismiss any startup dialogs (File Recovery, license prompts, etc.) with Escape.
+    # We press it several times with pauses to handle stacked dialogs.
+    import pyautogui
+    log.info("smart_capture: dismissing any startup dialogs (Escape ×5)")
+    for _ in range(5):
+        _force_hwnd_topmost(hwnd)
+        time.sleep(0.2)
+        pyautogui.press("escape")
+        time.sleep(0.4)
+    time.sleep(1.0)
+
+    # Read window bounds after maximize
+    rect = wintypes.RECT()
+    user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect))
+    win_l, win_t = int(rect.left), int(rect.top)
+    win_r, win_b = int(rect.right), int(rect.bottom)
+    win_rect = (win_l, win_t, win_r, win_b)
+    log.info("smart_capture: window bounds L=%d T=%d R=%d B=%d", win_l, win_t, win_r, win_b)
+
+    # Content crop: skip Tableau's left data panel, top toolbar, and bottom tab strip
+    sidebar_w   = 330   # Tableau left panel (data pane) is ~330px wide when maximized
+    toolbar_h   = 120   # Top toolbar + menu bar
+    tab_strip_h = 50    # Bottom tab strip
+
+    # Title bar click: safe focus point that does not trigger dashboard navigation actions.
+    # Use win_t+25 to stay well away from the screen top (avoids Windows Snap triggers at y≈0).
+    title_click_x = win_l + 600
+    title_click_y = win_t + 25
+    log.info("smart_capture: title bar focus click target (%d, %d)", title_click_x, title_click_y)
+
+    def _grab() -> Image.Image:
+        """Capture Tableau content area. Re-reads window bounds each call so a window
+        move/restore after the initial bbox computation doesn't produce desktop screenshots."""
+        # Restore window if it got minimized
+        if user32.IsIconic(wintypes.HWND(hwnd)):
+            user32.ShowWindow(wintypes.HWND(hwnd), 3)  # SW_MAXIMIZE
+            time.sleep(1.0)
+        _force_hwnd_topmost(hwnd)
+        # Re-read current window position — title-bar click or OS snap may have moved it
+        _r = wintypes.RECT()
+        user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(_r))
+        _l2, _t2, _r2, _b2 = int(_r.left), int(_r.top), int(_r.right), int(_r.bottom)
+        _bbox = (_l2 + sidebar_w, _t2 + toolbar_h, _r2, _b2 - tab_strip_h)
+        time.sleep(0.25)  # Let DWM composite the window before grabbing
+        return ImageGrab.grab(bbox=_bbox)
+
+    # One-time focus: click the window title bar (safe — does not trigger sheet navigation).
+    # Tableau opens to the first sheet in the <windows> section (sorted_artifacts[0]).
+    # After this single click, we use ONLY keyboard for all navigation (no further clicks).
+    import pyautogui
+    _force_hwnd_topmost(hwnd)
+    _dismiss_blocking_dialogs(hwnd)
+    time.sleep(0.2)
+    _mouse_click_screen(title_click_x, title_click_y)
+    time.sleep(0.8)
+    # Verify Tableau is still foreground; if the click moved the window, re-read bounds
+    _r_check = wintypes.RECT()
+    user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(_r_check))
+    win_l2, win_t2, win_r2, win_b2 = int(_r_check.left), int(_r_check.top), int(_r_check.right), int(_r_check.bottom)
+    if (win_l2, win_t2, win_r2, win_b2) != (win_l, win_t, win_r, win_b):
+        log.warning("smart_capture: window moved after focus click: %d,%d→%d,%d (was %d,%d→%d,%d) — re-maximizing",
+                    win_l2, win_t2, win_r2, win_b2, win_l, win_t, win_r, win_b)
+        user32.ShowWindow(wintypes.HWND(hwnd), 3)  # SW_MAXIMIZE
+        time.sleep(1.0)
+        _force_hwnd_topmost(hwnd)
+        time.sleep(0.3)
+
+    results: list[dict] = []
+    current_tab_idx = 0  # Tableau opens to sorted_artifacts[0] (first sheet in <windows>)
+
+    for i, artifact in enumerate(sorted_artifacts):
+        sn   = artifact["slide_number"]
+        name = artifact["name"]
+        kind = artifact["kind"]
+        out_path = out_dir / f"artifact-{sn:03d}.png"
+
+        log.info("smart_capture: [%d/%d] navigating to '%s' (%s)", i + 1, len(sorted_artifacts), name, kind)
+        _force_hwnd_topmost(hwnd)
+        _dismiss_blocking_dialogs(hwnd)
+
+        nav_method = "none"
+
+        # ── Strategy 1: Tesseract OCR click on visible tab ───────────────────
+        ocr_pos = _find_tab_via_ocr(name, win_rect)
+        if ocr_pos:
+            _mouse_click_screen(*ocr_pos)
+            nav_method = "ocr"
+            current_tab_idx = i
+            log.info("smart_capture: OCR tab click for '%s' at %s", name, ocr_pos)
+
+        # ── Strategy 2: pure keyboard navigation (no intermediate clicks) ────
+        # Ctrl+PgDn/PgUp retains focus from the initial title bar click and
+        # works reliably across all 23 tabs without any canvas re-clicking.
+        if nav_method == "none":
+            steps = i - current_tab_idx
+            if steps != 0:
+                _force_hwnd_topmost(hwnd)
+                time.sleep(0.05)
+                if steps > 0:
+                    log.info("smart_capture: keyboard nav — Ctrl+PgDn ×%d for '%s'", steps, name)
+                    for _ in range(steps):
+                        pyautogui.hotkey("ctrl", "pagedown")
+                        time.sleep(0.15)
+                else:
+                    log.info("smart_capture: keyboard nav — Ctrl+PgUp ×%d for '%s'", -steps, name)
+                    for _ in range(-steps):
+                        pyautogui.hotkey("ctrl", "pageup")
+                        time.sleep(0.15)
+
+            current_tab_idx = i
+            nav_method = "keyboard"
+
+        # Give Tableau time to load chart data from the extract before grabbing.
+        # Without this wait, the blank white canvas (no chart rendered yet) stabilises
+        # in <1 s and gets saved as a blank screenshot. 5 s covers typical extract query
+        # times for worksheets with 400K-row datasets.
+        # Also send Escape to dismiss any tooltip/overlay that might cover the viz.
+        _force_hwnd_topmost(hwnd)
+        pyautogui.press("escape")
+        time.sleep(0.15)
+        pyautogui.press("escape")
+        time.sleep(5.0)
+
+        # Capture with stability wait + quality check + optional vision verify
+        capture_meta = _smart_capture_one(
+            _grab, out_path, name,
+            max_render_wait=max_render_wait,
+            quality_threshold=quality_threshold,
+            max_retries=max_retries,
+            use_vision=use_vision,
+        )
+
+        results.append({
+            "slide_number": sn,
+            "name":         name,
+            "kind":         kind,
+            "path":         str(out_path),
+            "nav_method":   nav_method,
+            **capture_meta,
+        })
+
+        q   = capture_meta.get("quality_score", 0)
+        vok = capture_meta.get("vision", {}).get("ok", "n/a")
+        log.info("smart_capture: '%s' quality=%.1f vision=%s nav=%s", name, q, vok, nav_method)
+
+    _restore_hwnd_notopmost(hwnd)
+
+    # Clean up the temp unhidden workbook
+    try:
+        open_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    return results
+
+
+@app.post("/api/docs/{doc_id}/tableau/smart-capture-all")
+def smart_capture_all_tableau_sheets(
+    doc_id: str,
+    wait_sec: int = 60,
+    max_render_wait: float = 10.0,
+    use_vision: bool = True,
+    quality_threshold: float = 14.0,
+    max_retries: int = 3,
+):
+    """Smart batch Tableau capture with stability detection, quality checks, and vision verification."""
+    d = _require(doc_id)
+    if d.get("source_format") != "tableau":
+        raise HTTPException(400, "Document is not a Tableau workbook")
+    if sys.platform != "win32":
+        raise HTTPException(400, "Requires Windows + Tableau Desktop")
+    source_path = Path(d["source_path"])
+    if not source_path.exists():
+        raise HTTPException(404, f"Source workbook missing: {source_path}")
+
+    doc = d["doc"]
+    artifacts: list[dict] = []
+    for slide in doc.slides:
+        props = slide.custom_properties or {}
+        kind  = props.get("tableau_kind")
+        if kind not in {"worksheet", "dashboard"}:
+            continue
+        info = props.get("tableau", {}) or {}
+        name = info.get("name") or info.get("title") or f"Sheet {slide.slide_number}"
+        artifacts.append({"slide_number": slide.slide_number, "name": name, "kind": kind})
+
+    if not artifacts:
+        raise HTTPException(400, "No worksheet or dashboard artifacts found")
+
+    out_dir = _CACHE_DIR / doc_id / "tableau-artifacts"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    results = _smart_capture_all_tableau(
+        source_path, artifacts, out_dir,
+        wait_sec=max(10, min(wait_sec, 300)),
+        max_render_wait=max(2.0, min(max_render_wait, 60.0)),
+        use_vision=use_vision,
+        quality_threshold=quality_threshold,
+        max_retries=max(1, min(max_retries, 5)),
+    )
+
+    artifact_captures = d.setdefault("tableau_artifact_captures", {})
+    captured_count = 0
+    for r in results:
+        sn   = r.get("slide_number")
+        path = r.get("path")
+        if sn and path and Path(path).exists():
+            artifact_captures[sn] = path
+            captured_count += 1
+
+    _record_event(
+        d["source_path"], d["name"], "tableau", d["slide_count"],
+        "tableau_smart_capture_all",
+        f"Smart-captured {captured_count}/{len(artifacts)} sheets with quality verification",
+        {"doc_id": doc_id, "captured": captured_count, "total": len(artifacts),
+         "use_vision": use_vision},
+        "ok",
+    )
+    _update_history_snapshot(doc_id)
+    return {"captured": captured_count, "total": len(artifacts), "results": results}
+
+
+def _capture_all_tableau_sheets(
+    source_path: Path,
+    artifacts: list[dict],
+    out_dir: Path,
+    wait_sec: int = 60,
+    render_wait: float = 2.0,
+) -> list[dict]:
+    """Open Tableau Desktop once, cycle through every tab with Ctrl+PgDn, screenshot each."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    target_stem = source_path.stem.lower()
+
+    # Open the workbook via shell association
+    os.startfile(str(source_path))  # type: ignore[attr-defined]
+
+    # Wait for a Tableau Desktop window (verified by process name, not just title)
+    hwnd = 0
+    title = ""
+    deadline = time.time() + wait_sec
+    while time.time() < deadline:
+        candidates = [
+            w for w in _visible_windows(user32)
+            if _is_tableau_window(w) and target_stem in w["title"].lower()
+        ]
+        if candidates:
+            hwnd = int(candidates[0]["hwnd"])
+            title = str(candidates[0]["title"])
+            break
+        time.sleep(1.0)
+
+    if not hwnd:
+        err = (
+            f"Timed out waiting for Tableau Desktop to open '{source_path.name}' ({wait_sec}s). "
+            "Ensure Tableau Desktop is installed and .twbx files are associated with it."
+        )
+        return [{"error": err, "slide_number": a["slide_number"]} for a in artifacts]
+
+    # Maximize for consistent layout
+    SW_MAXIMIZE = 3
+    user32.ShowWindow(wintypes.HWND(hwnd), SW_MAXIMIZE)
+    user32.SetForegroundWindow(wintypes.HWND(hwnd))
+    time.sleep(render_wait)
+
+    # Navigate to the first sheet by name
+    first_name = artifacts[0]["name"]
+    _navigate_to_tableau_sheet(user32, hwnd, first_name)
+    time.sleep(render_wait)
+
+    # Compute content crop from maximized window bounds
+    rect = wintypes.RECT()
+    user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect))
+    win_l, win_t, win_r, win_b = int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)
+
+    # Tableau layout (maximized): left data panel ~240px, top toolbar ~90px, bottom tabs ~34px
+    sidebar_w = 240
+    toolbar_h = 90
+    tab_strip_h = 34
+    content_l = win_l + sidebar_w
+    content_t = win_t + toolbar_h
+    content_r = win_r
+    content_b = win_b - tab_strip_h
+
+    results = []
+    for i, artifact in enumerate(artifacts):
+        sn = artifact["slide_number"]
+        name = artifact["name"]
+        kind = artifact["kind"]
+
+        if i > 0:
+            _send_ctrl_pgdn(user32, hwnd)
+            time.sleep(render_wait)
+
+        out_path = out_dir / f"artifact-{sn:03d}.png"
+        try:
+            img = ImageGrab.grab(bbox=(content_l, content_t, content_r, content_b))
+            img.save(out_path)
+            results.append({"slide_number": sn, "name": name, "kind": kind, "path": str(out_path), "ok": True})
+        except Exception as exc:
+            results.append({"slide_number": sn, "name": name, "kind": kind, "error": str(exc), "ok": False})
+
+    return results
+
+
+def _capture_tableau_artifact_window(
+    source_path: Path,
+    artifact_name: str,
+    artifact_kind: str,
+    out_path: Path,
+    wait_sec: int = 60,
+) -> dict[str, Any]:
+    """Open Tableau Desktop, navigate to a specific worksheet/dashboard tab, and screenshot it."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    target_stem = source_path.stem.lower()
+
+    # Open the workbook
+    os.startfile(str(source_path))  # type: ignore[attr-defined]
+
+    # Wait for a real Tableau Desktop window (verified by process exe name)
+    hwnd = 0
+    title = ""
+    deadline = time.time() + wait_sec
+    while time.time() < deadline:
+        candidates = [
+            w for w in _visible_windows(user32)
+            if _is_tableau_window(w) and target_stem in w["title"].lower()
+        ]
+        if candidates:
+            hwnd = int(candidates[0]["hwnd"])
+            title = str(candidates[0]["title"])
+            break
+        time.sleep(1)
+
+    if not hwnd:
+        raise HTTPException(
+            504,
+            f"Timed out waiting for Tableau Desktop to open '{source_path.name}'. "
+            "Ensure Tableau Desktop is installed and .twbx files are associated with it.",
+        )
+
+    user32.SetForegroundWindow(wintypes.HWND(hwnd))
+    time.sleep(2.0)  # Allow full render
+
+    # Try to navigate to the specific sheet tab by name
+    _navigate_to_tableau_sheet(user32, hwnd, artifact_name)
+    time.sleep(1.0)  # Allow tab switch to render
+
+    # Get window bounds
+    rect = wintypes.RECT()
+    if not user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect)):
+        raise HTTPException(500, "Could not read Tableau window bounds")
+    width = int(rect.right - rect.left)
+    height = int(rect.bottom - rect.top)
+
+    # Estimate Tableau's content area: skip left panel (~240px) and top toolbar (~90px)
+    # The sheet tabs are at the bottom (~30px). Adjust based on window size.
+    sidebar_w = min(250, width // 6)
+    toolbar_h = min(90, height // 10)
+    tab_strip_h = 30
+    content_bbox = (
+        int(rect.left) + sidebar_w,
+        int(rect.top) + toolbar_h,
+        int(rect.right),
+        int(rect.bottom) - tab_strip_h,
+    )
+
+    image = ImageGrab.grab(bbox=content_bbox)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(out_path)
+
+    return {
+        "path": str(out_path),
+        "title": title,
+        "artifact_name": artifact_name,
+        "artifact_kind": artifact_kind,
+        "window_width": width,
+        "window_height": height,
+        "content_bbox": list(content_bbox),
+        "source": str(source_path),
+        "mode": "tableau_desktop_artifact_capture",
+    }
+
+
+def _navigate_to_tableau_sheet(user32: Any, hwnd: int, sheet_name: str) -> bool:
+    """Try to navigate Tableau Desktop to a named sheet tab via child-window enumeration."""
+    import ctypes
+    from ctypes import wintypes
+
+    found_hwnd = 0
+    enum_proc_type = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+    def callback(child_hwnd: Any, _lparam: Any) -> bool:
+        nonlocal found_hwnd
+        length = user32.GetWindowTextLengthW(child_hwnd)
+        if length <= 0:
+            return True
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(child_hwnd, buf, length + 1)
+        text = buf.value.strip()
+        if text.lower() == sheet_name.lower():
+            found_hwnd = int(child_hwnd)
+            return False  # stop enumeration
+        return True
+
+    user32.EnumChildWindows(wintypes.HWND(hwnd), enum_proc_type(callback), 0)
+
+    if found_hwnd:
+        WM_LBUTTONDOWN = 0x0201
+        WM_LBUTTONUP = 0x0202
+        user32.SendMessageW(wintypes.HWND(found_hwnd), WM_LBUTTONDOWN, 0, 0)
+        user32.SendMessageW(wintypes.HWND(found_hwnd), WM_LBUTTONUP, 0, 0)
+        return True
+
+    # Fallback: Tableau sheet tabs may not appear as standard child windows.
+    # Try Ctrl+Tab cycling to find the sheet by looking at window title changes.
+    return False
+
+
+def _capture_tableau_desktop_window(source_path: Path, out_path: Path, wait_sec: int = 45) -> dict[str, Any]:
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    target = source_path.stem.lower()
+
+    # Shell/file association is the reliable path for Tableau Desktop here;
+    # direct tableau.exe <file> launches Book1 on this machine.
+    os.startfile(str(source_path))  # type: ignore[attr-defined]
+
+    hwnd = 0
+    title = ""
+    deadline = time.time() + wait_sec
+    while time.time() < deadline:
+        candidates = [
+            w for w in _visible_windows(user32)
+            if _is_tableau_window(w) and target in w["title"].lower()
+        ]
+        if candidates:
+            hwnd = int(candidates[0]["hwnd"])
+            title = str(candidates[0]["title"])
+            break
+        time.sleep(1)
+
+    if not hwnd:
+        raise HTTPException(
+            504,
+            f"Timed out waiting for Tableau Desktop to open '{source_path.name}'. "
+            "Ensure Tableau Desktop is installed and .twbx files are associated with it.",
+        )
+
+    user32.SetForegroundWindow(wintypes.HWND(hwnd))
+    time.sleep(2)
+
+    rect = wintypes.RECT()
+    if not user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect)):
+        raise HTTPException(500, "Could not read Tableau window bounds")
+    width = int(rect.right - rect.left)
+    height = int(rect.bottom - rect.top)
+    if width <= 0 or height <= 0:
+        raise HTTPException(500, f"Invalid Tableau window bounds: {width}x{height}")
+
+    image = ImageGrab.grab(bbox=(int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)))
+    image.save(out_path)
+    return {
+        "path": str(out_path),
+        "title": title,
+        "width": width,
+        "height": height,
+        "left": int(rect.left),
+        "top": int(rect.top),
+        "source": str(source_path),
+        "mode": "tableau_desktop_window_capture",
+    }
+
+
+def _get_hwnd_exe(hwnd: Any) -> str:
+    """Return the lowercase exe filename for the process that owns hwnd, or ''."""
+    import ctypes
+    from ctypes import wintypes
+    kernel32 = ctypes.windll.kernel32
+    pid = wintypes.DWORD(0)
+    ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    if not pid.value:
+        return ""
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    hproc = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+    if not hproc:
+        return ""
+    try:
+        buf = ctypes.create_unicode_buffer(512)
+        size = wintypes.DWORD(512)
+        kernel32.QueryFullProcessImageNameW(hproc, 0, buf, ctypes.byref(size))
+        return Path(buf.value).name.lower() if buf.value else ""
+    finally:
+        kernel32.CloseHandle(hproc)
+
+
+def _visible_windows(user32: Any) -> list[dict[str, Any]]:
+    import ctypes
+    from ctypes import wintypes
+
+    windows: list[dict[str, Any]] = []
+    enum_proc_type = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+    def callback(hwnd: Any, _lparam: Any) -> bool:
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buffer, length + 1)
+        title = buffer.value.strip()
+        if title:
+            windows.append({"hwnd": int(hwnd), "title": title, "exe": _get_hwnd_exe(hwnd)})
+        return True
+
+    user32.EnumWindows(enum_proc_type(callback), 0)
+    return windows
+
+
+_TABLEAU_EXE_NAMES = {"tableau.exe", "tableaupublic.exe", "tableaudesktop.exe"}
+
+
+def _is_tableau_window(w: dict[str, Any]) -> bool:
+    """True only if the window belongs to a real Tableau Desktop process."""
+    return w.get("exe", "") in _TABLEAU_EXE_NAMES
+
+
+def _send_ctrl_pgdn(user32: Any, hwnd: int, canvas_xy: tuple[int, int] | None = None) -> None:
+    """Send Ctrl+PgDn to navigate to the next Tableau tab."""
+    import pyautogui
+    _force_hwnd_topmost(hwnd)
+    time.sleep(0.05)
+    pyautogui.hotkey("ctrl", "pagedown")
+
+
+@app.post("/api/docs/{doc_id}/rebuild")
+def rebuild(doc_id: str):
+    """Rebuild PercyDocument → PPTX, render rebuilt slides."""
+    import traceback as _tb
+    d = _require(doc_id)
+    if d.get("source_format") != "pptx":
+        raise HTTPException(400, "Rebuild is only supported for PPTX documents")
+    log.info("rebuild: doc_id=%s  name=%s", doc_id, d["name"])
+    _REBUILD_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = _REBUILD_DIR / f"{d['name']}_{doc_id}.pptx"
+
+    t0 = time.perf_counter()
+    try:
+        result = _rebuild_pptx(d["doc"], out_path)
+    except Exception as exc:
+        tb = _tb.format_exc()
+        log.error("rebuild: EXCEPTION for doc_id=%s\n%s", doc_id, tb)
+        raise HTTPException(500, detail=f"{type(exc).__name__}: {exc}\n\n{tb}")
+    d["rebuilt_path"] = str(out_path)
+    d["diagnostics"]  = result.get("diagnostics", [])
+    diagnostic_summary = _diagnostic_summary(d["diagnostics"])
+    log.info("rebuild: done in %.1fs  diagnostics=%d  path=%s",
+             time.perf_counter() - t0, len(d["diagnostics"]), out_path.name)
+
+    rebuilt_dir = _CACHE_DIR / doc_id / "rebuilt"
+    d["rebuilt_paths"] = []  # cleared while new render runs
+    # COM render is slow (~60s/deck) — start in background, return immediately
+    _render_originals_bg(doc_id, out_path, rebuilt_dir, "rebuilt_paths")
+    log.info("rebuild: COM render started in background for doc_id=%s", doc_id)
+    _record_event(
+        d["source_path"], d["name"], d.get("source_format", "pptx"), d["slide_count"],
+        "rebuild",
+        f"Rebuild completed with {len(d['diagnostics'])} diagnostics",
+        {
+            "doc_id": doc_id,
+            "rebuilt_path": str(out_path),
+            "elapsed_sec": round(time.perf_counter() - t0, 1),
+            "diagnostic_summary": diagnostic_summary,
+        },
+        "warn" if d["diagnostics"] else "ok",
+    )
+    _update_history_snapshot(doc_id)
+
+    return {
+        "rebuilt_path":         str(out_path),
+        "has_rebuilt_renders":  False,   # not ready yet; UI polls
+        "diagnostic_count":     len(d["diagnostics"]),
+        "diagnostic_summary":   diagnostic_summary,
+    }
+
+
+@app.get("/api/docs/{doc_id}/diagnostics")
+def get_diagnostics(doc_id: str):
+    diags = _require(doc_id)["diagnostics"]
+    log.info("get_diagnostics: doc_id=%s  count=%d", doc_id, len(diags))
+    return {"diagnostics": diags}
+
+
+def _serve_slide(paths: list[str], n: int, label: str) -> FileResponse:
+    if not paths:
+        raise HTTPException(404, f"{label} renders not available")
+    if n < 1 or n > len(paths):
+        raise HTTPException(404, f"Slide {n} out of range (1–{len(paths)})")
+    p = Path(paths[n - 1])
+    if not p.exists():
+        raise HTTPException(404, f"{label} PNG missing from disk: {p}")
+    return FileResponse(str(p), media_type="image/png",
+                        headers={"Cache-Control": "max-age=60"})
+
+
+@app.get("/api/docs/{doc_id}/slides/{n}/bridge.png")
+def bridge_slide(doc_id: str, n: int):
+    return _serve_slide(_require(doc_id)["bridge_paths"], n, "Bridge")
+
+
+@app.get("/api/docs/{doc_id}/slides/{n}/original.png")
+def original_slide(doc_id: str, n: int):
+    return _serve_slide(_require(doc_id)["orig_paths"], n, "Original")
+
+
+@app.get("/api/docs/{doc_id}/slides/{n}/rebuilt.png")
+def rebuilt_slide(doc_id: str, n: int):
+    d = _require(doc_id)
+    if not d["rebuilt_path"]:
+        raise HTTPException(400, "Not yet rebuilt — call POST /rebuild first")
+    return _serve_slide(d["rebuilt_paths"], n, "Rebuilt")
+
+
+@app.get("/api/docs/{doc_id}/render-status")
+def render_status(doc_id: str):
+    """Fast poll endpoint: returns current render availability without logging."""
+    d = _require(doc_id)
+    return {
+        "has_originals":        bool(d["orig_paths"]),
+        "has_bridge":           bool(d["bridge_paths"]),
+        "has_rebuild":          bool(d["rebuilt_path"]),
+        "has_rebuilt_renders":  bool(d["rebuilt_paths"]),
+        "pixel_scores":         d.get("pixel_scores", {}),
+    }
+
+
+@app.post("/api/docs/{doc_id}/rerender")
+def rerender_bridge(doc_id: str):
+    """Re-render bridge slides using the in-memory doc (picks up renderer changes)."""
+    d = _require(doc_id)
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    log.info("rerender: doc_id=%s", doc_id)
+    t0 = time.perf_counter()
+    paths = _render_bridge(d["doc"], bridge_dir)
+    d["bridge_paths"] = paths
+    elapsed = time.perf_counter() - t0
+    log.info("rerender: wrote %d PNGs in %.1fs", len(paths), elapsed)
+    _record_event(
+        d["source_path"], d["name"], d.get("source_format", "pptx"), d["slide_count"],
+        "rerender",
+        f"Bridge re-rendered: {len(paths)} slides",
+        {"doc_id": doc_id, "bridge_slides": len(paths), "elapsed_sec": round(elapsed, 1)},
+        "ok" if paths else "warn",
+    )
+    _update_history_snapshot(doc_id)
+    return {"bridge_slides": len(paths)}
+
+
+@app.post("/api/docs/{doc_id}/grades")
+def set_grade(doc_id: str, req: GradeRequest):
+    d = _require(doc_id)
+    if req.grade not in {"good", "partial", "bad"}:
+        raise HTTPException(400, "Grade must be one of: good, partial, bad")
+    if req.slide_n < 1 or req.slide_n > d["slide_count"]:
+        raise HTTPException(400, f"Slide {req.slide_n} out of range")
+    d["grades"][req.slide_n] = req.grade
+    log.info("grade: doc_id=%s  slide=%d  grade=%s", doc_id, req.slide_n, req.grade)
+    summary = _grade_summary(d["grades"], d["slide_count"])
+    _record_event(
+        d["source_path"], d["name"], d.get("source_format", "pptx"), d["slide_count"],
+        "grade",
+        f"Slide {req.slide_n} graded {req.grade}",
+        {"doc_id": doc_id, "slide_n": req.slide_n, "grade": req.grade, "summary": summary},
+    )
+    _update_history_snapshot(doc_id)
+    return {"ok": True, "slide_n": req.slide_n, "grade": req.grade,
+            "summary": summary, "total_graded": summary["graded"]}
+
+
+@app.get("/api/docs/{doc_id}/grades")
+def get_grades(doc_id: str):
+    d = _require(doc_id)
+    return {"grades": d["grades"], "total_graded": len(d["grades"])}
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/vision-grade")
+def vision_grade_slide(doc_id: str, n: int, req: VisionGradeRequest):
+    if not _vision_lock.acquire(blocking=False):
+        raise HTTPException(429, "A local LM Studio vision request is already running")
+    try:
+        d = _require(doc_id)
+        if req.target not in {"bridge", "rebuilt"}:
+            raise HTTPException(400, "target must be one of: bridge, rebuilt")
+        if n < 1 or n > d["slide_count"]:
+            raise HTTPException(400, f"Slide {n} out of range")
+        if not d["orig_paths"]:
+            raise HTTPException(404, "Original render is not available yet")
+
+        candidate_paths = d["bridge_paths"] if req.target == "bridge" else d["rebuilt_paths"]
+        if req.target == "rebuilt" and not d["rebuilt_path"]:
+            raise HTTPException(400, "Document has not been rebuilt yet")
+        if not candidate_paths:
+            raise HTTPException(404, f"{req.target} render is not available yet")
+        if n > len(d["orig_paths"]) or n > len(candidate_paths):
+            raise HTTPException(404, f"Slide {n} render is not available")
+
+        original = Path(d["orig_paths"][n - 1])
+        candidate = Path(candidate_paths[n - 1])
+        diff = _CACHE_DIR / doc_id / "vision" / req.target / f"slide-{n:03d}-diff.png"
+        rms = _image_diff(original, candidate, diff)
+        vision = _call_lmstudio_slide_grade(
+            original, candidate, diff,
+            slide_n=n, target=req.target, lmstudio_url=req.lmstudio_url, model=req.model, rms=rms,
+        )
+        result = {
+            "doc_id": doc_id,
+            "slide_n": n,
+            "target": req.target,
+            "model": req.model,
+            "lmstudio_url": req.lmstudio_url,
+            "rms": round(rms, 2),
+            "diff_path": str(diff),
+            "vision": vision,
+        }
+        d.setdefault("vision_grades", []).insert(0, result)
+        d["vision_grades"] = d["vision_grades"][:80]
+        _record_event(
+            d["source_path"], d["name"], d.get("source_format", "pptx"), d["slide_count"],
+            "vision_grade",
+            f"Vision graded slide {n} vs {req.target}: {vision.get('status')}",
+            {"doc_id": doc_id, "slide_n": n, "target": req.target, "rms": round(rms, 2), "vision": vision},
+            "ok" if vision.get("status") == "ok" else "warn",
+        )
+        _update_history_snapshot(doc_id)
+        return result
+    finally:
+        _vision_lock.release()
+
+
+# ── serve built frontend in production ────────────────────────────────────────
+_FRONTEND_DIST = _ROOT / "frontend" / "dist"
+if _FRONTEND_DIST.exists():
+    app.mount("/", StaticFiles(directory=str(_FRONTEND_DIST), html=True), name="frontend")

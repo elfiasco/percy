@@ -1,0 +1,48 @@
+/build/
+.cache
+.coverage
+/.tox/
+/src/*.egg-info
+*.pyc
+__pycache__/
+/dist/
+/docs/.build
+out.txt
+_scratch/
+/spec/gen_spec/spec*.db
+tags
+/tests/debug.py
+
+# Percy generated/local artifacts
+/.codex-pytest-temp/
+/.pytest_cache/
+/.pytest-tmp/
+/.percy-tableau-extracts/
+/out/
+/lab/
+/all_slides/
+/frontend/dist/
+/frontend/node_modules/
+
+# Runtime logs
+*.log
+*.out.log
+*.err.log
+
+# Generated visual comparison artifacts at repo root
+/*_bridge.png
+/*_diff.png
+/*_orig.png
+/slide*_bridge.png
+/slide*_test.png
+/test_*.png
+/reg_*.png
+
+# Downloaded or rebuilt external artifacts
+/outreach/dump_pptx/
+/outreach/manual_dump_pptx/
+/outreach/rebuilt/
+/outreach/downloads/
+/outreach/tableau/
+/outreach/.rendercache/
+/outreach/.percy_workspace_history.json
