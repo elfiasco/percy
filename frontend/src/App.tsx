@@ -9,9 +9,13 @@ import CompareView from "./components/CompareView"
 import TableauView from "./components/TableauView"
 import DiagPanel from "./components/DiagPanel"
 import LogPanel from "./components/LogPanel"
+import Studio from "./components/studio/Studio"
 import { log } from "./lib/logger"
 
+type AppMode = "roundtrip" | "studio"
+
 export default function App() {
+  const [mode, setMode]                   = useState<AppMode>("roundtrip")
   const [workspace, setWorkspace]         = useState<WorkspaceFile[]>([])
   const [docs, setDocs]                   = useState<DocInfo[]>([])
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null)
@@ -235,7 +239,23 @@ export default function App() {
       {/* ── header ─────────────────────────────────────────── */}
       <header className="h-11 flex items-center px-4 border-b border-edge bg-surface shrink-0 gap-3">
         <span className="text-accent font-bold text-base tracking-tight">PERCY</span>
-        <span className="text-muted text-xs uppercase tracking-widest">Roundtrip Studio</span>
+        {/* ── mode toggle ── */}
+        <div className="flex items-center gap-0.5 ml-2 bg-base rounded p-0.5 border border-edge">
+          {(["roundtrip", "studio"] as AppMode[]).map((m) => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              className={[
+                "px-3 py-0.5 text-xs rounded transition-all",
+                mode === m
+                  ? "bg-accent text-white font-semibold"
+                  : "text-muted hover:text-slate-300",
+              ].join(" ")}
+            >
+              {m === "roundtrip" ? "Roundtrip" : "Studio"}
+            </button>
+          ))}
+        </div>
         {headerStatus && (
           <div className={`ml-auto flex items-center gap-2 text-xs ${headerStatus.color}`}>
             <span className={`inline-block w-3 h-3 border-2 ${headerStatus.spin} border-t-transparent rounded-full animate-spin`} />
@@ -251,66 +271,97 @@ export default function App() {
 
       {/* ── body ───────────────────────────────────────────── */}
       <div className="flex flex-1 min-h-0">
-        <FileSidebar
-          workspace={workspace}
-          docs={docs}
-          selectedDocId={selectedDocId}
-          onLoad={handleLoad}
-          onRebuild={handleRebuild}
-          onRerender={handleRerender}
-          onSelectDoc={handleSelectDoc}
-          disabled={!!loading || !!rebuildPhase}
-          rebuildPhase={rebuildPhase}
-        />
-
-        <div className="flex flex-col flex-1 min-w-0 min-h-0">
-          {selectedDoc ? (
-            selectedDoc.source_format === "tableau" ? (
-              <TableauView
-                doc={selectedDoc}
-                selectedArtifact={selectedSlide}
-                onSelectArtifact={setSelectedSlide}
-              />
-            ) : (
-              <>
-                <SlideStrip
-                  docId={selectedDoc.doc_id}
-                  slideCount={selectedDoc.slide_count}
-                  selectedSlide={selectedSlide}
-                  grades={grades}
-                  diagnosticCounts={diagnosticCounts}
-                  pixelScores={pixelScores}
-                  cacheBust={bridgeVer}
-                  onSelect={setSelectedSlide}
-                />
-                <CompareView
-                  doc={selectedDoc}
-                  slideN={selectedSlide}
-                  grades={grades}
-                  pixelScores={pixelScores}
-                  cacheBust={bridgeVer}
-                  onGrade={handleGrade}
-                  onVisionGrade={handleVisionGrade}
-                  visionResult={visionResult}
-                  visionLoading={visionLoading}
-                  rebuildPhase={rebuildPhase}
-                />
-              </>
-            )
+        {mode === "studio" ? (
+          /* ── STUDIO MODE ─────────────────────────────────── */
+          selectedDoc && selectedDoc.source_format === "pptx" ? (
+            <Studio doc={selectedDoc} />
           ) : (
-            <EmptyState />
-          )}
-        </div>
+            <div className="flex flex-col flex-1 min-w-0 min-h-0">
+              <FileSidebar
+                workspace={workspace}
+                docs={docs}
+                selectedDocId={selectedDocId}
+                onLoad={handleLoad}
+                onRebuild={handleRebuild}
+                onRerender={handleRerender}
+                onSelectDoc={handleSelectDoc}
+                disabled={!!loading || !!rebuildPhase}
+                rebuildPhase={rebuildPhase}
+              />
+              <div className="flex flex-col items-center justify-center flex-1 gap-2 text-center px-10">
+                <p className="text-slate-300 font-semibold text-lg">Percy Studio</p>
+                <p className="text-muted text-sm max-w-sm leading-relaxed">
+                  Load a <strong className="text-slate-400">.pptx</strong> file from the sidebar,
+                  then switch to Studio mode to edit Bridge elements on the canvas.
+                </p>
+              </div>
+            </div>
+          )
+        ) : (
+          /* ── ROUNDTRIP MODE ──────────────────────────────── */
+          <>
+            <FileSidebar
+              workspace={workspace}
+              docs={docs}
+              selectedDocId={selectedDocId}
+              onLoad={handleLoad}
+              onRebuild={handleRebuild}
+              onRerender={handleRerender}
+              onSelectDoc={handleSelectDoc}
+              disabled={!!loading || !!rebuildPhase}
+              rebuildPhase={rebuildPhase}
+            />
 
-        <DiagPanel
-          doc={selectedDoc}
-          slideN={selectedSlide}
-          diagnostics={diagnostics}
-          grades={grades}
-          summary={summary}
-          history={history}
-          onSelectSlide={setSelectedSlide}
-        />
+            <div className="flex flex-col flex-1 min-w-0 min-h-0">
+              {selectedDoc ? (
+                selectedDoc.source_format === "tableau" ? (
+                  <TableauView
+                    doc={selectedDoc}
+                    selectedArtifact={selectedSlide}
+                    onSelectArtifact={setSelectedSlide}
+                  />
+                ) : (
+                  <>
+                    <SlideStrip
+                      docId={selectedDoc.doc_id}
+                      slideCount={selectedDoc.slide_count}
+                      selectedSlide={selectedSlide}
+                      grades={grades}
+                      diagnosticCounts={diagnosticCounts}
+                      pixelScores={pixelScores}
+                      cacheBust={bridgeVer}
+                      onSelect={setSelectedSlide}
+                    />
+                    <CompareView
+                      doc={selectedDoc}
+                      slideN={selectedSlide}
+                      grades={grades}
+                      pixelScores={pixelScores}
+                      cacheBust={bridgeVer}
+                      onGrade={handleGrade}
+                      onVisionGrade={handleVisionGrade}
+                      visionResult={visionResult}
+                      visionLoading={visionLoading}
+                      rebuildPhase={rebuildPhase}
+                    />
+                  </>
+                )
+              ) : (
+                <EmptyState />
+              )}
+            </div>
+
+            <DiagPanel
+              doc={selectedDoc}
+              slideN={selectedSlide}
+              diagnostics={diagnostics}
+              grades={grades}
+              summary={summary}
+              history={history}
+              onSelectSlide={setSelectedSlide}
+            />
+          </>
+        )}
       </div>
 
       {/* ── activity log ───────────────────────────────────── */}

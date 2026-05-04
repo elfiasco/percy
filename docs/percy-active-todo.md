@@ -34,6 +34,11 @@ Start the Percy Enterprise foundation without disrupting the existing local roun
 - [ ] Wire existing PPTX onboarding into cloud document jobs.
 - [ ] Add frontend organization/project navigation.
 - [ ] Define first Python snippet contract for Bridge elements.
+- [x] Add Percy Studio canvas (Bridge element overlays, drag/resize, properties panel, mode toggle).
+- [ ] Add Studio: AI assistant panel.
+- [ ] Add Studio: multiplayer presence + soft element locks.
+- [ ] Add Studio: personal workspace / project library UI (wire cloud API to frontend).
+- [ ] Add Studio: Electron desktop wrapper with bundled Percy server.
 
 ## Open Questions
 

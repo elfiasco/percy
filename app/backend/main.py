@@ -108,6 +108,12 @@ class VisionGradeRequest(BaseModel):
     lmstudio_url: str = "http://127.0.0.1:1234/v1/chat/completions"
     model: str = "google/gemma-4-e4b"
 
+class ElementPositionUpdate(BaseModel):
+    left_in: float | None = None
+    top_in: float | None = None
+    width_in: float | None = None
+    height_in: float | None = None
+
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _now_iso() -> str:
@@ -2428,6 +2434,116 @@ def vision_grade_slide(doc_id: str, n: int, req: VisionGradeRequest):
         return result
     finally:
         _vision_lock.release()
+
+
+# ── studio: element canvas endpoints ──────────────────────────────────────────
+
+_ELEMENT_TYPE_LABELS: dict[str, str] = {
+    "BridgeShape":     "Shape",
+    "BridgeText":      "Text",
+    "BridgeChart":     "Chart",
+    "BridgeTable":     "Table",
+    "BridgeImage":     "Image",
+    "BridgeFreeform":  "Freeform",
+    "BridgeConnector": "Connector",
+    "BridgeGroup":     "Group",
+}
+
+
+def _element_id(el: Any, index: int) -> str:
+    ident = getattr(el, "identification", None)
+    shape_id = getattr(ident, "shape_id", None) if ident else None
+    return str(shape_id) if shape_id is not None else f"idx_{index}"
+
+
+def _serialize_element(el: Any, index: int, slide_w: float, slide_h: float) -> dict[str, Any]:
+    pos   = el.position
+    ident = getattr(el, "identification", None)
+    xf    = getattr(el, "transforms", None)
+    st    = getattr(el, "stacking", None)
+
+    el_id    = _element_id(el, index)
+    name     = (getattr(ident, "shape_name", None) if ident else None) or el_id
+    rotation = float(getattr(xf, "rotation", 0.0) or 0.0)
+    z_index  = int(getattr(st, "z_index", 1) or 1)
+    el_type  = el.element_type
+
+    left_pct  = (pos.left   / slide_w * 100) if slide_w else 0.0
+    top_pct   = (pos.top    / slide_h * 100) if slide_h else 0.0
+    width_pct = (pos.width  / slide_w * 100) if slide_w else 0.0
+    height_pct= (pos.height / slide_h * 100) if slide_h else 0.0
+
+    return {
+        "id":          el_id,
+        "index":       index,
+        "type":        el_type,
+        "label":       _ELEMENT_TYPE_LABELS.get(el_type, el_type),
+        "name":        name,
+        "left_in":     round(pos.left,   5),
+        "top_in":      round(pos.top,    5),
+        "width_in":    round(pos.width,  5),
+        "height_in":   round(pos.height, 5),
+        "left_pct":    round(left_pct,   5),
+        "top_pct":     round(top_pct,    5),
+        "width_pct":   round(width_pct,  5),
+        "height_pct":  round(height_pct, 5),
+        "rotation":    rotation,
+        "z_index":     z_index,
+    }
+
+
+def _get_slide_dims(doc: Any, slide: Any) -> tuple[float, float]:
+    w = slide.width  or getattr(doc.metadata, "slide_width",  None) or 10.0
+    h = slide.height or getattr(doc.metadata, "slide_height", None) or 5.625
+    return float(w), float(h)
+
+
+@app.get("/api/docs/{doc_id}/slides/{n}/elements")
+def get_slide_elements(doc_id: str, n: int):
+    """Return all Bridge elements on slide *n* with position in inches and percent."""
+    d    = _require(doc_id)
+    doc  = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
+    w, h = _get_slide_dims(doc, slide)
+    elements = [_serialize_element(el, i, w, h) for i, el in enumerate(slide.elements)]
+    return {
+        "slide_number":    n,
+        "slide_width_in":  round(w, 5),
+        "slide_height_in": round(h, 5),
+        "element_count":   len(elements),
+        "elements":        elements,
+    }
+
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/elements/{element_id}")
+def update_element_position(doc_id: str, n: int, element_id: str, req: ElementPositionUpdate):
+    """Move or resize a Bridge element; updates the in-memory PercyDocument."""
+    d    = _require(doc_id)
+    doc  = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
+
+    el = el_index = None
+    for i, e in enumerate(slide.elements):
+        if _element_id(e, i) == element_id:
+            el, el_index = e, i
+            break
+    if el is None:
+        raise HTTPException(404, f"Element {element_id!r} not found on slide {n}")
+
+    pos = el.position
+    if req.left_in  is not None: pos.left   = max(0.0, req.left_in)
+    if req.top_in   is not None: pos.top    = max(0.0, req.top_in)
+    if req.width_in is not None: pos.width  = max(0.05, req.width_in)
+    if req.height_in is not None: pos.height = max(0.05, req.height_in)
+
+    w, h = _get_slide_dims(doc, slide)
+    log.info("studio: moved element %s on slide %d of %s → (%.3f, %.3f) %.3fx%.3f in",
+             element_id, n, doc_id, pos.left, pos.top, pos.width, pos.height)
+    return _serialize_element(el, el_index, w, h)
 
 
 # ── serve built frontend in production ────────────────────────────────────────
