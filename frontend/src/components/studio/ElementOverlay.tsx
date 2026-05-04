@@ -57,12 +57,13 @@ interface Props {
   onSnapLines?: (lines: SnapLine[]) => void
   onInlineEdit?: (id: string) => void
   onContextMenu?: (id: string, x: number, y: number) => void
+  onDragInfo?: (info: { x: number; y: number; w: number; h: number } | null) => void
 }
 
 const TEXT_TYPES = new Set(["BridgeText", "BridgeShape"])
 
 export default function ElementOverlay({
-  element, selected, isMultiSelected, snapEnabled, otherElements, docId, slideN, renderKey, onSelect, onCommit, onMultiMove, onRotate, onSnapLines, onInlineEdit, onContextMenu,
+  element, selected, isMultiSelected, snapEnabled, otherElements, docId, slideN, renderKey, onSelect, onCommit, onMultiMove, onRotate, onSnapLines, onInlineEdit, onContextMenu, onDragInfo,
 }: Props) {
   const { containerRef, slideWidthIn, slideHeightIn } = useCanvas()
   const overlayRef   = useRef<HTMLDivElement>(null)
@@ -192,6 +193,16 @@ export default function ElementOverlay({
     el.style.width  = `${w}%`
     el.style.height = `${h}%`
 
+    // Emit drag info for position HUD
+    if (onDragInfo && slideWidthIn > 0 && slideHeightIn > 0) {
+      onDragInfo({
+        x: parseFloat(((l / 100) * slideWidthIn).toFixed(2)),
+        y: parseFloat(((t / 100) * slideHeightIn).toFixed(2)),
+        w: parseFloat(((w / 100) * slideWidthIn).toFixed(2)),
+        h: parseFloat(((h / 100) * slideHeightIn).toFixed(2)),
+      })
+    }
+
     // Compute snap guide lines when moving
     if (ds.mode === "move" && onSnapLines) {
       const guides: SnapLine[] = []
@@ -280,6 +291,7 @@ export default function ElementOverlay({
     if (!ds || !el) return
     dragState.current = null
     onSnapLines?.([])
+    onDragInfo?.(null)
 
     const lPct = parseFloat(el.style.left)
     const tPct = parseFloat(el.style.top)

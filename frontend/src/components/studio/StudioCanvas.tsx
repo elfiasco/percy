@@ -38,6 +38,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
   const [snapGuides, setSnapGuides]     = useState<{ type: "h" | "v"; pos: number }[]>([])
   const [inlineEditId, setInlineEditId] = useState<string | null>(null)
   const [ctxMenu, setCtxMenu]           = useState<{ id: string; x: number; y: number } | null>(null)
+  const [dragInfo, setDragInfo]         = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const GRID_IN                     = 0.25
 
   // ── fetch elements when slide changes or parent refreshes ─────────────────
@@ -373,6 +374,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
                 onSnapLines={setSnapGuides}
                 onInlineEdit={(id) => { setInlineEditId(id) }}
                 onContextMenu={(id, x, y) => setCtxMenu({ id, x, y })}
+                onDragInfo={setDragInfo}
               />
             ))}
             {/* multi-select bounding box */}
@@ -504,6 +506,17 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
             </div>
           )
         })()}
+
+        {/* position HUD during drag */}
+        {dragInfo && (
+          <div
+            className="fixed z-[99997] pointer-events-none bg-black/80 text-white/90 text-[10px] font-mono
+                       rounded px-2 py-1 border border-white/10 leading-tight"
+            style={{ left: "50%", transform: "translateX(-50%)", top: 12 }}
+          >
+            x {dragInfo.x}" · y {dragInfo.y}" · {dragInfo.w}" × {dragInfo.h}"
+          </div>
+        )}
 
         {/* click-away to dismiss context menu */}
         {ctxMenu && (
