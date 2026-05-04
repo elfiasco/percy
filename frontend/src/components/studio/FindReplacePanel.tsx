@@ -19,6 +19,8 @@ export default function FindReplacePanel({ docId, onClose, onJumpToSlide, onRepl
   const [find, setFind]             = useState("")
   const [replace, setReplace]       = useState("")
   const [caseSensitive, setCaseSensitive] = useState(false)
+  const [useRegex, setUseRegex]     = useState(false)
+  const [regexError, setRegexError] = useState<string | null>(null)
   const [matches, setMatches]       = useState<TextSearchMatch[]>([])
   const [searching, setSearching]   = useState(false)
   const [replacing, setReplacing]   = useState(false)
@@ -38,12 +40,19 @@ export default function FindReplacePanel({ docId, onClose, onJumpToSlide, onRepl
     return () => clearTimeout(t)
   }, [docId, find])
 
+  // validate regex
+  useEffect(() => {
+    if (!useRegex || !find) { setRegexError(null); return }
+    try { new RegExp(find); setRegexError(null) }
+    catch (e: unknown) { setRegexError(e instanceof Error ? e.message : "Invalid regex") }
+  }, [find, useRegex])
+
   async function handleReplace() {
-    if (!find.trim()) return
+    if (!find.trim() || (useRegex && regexError)) return
     setReplacing(true)
     setLastResult(null)
     try {
-      const res = await replaceText(docId, find, replace, caseSensitive)
+      const res = await replaceText(docId, find, replace, caseSensitive, useRegex)
       setLastResult(
         res.replaced === 0
           ? "No matches found"
@@ -95,15 +104,30 @@ export default function FindReplacePanel({ docId, onClose, onJumpToSlide, onRepl
         </div>
 
         {/* options */}
-        <label className="flex items-center gap-2 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={caseSensitive}
-            onChange={e => setCaseSensitive(e.target.checked)}
-            className="accent-accent"
-          />
-          <span className="text-xs text-muted">Case sensitive</span>
-        </label>
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={caseSensitive}
+              onChange={e => setCaseSensitive(e.target.checked)}
+              className="accent-accent"
+            />
+            <span className="text-xs text-muted">Match case</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={useRegex}
+              onChange={e => setUseRegex(e.target.checked)}
+              className="accent-accent"
+            />
+            <span className="text-xs text-muted font-mono">.*</span>
+            <span className="text-xs text-muted">Regex</span>
+          </label>
+        </div>
+        {regexError && (
+          <p className="text-[10px] text-bad">{regexError}</p>
+        )}
 
         {/* replace button */}
         <button

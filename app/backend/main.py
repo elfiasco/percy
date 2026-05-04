@@ -3790,19 +3790,26 @@ def _element_plain_text(el: Any) -> str:
     return ""
 
 
-def _replace_in_element(el: Any, find: str, replace: str, case_sensitive: bool) -> int:
+def _replace_in_element(el: Any, find: str, replace: str, case_sensitive: bool, use_regex: bool = False) -> int:
     """Replace text in-place. Returns number of replacements made."""
+    import re as _re
     count = 0
     et = getattr(el, "element_type", "")
-    cmp_find = find if case_sensitive else find.lower()
 
     def _sub(text: str) -> tuple[str, int]:
+        if use_regex:
+            flags = 0 if case_sensitive else _re.IGNORECASE
+            try:
+                new_text, n = _re.subn(find, replace, text, flags=flags)
+                return new_text, n
+            except _re.error:
+                return text, 0
+        cmp_find = find if case_sensitive else find.lower()
         if case_sensitive:
             if find in text:
                 return text.replace(find, replace), text.count(find)
         else:
             if cmp_find in text.lower():
-                import re as _re
                 new_text, n = _re.subn(_re.escape(find), replace, text, flags=_re.IGNORECASE)
                 return new_text, n
         return text, 0
@@ -3840,6 +3847,7 @@ class ReplaceTextRequest(BaseModel):
     find: str
     replace: str
     case_sensitive: bool = False
+    use_regex: bool = False
 
 
 @app.get("/api/docs/{doc_id}/theme-colors")
@@ -3933,7 +3941,7 @@ def replace_text(doc_id: str, req: ReplaceTextRequest):
     for slide in d["doc"].slides:
         slide_count = 0
         for el in slide.elements:
-            slide_count += _replace_in_element(el, req.find, req.replace, req.case_sensitive)
+            slide_count += _replace_in_element(el, req.find, req.replace, req.case_sensitive, req.use_regex)
         if slide_count:
             affected_slides.append(slide.slide_number)
             total += slide_count

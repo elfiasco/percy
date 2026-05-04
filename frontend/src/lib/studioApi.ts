@@ -312,10 +312,11 @@ export async function replaceText(
   find: string,
   replace: string,
   caseSensitive = false,
+  useRegex = false,
 ): Promise<ReplaceTextResult> {
   return apiFetch<ReplaceTextResult>(`${BASE}/docs/${docId}/replace-text`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ find, replace, case_sensitive: caseSensitive }),
+    body: JSON.stringify({ find, replace, case_sensitive: caseSensitive, use_regex: useRegex }),
   })
 }
