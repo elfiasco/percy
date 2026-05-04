@@ -23,6 +23,8 @@ export default function StudioSlideStrip({
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null)
   const [busy, setBusy]               = useState(false)
   const [stripKey, setStripKey]       = useState(0)
+  const [dragSlide, setDragSlide]     = useState<number | null>(null)
+  const [dropTarget, setDropTarget]   = useState<number | null>(null)
   const stripRef = useRef<HTMLDivElement>(null)
 
   // close context menu on outside click
@@ -90,6 +92,35 @@ export default function StudioSlideStrip({
     )
   }, [docId, slideCount, run])
 
+  const handleDragStart = useCallback((e: React.DragEvent, n: number) => {
+    setDragSlide(n)
+    e.dataTransfer.effectAllowed = "move"
+    e.dataTransfer.setData("text/plain", String(n))
+  }, [])
+
+  const handleDragOver = useCallback((e: React.DragEvent, n: number) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = "move"
+    setDropTarget(n)
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent, targetN: number) => {
+    e.preventDefault()
+    const srcN = dragSlide
+    setDragSlide(null)
+    setDropTarget(null)
+    if (!srcN || srcN === targetN) return
+    run(
+      () => moveSlide(docId, srcN, targetN) as Promise<{ slide_count: number }>,
+      () => targetN,
+    )
+  }, [dragSlide, docId, run])
+
+  const handleDragEnd = useCallback(() => {
+    setDragSlide(null)
+    setDropTarget(null)
+  }, [])
+
   return (
     <div ref={stripRef} className="w-28 shrink-0 flex flex-col border-r border-edge bg-surface min-h-0">
       {/* header */}
@@ -111,17 +142,24 @@ export default function StudioSlideStrip({
         {Array.from({ length: slideCount }, (_, i) => i + 1).map((n) => {
           const active = n === selectedSlide
           const dirty  = dirtySlides?.has(n) ?? false
+          const isDragging = dragSlide === n
+          const isDropTarget = dropTarget === n && dragSlide !== null && dragSlide !== n
           return (
-            <button
+            <div
               key={n}
+              draggable
+              onDragStart={(e) => handleDragStart(e, n)}
+              onDragOver={(e) => handleDragOver(e, n)}
+              onDrop={(e) => handleDrop(e, n)}
+              onDragEnd={handleDragEnd}
+              className={[
+                "flex flex-col items-center gap-1 rounded p-1 transition-all group w-full cursor-grab active:cursor-grabbing",
+                active      ? "ring-2 ring-accent bg-accent/10" : "hover:bg-white/5",
+                isDragging  ? "opacity-40" : "",
+                isDropTarget ? "ring-2 ring-indigo-400 bg-indigo-500/10" : "",
+              ].join(" ")}
               onClick={() => onSelect(n)}
               onContextMenu={(e) => handleContextMenu(e, n)}
-              className={[
-                "flex flex-col items-center gap-1 rounded p-1 transition-all group w-full",
-                active
-                  ? "ring-2 ring-accent bg-accent/10"
-                  : "hover:bg-white/5",
-              ].join(" ")}
             >
               <div className="w-full aspect-video bg-base rounded overflow-hidden relative">
                 <img
@@ -140,7 +178,7 @@ export default function StudioSlideStrip({
               <span className={`text-[10px] ${active ? "text-accent-light" : dirty ? "text-amber-400" : "text-muted"}`}>
                 {n}
               </span>
-            </button>
+            </div>
           )
         })}
       </div>
