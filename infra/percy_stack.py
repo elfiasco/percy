@@ -323,6 +323,7 @@ class PercyCloudDemoStack(Stack):
             assumed_by=iam.ServicePrincipal("tasks.apprunner.amazonaws.com"),
         )
         artifacts_bucket.grant_read_write(studio_instance_role)
+        api_key_secret.grant_read(studio_instance_role)
 
         studio_service = apprunner.CfnService(
             self,
@@ -347,6 +348,16 @@ class PercyCloudDemoStack(Stack):
                             ),
                             apprunner.CfnService.KeyValuePairProperty(
                                 name="AWS_DEFAULT_REGION", value=self.region
+                            ),
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="PERCY_CLOUD_API_URL",
+                                value=f"https://{service.attr_service_url}",
+                            ),
+                        ],
+                        runtime_environment_secrets=[
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="PERCY_API_KEY",
+                                value=api_key_secret.secret_arn,
                             ),
                         ],
                     ),

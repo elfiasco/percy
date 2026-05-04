@@ -114,6 +114,7 @@ class ElementPositionUpdate(BaseModel):
     width_in: float | None = None
     height_in: float | None = None
     z_index: int | None = None
+    rotation: float | None = None
 
 
 # ── Text-editing models ───────────────────────────────────────────────────────
@@ -2680,11 +2681,67 @@ def update_element_position(doc_id: str, n: int, element_id: str, req: ElementPo
     if req.width_in  is not None: pos.width         = max(0.05, req.width_in)
     if req.height_in is not None: pos.height        = max(0.05, req.height_in)
     if req.z_index   is not None: el.stacking.z_index = max(1,  req.z_index)
+    if req.rotation  is not None:
+        xf = getattr(el, "transforms", None)
+        if xf is not None: xf.rotation = req.rotation % 360
 
     w, h = _get_slide_dims(doc, slide)
     log.info("studio: moved element %s on slide %d of %s → (%.3f, %.3f) %.3fx%.3f in",
              element_id, n, doc_id, pos.left, pos.top, pos.width, pos.height)
     return _serialize_element(el, el_index, w, h)
+
+
+@app.delete("/api/docs/{doc_id}/slides/{n}/elements/{element_id}")
+def delete_element(doc_id: str, n: int, element_id: str):
+    """Remove an element from a slide."""
+    d    = _require(doc_id)
+    doc  = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
+
+    for i, e in enumerate(slide.elements):
+        if _element_id(e, i) == element_id:
+            slide.elements.pop(i)
+            log.info("studio: deleted element %s from slide %d of %s", element_id, n, doc_id)
+            return {"ok": True, "deleted": element_id}
+    raise HTTPException(404, f"Element {element_id!r} not found on slide {n}")
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/duplicate")
+def duplicate_element(doc_id: str, n: int, element_id: str):
+    """Deep-copy an element, offset by 0.25 inches, append to slide."""
+    import copy
+    d    = _require(doc_id)
+    doc  = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
+
+    src = src_index = None
+    for i, e in enumerate(slide.elements):
+        if _element_id(e, i) == element_id:
+            src, src_index = e, i
+            break
+    if src is None:
+        raise HTTPException(404, f"Element {element_id!r} not found on slide {n}")
+
+    dup = copy.deepcopy(src)
+    dup.position.left += 0.25
+    dup.position.top  += 0.25
+
+    # Assign a fresh shape_id so it gets a unique _element_id
+    ident = getattr(dup, "identification", None)
+    if ident is not None:
+        existing_ids = {getattr(getattr(e, "identification", None), "shape_id", None) for e in slide.elements}
+        new_id = max((x for x in existing_ids if x is not None), default=0) + 1
+        ident.shape_id = new_id
+
+    slide.elements.append(dup)
+    new_index = len(slide.elements) - 1
+    w, h = _get_slide_dims(doc, slide)
+    log.info("studio: duplicated element %s → %s on slide %d", element_id, _element_id(dup, new_index), n)
+    return _serialize_element(dup, new_index, w, h)
 
 
 # ── Text content helpers ──────────────────────────────────────────────────────
@@ -3000,6 +3057,38 @@ def chat(doc_id: str, req: ChatRequest):
         "and answer questions about your presentation."
     )
     return {"reply": reply}
+
+
+# ── reverse proxy /api/cloud/* → Percy Cloud control-plane API ───────────────
+_CLOUD_API_URL = os.environ.get("PERCY_CLOUD_API_URL", "").rstrip("/")
+_CLOUD_API_KEY = os.environ.get("PERCY_API_KEY", "")
+
+if _CLOUD_API_URL:
+    import urllib.request as _urlreq
+
+    @app.api_route("/api/cloud/{path:path}", methods=["GET", "POST", "PATCH", "PUT", "DELETE"])
+    async def proxy_cloud(path: str, request: Request):
+        target = f"{_CLOUD_API_URL}/api/cloud/{path}"
+        if request.query_params:
+            target += "?" + str(request.query_params)
+        body = await request.body()
+        headers = {k: v for k, v in request.headers.items()
+                   if k.lower() not in ("host", "content-length")}
+        # inject server-side API key so the browser doesn't need to manage it
+        if _CLOUD_API_KEY:
+            headers["x-percy-api-key"] = _CLOUD_API_KEY
+        req = _urlreq.Request(target, data=body or None, headers=headers, method=request.method)
+        try:
+            with _urlreq.urlopen(req, timeout=30) as resp:
+                content = resp.read()
+                return Response(
+                    content=content,
+                    status_code=resp.status,
+                    media_type=resp.headers.get("Content-Type", "application/json"),
+                )
+        except _urlreq.HTTPError as exc:
+            return Response(content=exc.read(), status_code=exc.code,
+                            media_type="application/json")
 
 
 # ── serve built frontend in production ────────────────────────────────────────
