@@ -25,6 +25,8 @@ export default function StudioSlideStrip({
   const [stripKey, setStripKey]       = useState(0)
   const [dragSlide, setDragSlide]     = useState<number | null>(null)
   const [dropTarget, setDropTarget]   = useState<number | null>(null)
+  const [hoverN, setHoverN]           = useState<number | null>(null)
+  const [hoverY, setHoverY]           = useState(0)
   const stripRef = useRef<HTMLDivElement>(null)
 
   // close context menu on outside click
@@ -160,6 +162,8 @@ export default function StudioSlideStrip({
               ].join(" ")}
               onClick={() => onSelect(n)}
               onContextMenu={(e) => handleContextMenu(e, n)}
+              onMouseEnter={(e) => { setHoverN(n); setHoverY((e.currentTarget as HTMLElement).getBoundingClientRect().top) }}
+              onMouseLeave={() => setHoverN(null)}
             >
               <div className="w-full aspect-video bg-base rounded overflow-hidden relative">
                 <img
@@ -182,6 +186,26 @@ export default function StudioSlideStrip({
           )
         })}
       </div>
+
+      {/* hover preview */}
+      {hoverN !== null && !contextMenu && (
+        <div
+          className="fixed z-[9999] pointer-events-none"
+          style={{
+            left: 110,
+            top: Math.max(8, Math.min(hoverY - 20, window.innerHeight - 130)),
+          }}
+        >
+          <div className="bg-surface border border-edge rounded shadow-2xl p-1 w-56">
+            <img
+              src={`/api/docs/${docId}/slides/${hoverN}/bridge.png?v=${stripKey}-${refreshKey ?? 0}`}
+              alt={`Slide ${hoverN} preview`}
+              className="w-full aspect-video rounded object-cover block"
+            />
+            <div className="text-[10px] text-muted text-center mt-1">Slide {hoverN}</div>
+          </div>
+        </div>
+      )}
 
       {/* context menu */}
       {contextMenu && (
