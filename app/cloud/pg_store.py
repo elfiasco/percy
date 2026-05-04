@@ -171,6 +171,23 @@ class PostgresControlPlaneStore:
     # Documents
     # ------------------------------------------------------------------
 
+    def update_document_status(
+        self,
+        document_id: str,
+        status: str,
+        bundle_uri: str | None = None,
+    ) -> Document:
+        with get_conn() as conn:
+            if bundle_uri is not None:
+                _exec(conn, "UPDATE documents SET status=%s, bundle_uri=%s WHERE id=%s",
+                      (status, bundle_uri, document_id))
+            else:
+                _exec(conn, "UPDATE documents SET status=%s WHERE id=%s", (status, document_id))
+            row = _row(conn, "SELECT * FROM documents WHERE id=%s", (document_id,))
+        if not row:
+            raise NotFoundError(f"Document not found: {document_id}")
+        return self._doc_from_row(row)
+
     def register_document(
         self,
         project_id: str,
@@ -186,12 +203,13 @@ class PostgresControlPlaneStore:
             if not project:
                 raise NotFoundError(f"Project not found: {project_id}")
             doc_id = _new_id("doc")
+            initial_status = "pending_upload" if storage_uri is None else "uploaded"
             _exec(
                 conn,
                 """INSERT INTO documents
-                   (id, org_id, project_id, name, source_format, storage_uri, content_type, size_bytes, created_by_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                (doc_id, project["org_id"], project_id, name, source_format,
+                   (id, org_id, project_id, name, source_format, status, storage_uri, content_type, size_bytes, created_by_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (doc_id, project["org_id"], project_id, name, source_format, initial_status,
                  storage_uri, content_type, size_bytes, created_by_id),
             )
             self._add_audit_conn(
@@ -515,7 +533,9 @@ class PostgresControlPlaneStore:
         return Document(
             id=r["id"], org_id=r["org_id"], project_id=r["project_id"],
             name=r["name"], source_format=r["source_format"],
-            storage_uri=r["storage_uri"], content_type=r["content_type"],
+            status=r.get("status", "pending_upload"),
+            storage_uri=r["storage_uri"], bundle_uri=r.get("bundle_uri"),
+            content_type=r["content_type"],
             size_bytes=r["size_bytes"], created_by_id=r["created_by_id"],
             created_at=r["created_at"],
         )

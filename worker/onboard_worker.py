@@ -103,6 +103,21 @@ def api_fail_job(job_id: str, error: str) -> None:
     r.raise_for_status()
 
 
+def api_update_document_status(document_id: str, status: str, bundle_uri: str | None = None) -> None:
+    body: dict = {"status": status}
+    if bundle_uri:
+        body["bundle_uri"] = bundle_uri
+    try:
+        r = requests.patch(
+            f"{API_BASE}/api/cloud/documents/{document_id}/status",
+            json=body,
+            timeout=10,
+        )
+        r.raise_for_status()
+    except Exception as exc:
+        log.warning("could not update document status to %s: %s", status, exc)
+
+
 # -------------------------------------------------------------------------
 # S3 helpers
 # -------------------------------------------------------------------------
@@ -221,12 +236,15 @@ def process_message(msg: dict) -> None:
         api_fail_job(job_id, "No storage_uri for document — upload file first via prepare-upload")
         return
 
+    api_update_document_status(document_id, "processing")
     try:
         result = run_onboard(job_id, document_id, params_storage_uri)
         api_complete_job(job_id, result)
+        api_update_document_status(document_id, "ready", result.get("bundle_uri"))
         log.info("job %s complete: %s slides", job_id, result.get("slide_count"))
     except Exception as exc:
         log.exception("job %s failed", job_id)
+        api_update_document_status(document_id, "error")
         try:
             api_fail_job(job_id, str(exc))
         except Exception:

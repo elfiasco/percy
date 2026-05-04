@@ -91,12 +91,24 @@ CREATE TABLE IF NOT EXISTS documents (
     project_id    TEXT NOT NULL REFERENCES projects(id),
     name          TEXT NOT NULL,
     source_format TEXT NOT NULL DEFAULT 'unknown',
+    status        TEXT NOT NULL DEFAULT 'pending_upload',
     storage_uri   TEXT,
+    bundle_uri    TEXT,
     content_type  TEXT,
     size_bytes    BIGINT,
     created_by_id TEXT NOT NULL,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Idempotent column additions for existing databases
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='documents' AND column_name='status') THEN
+        ALTER TABLE documents ADD COLUMN status TEXT NOT NULL DEFAULT 'pending_upload';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='documents' AND column_name='bundle_uri') THEN
+        ALTER TABLE documents ADD COLUMN bundle_uri TEXT;
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS jobs (
     id              TEXT PRIMARY KEY,

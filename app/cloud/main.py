@@ -31,6 +31,7 @@ from app.cloud.models import (
     RegisterDocumentRequest,
     StartJobRequest,
     Team,
+    UpdateDocumentStatusRequest,
 )
 from app.cloud.store import ConflictError, InMemoryControlPlaneStore, NotFoundError
 
@@ -209,6 +210,21 @@ def list_project_documents(project_id: str) -> list[Document]:
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return store.list_project_documents(project_id)
+
+
+@app.patch("/api/cloud/documents/{document_id}/status", response_model=Document)
+def update_document_status(document_id: str, req: UpdateDocumentStatusRequest) -> Document:
+    try:
+        doc = store.get_document(document_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if hasattr(store, "update_document_status"):
+        return store.update_document_status(document_id, req.status, req.bundle_uri)
+    # In-memory fallback
+    doc.status = req.status
+    if req.bundle_uri:
+        doc.bundle_uri = req.bundle_uri
+    return doc
 
 
 @app.get("/api/cloud/documents/{document_id}/download-url", response_model=DocumentDownloadUrl)

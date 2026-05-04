@@ -22,6 +22,7 @@ Role = Literal[
 
 AccessStatus = Literal["pending", "approved", "denied"]
 SourceFormat = Literal["pptx", "pdf", "tableau", "unknown"]
+DocumentStatus = Literal["pending_upload", "uploaded", "processing", "ready", "error"]
 JobStatus = Literal["queued", "running", "completed", "failed", "canceled"]
 JobType = Literal[
     "onboard_document",
@@ -72,7 +73,9 @@ class Document(BaseModel):
     project_id: str
     name: str
     source_format: SourceFormat = "unknown"
+    status: DocumentStatus = "pending_upload"
     storage_uri: str | None = None
+    bundle_uri: str | None = None
     content_type: str | None = None
     size_bytes: int | None = None
     created_by_id: str
@@ -213,3 +216,8 @@ class PrepareUploadResponse(BaseModel):
 class DocumentDownloadUrl(BaseModel):
     download_url: str
     expires_in: int = 3600
+
+
+class UpdateDocumentStatusRequest(BaseModel):
+    status: DocumentStatus
+    bundle_uri: str | None = None

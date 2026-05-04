@@ -184,6 +184,18 @@ class InMemoryControlPlaneStore:
         except KeyError as exc:
             raise NotFoundError(f"Document not found: {document_id}") from exc
 
+    def update_document_status(
+        self,
+        document_id: str,
+        status: str,
+        bundle_uri: str | None = None,
+    ) -> Document:
+        doc = self.get_document(document_id)
+        doc.status = status
+        if bundle_uri is not None:
+            doc.bundle_uri = bundle_uri
+        return doc
+
     def list_project_documents(self, project_id: str) -> list[Document]:
         return sorted(
             [document for document in self.documents.values() if document.project_id == project_id],
