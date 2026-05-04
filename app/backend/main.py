@@ -4596,6 +4596,30 @@ def _apply_style(el: Any, req: ElementStyleUpdate) -> None:
             if req.crop_bottom is not None: crop.crop_bottom = max(0.0, min(0.99, req.crop_bottom))
 
 
+class BulkStyleRequest(BaseModel):
+    element_ids: list[str]
+    style: ElementStyleUpdate
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/bulk-style")
+def bulk_update_style(doc_id: str, n: int, req: BulkStyleRequest):
+    """Apply the same style update to multiple elements on a slide."""
+    if not req.element_ids:
+        raise HTTPException(400, "element_ids cannot be empty")
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+    results = []
+    for i, el in enumerate(slide.elements):
+        if _element_id(el, i) in req.element_ids:
+            _apply_style(el, req.style)
+            results.append(_ser_style(el))
+    log.info("bulk-style: updated %d elements on slide %d of %s", len(results), n, doc_id)
+    return {"updated": len(results), "styles": results}
+
+
 @app.get("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/style")
 def get_element_style(doc_id: str, n: int, element_id: str):
     """Return current style properties of a Bridge element."""

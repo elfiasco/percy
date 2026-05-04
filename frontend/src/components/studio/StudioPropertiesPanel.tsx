@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import type { StudioElement, ElementStyleData } from "../../lib/studioTypes"
-import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, setAllSlidesBackground, setGradientBackground, replaceImage, fetchThemeColors, fetchDocStats, setSlideBackgroundImage } from "../../lib/studioApi"
+import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, setAllSlidesBackground, setGradientBackground, replaceImage, fetchThemeColors, fetchDocStats, setSlideBackgroundImage, bulkUpdateStyle } from "../../lib/studioApi"
 import type { DocStats } from "../../lib/studioApi"
 import StudioTextPanel from "./StudioTextPanel"
 
@@ -799,6 +799,7 @@ function SlidePropertiesPanel({ docId, slideN, onCommit }: { docId: string; slid
 interface Props {
   element: StudioElement | null
   elements?: StudioElement[]
+  multiSelectIds?: Set<string>
   slideN: number
   slideWidthIn: number
   slideHeightIn: number
@@ -814,7 +815,7 @@ type Tab = "position" | "style" | "text"
 type NoSelTab = "slide" | "elements"
 
 export default function StudioPropertiesPanel({
-  element, elements, slideN, slideWidthIn: _slideWidthIn, slideHeightIn: _slideHeightIn, docId, onTextCommit, onSelectElement,
+  element, elements, multiSelectIds, slideN, slideWidthIn: _slideWidthIn, slideHeightIn: _slideHeightIn, docId, onTextCommit, onSelectElement,
   onDeleteElement, onToggleLock, onToggleHidden,
 }: Props) {
   const [tab, setTab] = useState<Tab>("position")
@@ -843,6 +844,28 @@ export default function StudioPropertiesPanel({
 
   const color = element ? (TYPE_COLOR[element.type] ?? "#6366F1") : "#6366F1"
 
+  // ── multi-select bulk style ─────────────────────────────────────────────────
+  const [bulkFill, setBulkFill] = useState("#4472C4")
+  const [bulkLine, setBulkLine] = useState("#000000")
+  const [bulkOpacity, setBulkOpacity] = useState("1.0")
+  const [bulkApplying, setBulkApplying] = useState(false)
+  const [bulkApplyFields, setBulkApplyFields] = useState({ fill: false, line: false, opacity: false })
+
+  const handleBulkApply = useCallback(async () => {
+    if (!multiSelectIds || multiSelectIds.size < 2) return
+    const style: Record<string, unknown> = {}
+    if (bulkApplyFields.fill) style.fill_color = bulkFill
+    if (bulkApplyFields.line) style.line_color = bulkLine
+    if (bulkApplyFields.opacity) style.opacity = parseFloat(bulkOpacity) || 1.0
+    if (!Object.keys(style).length) return
+    setBulkApplying(true)
+    try {
+      await bulkUpdateStyle(docId, slideN, [...multiSelectIds], style)
+      onTextCommit()
+    } catch (e) { console.error("bulk style failed:", e) }
+    finally { setBulkApplying(false) }
+  }, [multiSelectIds, bulkFill, bulkLine, bulkOpacity, bulkApplyFields, docId, slideN, onTextCommit])
+
   return (
     <div className="w-64 shrink-0 border-l border-edge bg-surface flex flex-col">
       {/* ── header ──────────────────────────────────────────── */}
@@ -853,6 +876,11 @@ export default function StudioPropertiesPanel({
               <div className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: color }} />
               <span className="text-sm font-semibold text-slate-200 truncate">{element.name}</span>
             </div>
+          ) : multiSelectIds && multiSelectIds.size > 1 ? (
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-2.5 h-2.5 rounded-sm shrink-0 bg-indigo-400" />
+              <span className="text-sm font-semibold text-slate-200">{multiSelectIds.size} selected</span>
+            </div>
           ) : (
             <div className="text-xs font-semibold text-slate-300 mb-2">Properties</div>
           )}
@@ -860,7 +888,7 @@ export default function StudioPropertiesPanel({
 
         {/* tabs */}
         <div className="flex px-2 gap-0.5">
-          {!element ? (
+          {multiSelectIds && multiSelectIds.size > 1 && !element ? null : !element ? (
             (["slide", "elements"] as NoSelTab[]).map((t) => (
               <button
                 key={t}
@@ -898,8 +926,59 @@ export default function StudioPropertiesPanel({
         </div>
       </div>
 
+      {/* ── multi-select bulk style panel ───────────────────── */}
+      {!element && multiSelectIds && multiSelectIds.size > 1 && (
+        <div className="flex-1 overflow-y-auto p-3 space-y-3 scrollbar-thin">
+          <div className="text-[10px] text-muted uppercase tracking-widest">Apply to all selected</div>
+
+          {/* fill color */}
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={bulkApplyFields.fill}
+              onChange={(e) => setBulkApplyFields((f) => ({ ...f, fill: e.target.checked }))}
+              className="accent-indigo-500 w-3 h-3" />
+            <span className="text-[11px] text-muted w-16">Fill Color</span>
+            <input type="color" value={bulkFill} onChange={(e) => setBulkFill(e.target.value)}
+              className="w-7 h-7 rounded border border-edge bg-transparent cursor-pointer" />
+            <span className="text-[10px] font-mono text-muted/70">{bulkFill}</span>
+          </label>
+
+          {/* line color */}
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={bulkApplyFields.line}
+              onChange={(e) => setBulkApplyFields((f) => ({ ...f, line: e.target.checked }))}
+              className="accent-indigo-500 w-3 h-3" />
+            <span className="text-[11px] text-muted w-16">Line Color</span>
+            <input type="color" value={bulkLine} onChange={(e) => setBulkLine(e.target.value)}
+              className="w-7 h-7 rounded border border-edge bg-transparent cursor-pointer" />
+            <span className="text-[10px] font-mono text-muted/70">{bulkLine}</span>
+          </label>
+
+          {/* opacity */}
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={bulkApplyFields.opacity}
+              onChange={(e) => setBulkApplyFields((f) => ({ ...f, opacity: e.target.checked }))}
+              className="accent-indigo-500 w-3 h-3" />
+            <span className="text-[11px] text-muted w-16">Opacity</span>
+            <input type="range" min={0} max={1} step={0.05} value={bulkOpacity}
+              onChange={(e) => setBulkOpacity(e.target.value)}
+              className="flex-1 accent-indigo-500" />
+            <span className="text-[10px] font-mono text-muted/70 w-8">{Math.round(parseFloat(bulkOpacity) * 100)}%</span>
+          </label>
+
+          <button
+            onClick={handleBulkApply}
+            disabled={bulkApplying || !Object.values(bulkApplyFields).some(Boolean)}
+            className="w-full text-xs py-1.5 rounded bg-indigo-500/20 text-indigo-300
+                       border border-indigo-500/30 hover:bg-indigo-500/30 transition-colors
+                       disabled:opacity-40"
+          >
+            {bulkApplying ? "Applying…" : `Apply to ${multiSelectIds.size} elements`}
+          </button>
+        </div>
+      )}
+
       {/* ── tab content ─────────────────────────────────────── */}
-      {!element ? (
+      {(!element && !(multiSelectIds && multiSelectIds.size > 1)) ? (
         noSelTab === "elements" ? (
           <div className="flex-1 overflow-y-auto p-2 scrollbar-thin relative">
             {!elements || elements.length === 0 ? (
@@ -986,7 +1065,7 @@ export default function StudioPropertiesPanel({
         ) : (
           <SlidePropertiesPanel docId={docId} slideN={slideN} onCommit={onTextCommit} />
         )
-      ) : tab === "position" ? (
+      ) : tab === "position" && element ? (
         <div className="flex-1 min-h-0 flex flex-col">
           <PositionTab
             element={element}

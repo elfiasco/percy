@@ -606,6 +606,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         <StudioPropertiesPanel
           element={selectedElement}
           elements={slideElements}
+          multiSelectIds={multiSelectIds}
           slideN={selectedSlide}
           slideWidthIn={slideWidthIn}
           slideHeightIn={slideHeightIn}

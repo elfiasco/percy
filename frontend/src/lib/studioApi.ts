@@ -195,6 +195,19 @@ export async function fetchElementStyle(
   )
 }
 
+export async function bulkUpdateStyle(
+  docId: string,
+  slideN: number,
+  elementIds: string[],
+  style: ElementStyleUpdate,
+): Promise<{ updated: number; styles: ElementStyleData[] }> {
+  return apiFetch(`${BASE}/docs/${docId}/slides/${slideN}/bulk-style`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ element_ids: elementIds, style }),
+  })
+}
+
 export async function updateElementStyle(
   docId: string,
   slideN: number,
