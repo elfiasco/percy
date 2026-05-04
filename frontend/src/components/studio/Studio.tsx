@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import type { DocInfo } from "../../lib/types"
 import type { StudioElement } from "../../lib/studioTypes"
-import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, updateElementFlags } from "../../lib/studioApi"
+import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, updateElementFlags, applyLayoutPreset } from "../../lib/studioApi"
 import type { ElementStyleData } from "../../lib/studioTypes"
 import * as api from "../../lib/api"
 import StudioSlideStrip from "./StudioSlideStrip"
@@ -171,6 +171,14 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
     } catch (e) {
       console.error("duplicate failed:", e)
     }
+  }, [doc.doc_id, markDirty])
+
+  const handleApplyLayout = useCallback(async (layout: string) => {
+    try {
+      await applyLayoutPreset(doc.doc_id, selectedSlideRef.current, layout)
+      markDirty(selectedSlideRef.current)
+      setRefreshKey((k) => k + 1)
+    } catch (e) { console.error("layout apply failed:", e) }
   }, [doc.doc_id, markDirty])
 
   const handleCopyToSlide = useCallback(async (targetN: number) => {
@@ -455,6 +463,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         onFormatPaint={handleFormatPaint}
         formatPaintMode={formatPaintMode}
         onCopyToSlide={selectedElement ? handleCopyToSlide : undefined}
+        onApplyLayout={handleApplyLayout}
       />
 
       {/* ── main area: slide strip + canvas + properties ── */}

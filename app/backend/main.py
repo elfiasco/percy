@@ -3420,6 +3420,102 @@ def create_element(doc_id: str, n: int, req: NewElementRequest):
     return _serialize_element(el, new_index, w, h)
 
 
+# ── Slide layout presets ───────────────────────────────────────────────────────
+
+_LAYOUT_PRESETS: dict[str, list[dict]] = {
+    "title": [
+        {"shape_type": "text_box", "label": "Title", "left_in": 0.5, "top_in": 2.5, "width_in": 12.33, "height_in": 1.5},
+        {"shape_type": "text_box", "label": "Subtitle", "left_in": 0.5, "top_in": 4.2, "width_in": 12.33, "height_in": 1.0},
+    ],
+    "title-content": [
+        {"shape_type": "text_box", "label": "Title", "left_in": 0.5, "top_in": 0.4, "width_in": 12.33, "height_in": 1.0},
+        {"shape_type": "text_box", "label": "Content", "left_in": 0.5, "top_in": 1.6, "width_in": 12.33, "height_in": 5.4},
+    ],
+    "two-column": [
+        {"shape_type": "text_box", "label": "Title", "left_in": 0.5, "top_in": 0.4, "width_in": 12.33, "height_in": 0.8},
+        {"shape_type": "text_box", "label": "Left Column", "left_in": 0.5, "top_in": 1.5, "width_in": 5.9, "height_in": 5.5},
+        {"shape_type": "text_box", "label": "Right Column", "left_in": 6.93, "top_in": 1.5, "width_in": 5.9, "height_in": 5.5},
+    ],
+    "title-subtitle": [
+        {"shape_type": "text_box", "label": "Title", "left_in": 0.5, "top_in": 1.8, "width_in": 12.33, "height_in": 1.8},
+        {"shape_type": "text_box", "label": "Subtitle", "left_in": 0.5, "top_in": 3.8, "width_in": 12.33, "height_in": 1.2},
+    ],
+    "section-header": [
+        {"shape_type": "rect", "label": "Background", "left_in": 0.0, "top_in": 0.0, "width_in": 13.333, "height_in": 7.5, "fill_color": "#1E293B"},
+        {"shape_type": "text_box", "label": "Section Title", "left_in": 1.0, "top_in": 2.8, "width_in": 11.33, "height_in": 1.5},
+        {"shape_type": "text_box", "label": "Section Subtitle", "left_in": 1.0, "top_in": 4.5, "width_in": 11.33, "height_in": 1.0},
+    ],
+    "three-boxes": [
+        {"shape_type": "text_box", "label": "Title", "left_in": 0.5, "top_in": 0.4, "width_in": 12.33, "height_in": 0.8},
+        {"shape_type": "rect", "label": "Box 1", "left_in": 0.5, "top_in": 1.5, "width_in": 3.7, "height_in": 5.0, "fill_color": "#3B82F6"},
+        {"shape_type": "rect", "label": "Box 2", "left_in": 4.8, "top_in": 1.5, "width_in": 3.7, "height_in": 5.0, "fill_color": "#8B5CF6"},
+        {"shape_type": "rect", "label": "Box 3", "left_in": 9.1, "top_in": 1.5, "width_in": 3.7, "height_in": 5.0, "fill_color": "#EC4899"},
+    ],
+}
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/apply-layout")
+def apply_layout_preset(doc_id: str, n: int, layout: str):
+    """Create a set of elements from a named layout template."""
+    from percy.bridge.elements import (
+        BridgeShape, Position, Transform, Stacking, Identification,
+        Accessibility, ShapeIdentification, ShapeFill, ShapeLine,
+        ShapeShadow, ShapeTextContent, ShapeTextFrame, ShapeBorders, ColorSpec,
+    )
+    if layout not in _LAYOUT_PRESETS:
+        raise HTTPException(400, f"Unknown layout {layout!r}. Valid: {list(_LAYOUT_PRESETS)}")
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
+
+    existing_ids = {getattr(getattr(e, "identification", None), "shape_id", None) for e in slide.elements}
+    max_id = max((x for x in existing_ids if x is not None), default=0)
+    max_z  = max((getattr(e.stacking, "z_index", 1) for e in slide.elements), default=0)
+    w, h = _get_slide_dims(doc, slide)
+
+    created = []
+    for i, spec in enumerate(_LAYOUT_PRESETS[layout]):
+        max_id += 1
+        max_z  += 1
+        is_text_box = spec["shape_type"] == "text_box"
+        fill_color  = spec.get("fill_color")
+        el = BridgeShape(
+            position=Position(left=spec["left_in"], top=spec["top_in"], width=spec["width_in"], height=spec["height_in"]),
+            transforms=Transform(),
+            stacking=Stacking(z_index=max_z),
+            identification=Identification(shape_id=max_id, shape_name=spec["label"]),
+            accessibility=Accessibility(alt_text=spec["label"]),
+            shape_identification=ShapeIdentification(
+                shape_type="auto_shape",
+                geometry_preset="rect" if is_text_box else spec["shape_type"],
+            ),
+            fill=ShapeFill(
+                fill_type="none" if is_text_box else "solid",
+                color=None if is_text_box else ColorSpec(value=fill_color or "#6366F1"),
+            ),
+            line=ShapeLine(visible=False),
+            shadow=ShapeShadow(),
+            text_content=ShapeTextContent(),
+            text_frame=ShapeTextFrame(),
+            borders=ShapeBorders(),
+        )
+        slide.elements.append(el)
+        new_index = len(slide.elements) - 1
+        created.append(_serialize_element(el, new_index, w, h))
+
+    log.info("studio: applied layout %r on slide %d of %s (%d elements)", layout, n, doc_id, len(created))
+    return {"elements": created, "layout": layout}
+
+
+@app.get("/api/docs/{doc_id}/slide-layouts")
+def list_slide_layouts(_doc_id: str):
+    """Return the available layout preset names."""
+    return {"layouts": list(_LAYOUT_PRESETS.keys())}
+
+
 # ── Undo/redo snapshot stack ──────────────────────────────────────────────────
 _MAX_UNDO = 50
 

@@ -110,6 +110,7 @@ interface Props {
   formatPaintMode?: boolean
   onShowSlideSorter?: () => void
   onCopyToSlide?: (targetN: number) => void
+  onApplyLayout?: (layout: string) => void
 }
 
 export default function StudioToolbar({
@@ -126,9 +127,20 @@ export default function StudioToolbar({
   onFormatPaint, formatPaintMode,
   onShowSlideSorter,
   onCopyToSlide,
+  onApplyLayout,
 }: Props) {
   const [insertOpen, setInsertOpen] = useState(false)
   const [copyToOpen, setCopyToOpen] = useState(false)
+  const [layoutOpen, setLayoutOpen] = useState(false)
+
+  const LAYOUT_OPTIONS = [
+    { id: "title",          label: "Title Slide" },
+    { id: "title-content",  label: "Title + Content" },
+    { id: "title-subtitle", label: "Title + Subtitle" },
+    { id: "two-column",     label: "Two Columns" },
+    { id: "three-boxes",    label: "Three Boxes" },
+    { id: "section-header", label: "Section Header" },
+  ]
   const imageInputRef = useRef<HTMLInputElement>(null)
   const [x, setX] = useState("")
   const [y, setY] = useState("")
@@ -320,6 +332,38 @@ export default function StudioToolbar({
 
       {/* ── spacer ────────────────────────────────────────── */}
       <div className="flex-1" />
+
+      {/* ── layout presets ────────────────────────────────── */}
+      {onApplyLayout && (
+        <div className="relative mr-2">
+          <button
+            onClick={() => setLayoutOpen((o) => !o)}
+            title="Apply a slide layout preset"
+            className="flex items-center gap-1 text-xs px-2.5 py-1 rounded
+                       bg-white/5 text-muted hover:text-slate-200 border border-edge hover:bg-white/10
+                       transition-colors"
+          >
+            ⊟ Layout ▾
+          </button>
+          {layoutOpen && (
+            <div
+              className="absolute right-0 top-full mt-1 z-[9999] bg-surface border border-edge rounded shadow-xl py-1 min-w-[160px]"
+              onMouseLeave={() => setLayoutOpen(false)}
+            >
+              <div className="px-3 py-0.5 text-[10px] text-muted uppercase tracking-wide border-b border-edge mb-1">Insert layout</div>
+              {LAYOUT_OPTIONS.map((lo) => (
+                <button
+                  key={lo.id}
+                  onClick={() => { setLayoutOpen(false); onApplyLayout(lo.id) }}
+                  className="w-full text-left px-3 py-1 text-xs text-slate-300 hover:bg-white/10 transition-colors"
+                >
+                  {lo.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── insert shape ──────────────────────────────────── */}
       <div className="relative mr-2">

@@ -320,3 +320,17 @@ export async function replaceText(
     body: JSON.stringify({ find, replace, case_sensitive: caseSensitive, use_regex: useRegex }),
   })
 }
+
+export async function applyLayoutPreset(
+  docId: string,
+  slideN: number,
+  layout: string,
+): Promise<{ elements: StudioElement[]; layout: string }> {
+  return apiFetch(`${BASE}/docs/${docId}/slides/${slideN}/apply-layout?layout=${encodeURIComponent(layout)}`, {
+    method: "POST",
+  })
+}
+
+export async function listSlideLayouts(docId: string): Promise<{ layouts: string[] }> {
+  return apiFetch(`${BASE}/docs/${docId}/slide-layouts`)
+}
