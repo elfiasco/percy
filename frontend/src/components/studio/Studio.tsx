@@ -11,6 +11,7 @@ import StudioToolbar from "./StudioToolbar"
 import StudioChat from "./StudioChat"
 import StudioNotesBar from "./StudioNotesBar"
 import CommandPalette from "./CommandPalette"
+import SlideSorterModal from "./SlideSorterModal"
 import FindReplacePanel from "./FindReplacePanel"
 import KeyboardShortcutsModal from "./KeyboardShortcutsModal"
 
@@ -32,6 +33,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const [savingToCloud, setSavingToCloud]     = useState(false)
   const [shortcutsOpen, setShortcutsOpen]       = useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
+  const [slideSorterOpen, setSlideSorterOpen]       = useState(false)
   const [formatPaintMode, setFormatPaintMode]   = useState(false)
   const formatPaintStyleRef = useRef<ElementStyleData | null>(null)
   const [dirtySlides, setDirtySlides]         = useState<Set<number>>(new Set())
@@ -270,6 +272,13 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         return
       }
 
+      // Ctrl+G → slide sorter grid view
+      if ((e.key === "g" || e.key === "G") && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        setSlideSorterOpen((o) => !o)
+        return
+      }
+
       // Ctrl+Z → undo, Ctrl+Y or Ctrl+Shift+Z → redo
       if ((e.key === "z" || e.key === "Z") && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
         e.preventDefault()
@@ -397,6 +406,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         undoDepth={undoDepth}
         redoDepth={redoDepth}
         onShowShortcuts={() => setShortcutsOpen(true)}
+        onShowSlideSorter={() => setSlideSorterOpen(true)}
         multiSelectIds={multiSelectIds}
         onAlignElements={handleAlignElements}
         onFormatPaint={handleFormatPaint}
@@ -468,6 +478,17 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           docId={doc.doc_id}
           onClose={() => setCommandPaletteOpen(false)}
           onJump={handleJumpToElement}
+        />
+      )}
+
+      {slideSorterOpen && (
+        <SlideSorterModal
+          docId={doc.doc_id}
+          slideCount={localSlideCount}
+          selectedSlide={selectedSlide}
+          onClose={() => setSlideSorterOpen(false)}
+          onJump={(n) => { setSelectedSlide(n); setSelectedElement(null) }}
+          onSlideCountChange={handleSlideCountChange}
         />
       )}
     </div>
