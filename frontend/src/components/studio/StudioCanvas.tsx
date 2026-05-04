@@ -25,6 +25,8 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
   const [renderKeys, setRenderKeys] = useState<Record<string, number>>({})
   const elementsRef                 = useRef<StudioElement[]>([])
   const [zoom, setZoom]             = useState(1.0)
+  const [rubberBand, setRubberBand] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  const rbStart                     = useRef<{ x: number; y: number } | null>(null)
   const [gridOn, setGridOn]         = useState(false)
   const [snapOn, setSnapOn]         = useState(false)
   const GRID_IN                     = 0.25
@@ -198,6 +200,70 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
     }
   }, [docId, slideN, onSelectElement, onElementRotated])
 
+  const handleCanvasPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return
+    const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect()
+    const x = ((e.clientX - rect.left) / rect.width) * 100
+    const y = ((e.clientY - rect.top)  / rect.height) * 100
+    rbStart.current = { x, y }
+    setRubberBand(null)
+    ;(e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId)
+    e.stopPropagation()
+  }, [])
+
+  const handleCanvasPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!rbStart.current) return
+    const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect()
+    const cx = ((e.clientX - rect.left) / rect.width) * 100
+    const cy = ((e.clientY - rect.top)  / rect.height) * 100
+    const { x, y } = rbStart.current
+    setRubberBand({
+      x: Math.min(x, cx), y: Math.min(y, cy),
+      w: Math.abs(cx - x), h: Math.abs(cy - y),
+    })
+  }, [])
+
+  const handleCanvasPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const start = rbStart.current
+    if (!start) return
+    rbStart.current = null
+
+    const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect()
+    const cx = ((e.clientX - rect.left) / rect.width) * 100
+    const cy = ((e.clientY - rect.top)  / rect.height) * 100
+
+    const rx = Math.min(start.x, cx)
+    const ry = Math.min(start.y, cy)
+    const rw = Math.abs(cx - start.x)
+    const rh = Math.abs(cy - start.y)
+
+    setRubberBand(null)
+
+    if (rw < 0.5 && rh < 0.5) {
+      handleDeselect()
+      return
+    }
+
+    const inside = elementsRef.current.filter((el) => {
+      const el_r = el.left_pct + el.width_pct
+      const el_b = el.top_pct  + el.height_pct
+      return el.left_pct < rx + rw && el_r > rx && el.top_pct < ry + rh && el_b > ry
+    })
+
+    if (inside.length === 0) {
+      handleDeselect()
+    } else {
+      const ids = new Set(inside.map((el) => el.id))
+      setSelectedIds(ids)
+      if (inside.length === 1) {
+        onSelectElement(inside[0])
+      } else {
+        onSelectElement(null)
+      }
+      onMultiSelect?.(ids)
+    }
+  }, [handleDeselect, onSelectElement, onMultiSelect])
+
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (!e.ctrlKey && !e.metaKey) return
     e.preventDefault()
@@ -227,6 +293,9 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
           <div
             ref={containerRef}
             className="absolute inset-0"
+            onPointerDown={handleCanvasPointerDown}
+            onPointerMove={handleCanvasPointerMove}
+            onPointerUp={handleCanvasPointerUp}
           >
             {/* slide background — use document background color or white */}
             <div className="absolute inset-0" style={{ background: bgColor ?? "#FFFFFF" }} />
@@ -294,6 +363,21 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
                 />
               )
             })()}
+
+            {/* rubber-band selection rect */}
+            {rubberBand && rubberBand.w > 0.2 && rubberBand.h > 0.2 && (
+              <div
+                className="absolute pointer-events-none"
+                style={{
+                  left: `${rubberBand.x}%`, top: `${rubberBand.y}%`,
+                  width: `${rubberBand.w}%`, height: `${rubberBand.h}%`,
+                  border: "1.5px dashed rgba(99,102,241,0.9)",
+                  background: "rgba(99,102,241,0.08)",
+                  zIndex: 20000,
+                  boxSizing: "border-box",
+                }}
+              />
+            )}
 
             {/* loading shimmer */}
             {loading && (
