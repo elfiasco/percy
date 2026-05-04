@@ -60,6 +60,8 @@ function fmtTime(secs: number) {
   return `${m}:${String(s).padStart(2, "0")}`
 }
 
+const PEN_COLORS = ["#FF3B30", "#FF9500", "#FFCC00", "#34C759", "#007AFF", "#FFFFFF", "#000000"]
+
 export default function PresentationMode({ docId, slideCount, startSlide = 1, onClose }: Props) {
   const [current, setCurrent]           = useState(startSlide)
   const [transitioning, setTransitioning] = useState(false)
@@ -74,6 +76,13 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
   const [showAutoSettings, setShowAutoSettings] = useState(false)
   const autoProgressRef                 = useRef(0)
   const [autoProgress, setAutoProgress] = useState(0)
+  // Drawing tools
+  const [drawMode, setDrawMode]         = useState(false)
+  const [penColor, setPenColor]         = useState("#FF3B30")
+  const [penSize, setPenSize]           = useState(4)
+  const drawCanvasRef                   = useRef<HTMLCanvasElement>(null)
+  const drawingRef                      = useRef(false)
+  const lastPtRef                       = useRef<{ x: number; y: number } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
   const slideUrl = (n: number) => `/api/docs/${docId}/slides/${n}/bridge.png`
@@ -112,6 +121,9 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
   // Reset autoplay progress when slide changes manually
   useEffect(() => {
     if (autoplay) { autoProgressRef.current = 0; setAutoProgress(0) }
+    // Clear drawing canvas on slide change
+    const ctx = drawCanvasRef.current?.getContext("2d")
+    if (ctx && drawCanvasRef.current) ctx.clearRect(0, 0, drawCanvasRef.current.width, drawCanvasRef.current.height)
   }, [current, autoplay])
 
   // Fetch notes for current slide (and adjacent) when notes panel is open
@@ -146,6 +158,13 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
       if (e.key === "t" || e.key === "T") { e.preventDefault(); setShowTimer((v) => !v); return }
       if (e.key === "p" || e.key === "P") { e.preventDefault(); toggleTimer(); return }
       if (e.key === "a" || e.key === "A") { e.preventDefault(); setAutoplay((v) => !v); return }
+      if (e.key === "d" || e.key === "D") { e.preventDefault(); setDrawMode((v) => !v); return }
+      if (e.key === "c" || e.key === "C") {
+        e.preventDefault()
+        const ctx = drawCanvasRef.current?.getContext("2d")
+        if (ctx && drawCanvasRef.current) ctx.clearRect(0, 0, drawCanvasRef.current.width, drawCanvasRef.current.height)
+        return
+      }
       if (e.key === "ArrowRight" || e.key === "ArrowDown" || e.key === "PageDown" || e.key === " ") {
         e.preventDefault(); go(current + 1)
       }
@@ -173,7 +192,7 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
       style={{ justifyContent: showNotes ? "flex-start" : "center" }}
       onClick={() => go(current + 1)}
     >
-      {/* slide image */}
+      {/* slide image + drawing overlay */}
       <div
         className="relative shrink-0"
         style={{
@@ -183,11 +202,69 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
           transition: "opacity 0.12s, max-height 0.2s",
           opacity: transitioning ? 0 : 1,
         }}
+        onClick={drawMode ? (e) => e.stopPropagation() : undefined}
       >
         <img
           src={slideUrl(current)}
           alt={`Slide ${current}`}
           style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+        />
+        {/* drawing canvas overlay */}
+        <canvas
+          ref={drawCanvasRef}
+          width={1920}
+          height={1080}
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            cursor: drawMode ? "crosshair" : "none",
+            pointerEvents: drawMode ? "all" : "none",
+            touchAction: "none",
+          }}
+          onPointerDown={(e) => {
+            if (!drawMode) return
+            e.stopPropagation()
+            const canvas = drawCanvasRef.current
+            if (!canvas) return
+            const rect = canvas.getBoundingClientRect()
+            const sx = canvas.width / rect.width
+            const sy = canvas.height / rect.height
+            const x = (e.clientX - rect.left) * sx
+            const y = (e.clientY - rect.top) * sy
+            drawingRef.current = true
+            lastPtRef.current = { x, y }
+            canvas.setPointerCapture(e.pointerId)
+          }}
+          onPointerMove={(e) => {
+            if (!drawMode || !drawingRef.current) return
+            e.stopPropagation()
+            const canvas = drawCanvasRef.current
+            if (!canvas) return
+            const ctx = canvas.getContext("2d")
+            if (!ctx) return
+            const rect = canvas.getBoundingClientRect()
+            const sx = canvas.width / rect.width
+            const sy = canvas.height / rect.height
+            const x = (e.clientX - rect.left) * sx
+            const y = (e.clientY - rect.top) * sy
+            const last = lastPtRef.current!
+            ctx.beginPath()
+            ctx.strokeStyle = penColor
+            ctx.lineWidth = penSize * (canvas.width / rect.width)
+            ctx.lineCap = "round"
+            ctx.lineJoin = "round"
+            ctx.moveTo(last.x, last.y)
+            ctx.lineTo(x, y)
+            ctx.stroke()
+            lastPtRef.current = { x, y }
+          }}
+          onPointerUp={(e) => {
+            e.stopPropagation()
+            drawingRef.current = false
+            lastPtRef.current = null
+          }}
         />
       </div>
 
@@ -277,6 +354,62 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
       >
         Timer
       </button>
+
+      {/* draw mode toggle */}
+      <button
+        onClick={(e) => { e.stopPropagation(); setDrawMode((v) => !v) }}
+        title="Toggle draw mode (D)"
+        className={`absolute top-3 right-[11.5rem] text-xs px-2 py-0.5 rounded border transition-colors ${
+          drawMode
+            ? "text-white/80 border-white/40 bg-white/15"
+            : "text-white/30 border-white/10 hover:text-white/60 hover:border-white/25"
+        }`}
+      >
+        ✏ Draw
+      </button>
+
+      {/* drawing toolbar — shown when draw mode is on */}
+      {drawMode && (
+        <div
+          className="absolute left-1/2 -translate-x-1/2 bottom-[5.5rem] flex items-center gap-2 bg-black/70 rounded-full px-3 py-1.5 backdrop-blur-sm border border-white/10"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {PEN_COLORS.map((c) => (
+            <button
+              key={c}
+              onClick={() => setPenColor(c)}
+              title={c}
+              className="w-5 h-5 rounded-full border-2 transition-transform hover:scale-110"
+              style={{
+                background: c,
+                borderColor: c === penColor ? "#fff" : "transparent",
+                transform: c === penColor ? "scale(1.25)" : undefined,
+              }}
+            />
+          ))}
+          <div className="w-px h-4 bg-white/20 mx-1" />
+          {[2, 4, 8].map((sz) => (
+            <button
+              key={sz}
+              onClick={() => setPenSize(sz)}
+              className={`rounded-full transition-all ${penSize === sz ? "bg-white" : "bg-white/30 hover:bg-white/50"}`}
+              style={{ width: sz * 2.5 + 4, height: sz * 2.5 + 4 }}
+              title={`Pen size ${sz}`}
+            />
+          ))}
+          <div className="w-px h-4 bg-white/20 mx-1" />
+          <button
+            onClick={() => {
+              const ctx = drawCanvasRef.current?.getContext("2d")
+              if (ctx && drawCanvasRef.current) ctx.clearRect(0, 0, drawCanvasRef.current.width, drawCanvasRef.current.height)
+            }}
+            className="text-white/50 hover:text-white text-xs transition-colors"
+            title="Clear drawings (C)"
+          >
+            Clear
+          </button>
+        </div>
+      )}
 
       {/* timer display */}
       {showTimer && (
@@ -376,7 +509,7 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
 
       {/* keyboard hint */}
       <div className="absolute top-3 left-4 text-white/25 text-[10px] font-mono">
-        ← → navigate · N notes · T timer · A autoplay · Esc exit
+        ← → navigate · N notes · T timer · A auto · D draw · Esc exit
       </div>
     </div>
   )
