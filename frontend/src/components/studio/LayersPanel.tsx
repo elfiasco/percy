@@ -3,7 +3,7 @@
  * Click row to select. Eye/lock toggles inline. Drag to reorder z-index.
  */
 
-import { useState, useRef, useCallback } from "react"
+import { useState, useRef, useCallback, useMemo } from "react"
 import type { StudioElement } from "../../lib/studioTypes"
 import { updateElementPosition } from "../../lib/studioApi"
 
@@ -32,8 +32,19 @@ interface Props {
 export default function LayersPanel({
   docId, slideN, elements, selectedIds, onSelect, onToggleLock, onToggleHidden, onReorder,
 }: Props) {
-  // Sort descending by z_index so highest z is at top
-  const sorted = [...elements].sort((a, b) => b.z_index - a.z_index)
+  const [filter, setFilter] = useState("")
+
+  // Sort descending by z_index so highest z is at top, then optionally filter
+  const sorted = useMemo(() => {
+    const base = [...elements].sort((a, b) => b.z_index - a.z_index)
+    const q = filter.trim().toLowerCase()
+    if (!q) return base
+    return base.filter((el) =>
+      el.name.toLowerCase().includes(q) ||
+      el.label.toLowerCase().includes(q) ||
+      el.type.toLowerCase().includes(q)
+    )
+  }, [elements, filter])
 
   const [dragId, setDragId]         = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<string | null>(null)
@@ -92,6 +103,18 @@ export default function LayersPanel({
       <div className="px-3 py-2 border-b border-edge shrink-0 flex items-center gap-2">
         <span className="text-[10px] text-muted uppercase tracking-widest font-semibold">Layers</span>
         <span className="text-[10px] text-muted/50 ml-auto">{elements.length}</span>
+      </div>
+      {/* filter */}
+      <div className="px-2 py-1.5 border-b border-edge/40 shrink-0">
+        <input
+          type="text"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Filter layers…"
+          className="w-full text-[11px] bg-base/60 border border-edge/60 rounded px-2 py-0.5
+                     text-slate-300 placeholder:text-muted/50 focus:outline-none focus:border-accent/50"
+          onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Escape") setFilter("") }}
+        />
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-thin">
         {sorted.map((el, idx) => {
