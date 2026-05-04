@@ -194,6 +194,14 @@ def prepare_upload(project_id: str, req: PrepareUploadRequest) -> PrepareUploadR
     return PrepareUploadResponse(document=doc, upload_url=upload_url)
 
 
+@app.get("/api/cloud/documents/{document_id}", response_model=Document)
+def get_document(document_id: str) -> Document:
+    try:
+        return store.get_document(document_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.get("/api/cloud/projects/{project_id}/documents", response_model=list[Document])
 def list_project_documents(project_id: str) -> list[Document]:
     try:

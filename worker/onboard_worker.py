@@ -206,28 +206,19 @@ def process_message(msg: dict) -> None:
     except Exception as exc:
         log.warning("could not mark job started (may already be running): %s", exc)
 
-    # Fetch document storage URI from the API
-    try:
-        r = requests.get(f"{API_BASE}/api/cloud/jobs/{job_id}", timeout=10)
-        r.raise_for_status()
-        job_data = r.json()
-        doc_id = job_data.get("document_id") or document_id
-    except Exception as exc:
-        log.error("could not fetch job info: %s", exc)
-        api_fail_job(job_id, str(exc))
-        return
-
-    # Fetch document to get storage_uri
-    try:
-        r = requests.get(f"{API_BASE}/api/cloud/jobs/{job_id}", timeout=10)
-        params_storage_uri = payload.get("storage_uri")
-    except Exception:
-        params_storage_uri = None
+    # Resolve storage_uri — prefer payload, fall back to fetching document record
+    params_storage_uri = payload.get("storage_uri")
+    if not params_storage_uri:
+        try:
+            r = requests.get(f"{API_BASE}/api/cloud/documents/{document_id}", timeout=10)
+            r.raise_for_status()
+            doc_data = r.json()
+            params_storage_uri = doc_data.get("storage_uri")
+        except Exception as exc:
+            log.error("could not fetch document %s: %s", document_id, exc)
 
     if not params_storage_uri:
-        # Try to get document info from a document endpoint if available
-        # For now use the payload's storage_uri if passed, else fail gracefully
-        api_fail_job(job_id, "No storage_uri in job payload — upload file first via prepare-upload")
+        api_fail_job(job_id, "No storage_uri for document — upload file first via prepare-upload")
         return
 
     try:
