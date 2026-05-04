@@ -1,11 +1,15 @@
 from pathlib import Path
 
-from aws_cdk import CfnOutput, RemovalPolicy, Stack
+from aws_cdk import CfnOutput, Duration, RemovalPolicy, Stack
 from aws_cdk import aws_apprunner as apprunner
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_ecr_assets as ecr_assets
+from aws_cdk import aws_ecs as ecs
 from aws_cdk import aws_iam as iam
+from aws_cdk import aws_logs as logs
 from aws_cdk import aws_rds as rds
+from aws_cdk import aws_s3 as s3
+from aws_cdk import aws_sqs as sqs
 from constructs import Construct
 
 
@@ -49,6 +53,26 @@ class PercyCloudDemoStack(Stack):
         vpc.add_gateway_endpoint(
             "S3Endpoint",
             service=ec2.GatewayVpcEndpointAwsService.S3,
+        )
+        vpc.add_interface_endpoint(
+            "SqsEndpoint",
+            service=ec2.InterfaceVpcEndpointAwsService.SQS,
+        )
+        vpc.add_interface_endpoint(
+            "EcsEndpoint",
+            service=ec2.InterfaceVpcEndpointAwsService.ECS,
+        )
+        vpc.add_interface_endpoint(
+            "EcsAgentEndpoint",
+            service=ec2.InterfaceVpcEndpointAwsService.ECS_AGENT,
+        )
+        vpc.add_interface_endpoint(
+            "EcsTelemetryEndpoint",
+            service=ec2.InterfaceVpcEndpointAwsService.ECS_TELEMETRY,
+        )
+        vpc.add_interface_endpoint(
+            "CloudWatchLogsEndpoint",
+            service=ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS,
         )
 
         # ------------------------------------------------------------------
@@ -111,6 +135,46 @@ class PercyCloudDemoStack(Stack):
         )
 
         # ------------------------------------------------------------------
+        # S3 artifacts bucket
+        # ------------------------------------------------------------------
+        artifacts_bucket = s3.Bucket(
+            self,
+            "PercyArtifacts",
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            removal_policy=RemovalPolicy.DESTROY,
+            auto_delete_objects=True,
+            lifecycle_rules=[
+                s3.LifecycleRule(
+                    id="expire-tmp",
+                    prefix="tmp/",
+                    expiration=Duration.days(7),
+                ),
+            ],
+        )
+
+        # ------------------------------------------------------------------
+        # SQS job queues
+        # ------------------------------------------------------------------
+        onboard_dlq = sqs.Queue(
+            self,
+            "OnboardDlq",
+            queue_name="percy-onboard-document-dlq",
+            retention_period=Duration.days(14),
+        )
+        onboard_queue = sqs.Queue(
+            self,
+            "OnboardQueue",
+            queue_name="percy-onboard-document",
+            visibility_timeout=Duration.minutes(15),
+            retention_period=Duration.days(4),
+            dead_letter_queue=sqs.DeadLetterQueue(
+                max_receive_count=3,
+                queue=onboard_dlq,
+            ),
+        )
+
+        # ------------------------------------------------------------------
         # ECR image
         # ------------------------------------------------------------------
         image = ecr_assets.DockerImageAsset(
@@ -140,6 +204,8 @@ class PercyCloudDemoStack(Stack):
             assumed_by=iam.ServicePrincipal("tasks.apprunner.amazonaws.com"),
         )
         db.secret.grant_read(instance_role)
+        artifacts_bucket.grant_read_write(instance_role)
+        onboard_queue.grant_send_messages(instance_role)
 
         # ------------------------------------------------------------------
         # App Runner service
@@ -173,6 +239,15 @@ class PercyCloudDemoStack(Stack):
                             ),
                             apprunner.CfnService.KeyValuePairProperty(
                                 name="DB_USER", value="percy"
+                            ),
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="S3_BUCKET", value=artifacts_bucket.bucket_name
+                            ),
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="SQS_ONBOARD_QUEUE_URL", value=onboard_queue.queue_url
+                            ),
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="AWS_DEFAULT_REGION", value=self.region
                             ),
                         ],
                         runtime_environment_secrets=[
@@ -211,8 +286,82 @@ class PercyCloudDemoStack(Stack):
             value=f"https://{service.attr_service_url}",
         )
 
-        CfnOutput(
+        # ------------------------------------------------------------------
+        # ECS cluster + onboard worker service
+        # ------------------------------------------------------------------
+        cluster = ecs.Cluster(self, "PercyWorkerCluster", vpc=vpc)
+
+        worker_image = ecr_assets.DockerImageAsset(
             self,
-            "PercyDbSecretArn",
-            value=db.secret.secret_arn,
+            "PercyWorkerImage",
+            directory=str(repo_root),
+            file="Dockerfile.worker",
         )
+
+        worker_task = ecs.FargateTaskDefinition(
+            self,
+            "OnboardWorkerTask",
+            cpu=512,
+            memory_limit_mib=1024,
+        )
+        db.secret.grant_read(worker_task.task_role)
+        artifacts_bucket.grant_read_write(worker_task.task_role)
+        onboard_queue.grant_consume_messages(worker_task.task_role)
+
+        worker_log_group = logs.LogGroup(
+            self,
+            "OnboardWorkerLogs",
+            log_group_name="/percy/worker/onboard",
+            removal_policy=RemovalPolicy.DESTROY,
+            retention=logs.RetentionDays.ONE_WEEK,
+        )
+
+        worker_task.add_container(
+            "OnboardWorker",
+            image=ecs.ContainerImage.from_docker_image_asset(worker_image),
+            logging=ecs.LogDrivers.aws_logs(
+                stream_prefix="onboard",
+                log_group=worker_log_group,
+            ),
+            environment={
+                "PERCY_ENV": "dev",
+                "S3_BUCKET": artifacts_bucket.bucket_name,
+                "SQS_ONBOARD_QUEUE_URL": onboard_queue.queue_url,
+                "PERCY_API_URL": f"https://{service.attr_service_url}",
+                "AWS_DEFAULT_REGION": self.region,
+                "DB_HOST": db.db_instance_endpoint_address,
+                "DB_PORT": db.db_instance_endpoint_port,
+                "DB_NAME": "percy",
+                "DB_USER": "percy",
+            },
+            secrets={
+                "DB_PASSWORD": ecs.Secret.from_secrets_manager(db.secret, "password"),
+            },
+        )
+
+        worker_sg = ec2.SecurityGroup(
+            self, "WorkerSg",
+            vpc=vpc,
+            description="Percy ECS worker egress",
+            allow_all_outbound=True,
+        )
+        db_sg.add_ingress_rule(
+            peer=worker_sg,
+            connection=ec2.Port.tcp(5432),
+            description="Worker to Postgres",
+        )
+
+        ecs.FargateService(
+            self,
+            "OnboardWorkerService",
+            cluster=cluster,
+            task_definition=worker_task,
+            desired_count=1,
+            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_ISOLATED),
+            security_groups=[worker_sg],
+            assign_public_ip=False,
+        )
+
+        CfnOutput(self, "PercyDbSecretArn", value=db.secret.secret_arn)
+        CfnOutput(self, "PercyArtifactsBucket", value=artifacts_bucket.bucket_name)
+        CfnOutput(self, "PercyOnboardQueueUrl", value=onboard_queue.queue_url)

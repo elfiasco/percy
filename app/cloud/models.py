@@ -195,3 +195,21 @@ class OrganizationSummary(BaseModel):
     teams: list[Team]
     projects: list[Project]
     memberships: list[Membership]
+
+
+class PrepareUploadRequest(BaseModel):
+    name: str
+    source_format: SourceFormat = "unknown"
+    content_type: str | None = None
+    size_bytes: int | None = None
+    created_by_id: str
+
+
+class PrepareUploadResponse(BaseModel):
+    document: Document
+    upload_url: str
+
+
+class DocumentDownloadUrl(BaseModel):
+    download_url: str
+    expires_in: int = 3600
