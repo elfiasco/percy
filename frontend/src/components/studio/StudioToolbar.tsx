@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import type { StudioElement } from "../../lib/studioTypes"
 import type { DocInfo } from "../../lib/types"
-import { exportPptxUrl, exportPdfUrl } from "../../lib/studioApi"
+import { exportPptxUrl, exportPdfUrl, exportPngZipUrl } from "../../lib/studioApi"
 
 const MULTI_ALIGN_BUTTONS = [
   { title: "Align left edges",          symbol: "⫷L", alignment: "left" },
@@ -470,6 +470,17 @@ export default function StudioToolbar({
                      transition-colors no-underline"
         >
           ↓ PDF
+        </a>
+
+        <a
+          href={exportPngZipUrl(doc.doc_id)}
+          download
+          title="Download all slides as PNGs in a ZIP archive"
+          className="flex items-center gap-1 text-xs px-3 py-1 rounded
+                     bg-teal-500/15 text-teal-300 hover:bg-teal-500/25 border border-teal-500/25
+                     transition-colors no-underline"
+        >
+          ↓ ZIP
         </a>
 
         <a

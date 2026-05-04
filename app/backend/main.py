@@ -2698,6 +2698,53 @@ def export_pdf(doc_id: str):
     )
 
 
+@app.get("/api/docs/{doc_id}/export-png-zip")
+def export_png_zip(doc_id: str):
+    """Zip all rendered slide PNGs and stream as a .zip download."""
+    import io as _io
+    import zipfile as _zip
+    d = _require(doc_id)
+    doc = d["doc"]
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+
+    png_paths: list[tuple[int, Path]] = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        p = bridge_dir / f"slide_{slide.slide_number:04d}.png"
+        if p.exists():
+            png_paths.append((slide.slide_number, p))
+
+    if not png_paths:
+        try:
+            from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+            bridge_dir.mkdir(parents=True, exist_ok=True)
+            _rbs(doc, bridge_dir)
+            for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+                p = bridge_dir / f"slide_{slide.slide_number:04d}.png"
+                if p.exists():
+                    png_paths.append((slide.slide_number, p))
+        except Exception as exc:
+            raise HTTPException(500, f"Could not render slides: {exc}")
+
+    if not png_paths:
+        raise HTTPException(404, "No rendered slides found — open the deck in Studio first")
+
+    stem = Path(d["name"]).stem
+    buf = _io.BytesIO()
+    with _zip.ZipFile(buf, "w", compression=_zip.ZIP_DEFLATED) as zf:
+        for n, p in png_paths:
+            zf.write(p, arcname=f"{stem}_slide{n:02d}.png")
+
+    from fastapi.responses import Response as _Response
+    return _Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{stem}_slides.zip"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 @app.post("/api/docs/{doc_id}/grades")
 def set_grade(doc_id: str, req: GradeRequest):
     d = _require(doc_id)

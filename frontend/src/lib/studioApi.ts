@@ -125,6 +125,10 @@ export function exportPdfUrl(docId: string): string {
   return `${BASE}/docs/${docId}/export-pdf`
 }
 
+export function exportPngZipUrl(docId: string): string {
+  return `${BASE}/docs/${docId}/export-png-zip`
+}
+
 export async function fetchElementText(
   docId: string,
   slideN: number,
