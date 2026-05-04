@@ -124,6 +124,8 @@ interface Props {
   rerenderingAll?: boolean
   onColorSwap?: () => void
   onShowStats?: () => void
+  commentsOpen?: boolean
+  onToggleComments?: () => void
 }
 
 export default function StudioToolbar({
@@ -154,6 +156,8 @@ export default function StudioToolbar({
   rerenderingAll,
   onColorSwap,
   onShowStats,
+  commentsOpen,
+  onToggleComments,
 }: Props) {
   const [insertOpen, setInsertOpen] = useState(false)
   const [copyToOpen, setCopyToOpen] = useState(false)
@@ -658,6 +662,20 @@ export default function StudioToolbar({
               </div>
             )}
           </div>
+        )}
+
+        {onToggleComments && (
+          <button
+            onClick={onToggleComments}
+            title="Toggle comments panel"
+            className={`flex items-center gap-1.5 text-xs px-3 py-1 rounded border transition-colors ${
+              commentsOpen
+                ? "bg-yellow-500/25 text-yellow-300 border-yellow-500/35 hover:bg-yellow-500/35"
+                : "bg-white/5 text-muted hover:text-slate-200 border-edge hover:bg-white/10"
+            }`}
+          >
+            💬 Notes
+          </button>
         )}
 
         {onPresent && (

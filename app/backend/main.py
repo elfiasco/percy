@@ -5311,6 +5311,72 @@ def generate_slide(doc_id: str, req: GenerateSlideRequest):
     return {"elements": created, "prompt": req.prompt}
 
 
+# ── slide comments ─────────────────────────────────────────────────────────────
+
+class SlideComment(BaseModel):
+    id: str = ""
+    slide_n: int
+    text: str
+    author: str = "User"
+    resolved: bool = False
+    created_at: str = ""
+
+
+@app.get("/api/docs/{doc_id}/comments")
+def get_comments(doc_id: str, slide_n: int | None = None):
+    """Return all comments for the document (or a specific slide)."""
+    d = _require(doc_id)
+    comments: list[dict] = d.setdefault("comments", [])
+    if slide_n is not None:
+        comments = [c for c in comments if c.get("slide_n") == slide_n]
+    return {"comments": comments}
+
+
+@app.post("/api/docs/{doc_id}/comments")
+def add_comment(doc_id: str, req: SlideComment):
+    """Add a new comment to a slide."""
+    d = _require(doc_id)
+    comments: list[dict] = d.setdefault("comments", [])
+    comment = {
+        "id": str(uuid.uuid4())[:8],
+        "slide_n": req.slide_n,
+        "text": req.text,
+        "author": req.author or "User",
+        "resolved": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    comments.append(comment)
+    log.info("comment: added to slide %d of %s", req.slide_n, doc_id)
+    return comment
+
+
+@app.patch("/api/docs/{doc_id}/comments/{comment_id}")
+def update_comment(doc_id: str, comment_id: str, req: SlideComment):
+    """Update a comment text or resolve it."""
+    d = _require(doc_id)
+    comments: list[dict] = d.setdefault("comments", [])
+    c = next((c for c in comments if c.get("id") == comment_id), None)
+    if not c:
+        raise HTTPException(404, f"Comment {comment_id!r} not found")
+    if req.text:
+        c["text"] = req.text
+    if req.resolved is not None:
+        c["resolved"] = req.resolved
+    return c
+
+
+@app.delete("/api/docs/{doc_id}/comments/{comment_id}")
+def delete_comment(doc_id: str, comment_id: str):
+    """Delete a comment."""
+    d = _require(doc_id)
+    comments: list[dict] = d.setdefault("comments", [])
+    before = len(comments)
+    d["comments"] = [c for c in comments if c.get("id") != comment_id]
+    if len(d["comments"]) == before:
+        raise HTTPException(404, f"Comment {comment_id!r} not found")
+    return {"ok": True, "deleted": comment_id}
+
+
 # ── serve built frontend in production ────────────────────────────────────────
 _FRONTEND_DIST = _ROOT / "frontend" / "dist"
 if _FRONTEND_DIST.exists():

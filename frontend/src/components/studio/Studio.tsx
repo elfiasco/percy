@@ -19,6 +19,7 @@ import PresentationMode from "./PresentationMode"
 import LayersPanel from "./LayersPanel"
 import ColorSwapPanel from "./ColorSwapPanel"
 import DocStatsModal from "./DocStatsModal"
+import CommentsPanel from "./CommentsPanel"
 
 interface Props {
   doc: DocInfo
@@ -43,6 +44,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const [rerenderingAll, setRerenderingAll]   = useState(false)
   const [colorSwapOpen, setColorSwapOpen]     = useState(false)
   const [statsOpen, setStatsOpen]             = useState(false)
+  const [commentsOpen, setCommentsOpen]       = useState(false)
   const [shortcutsOpen, setShortcutsOpen]       = useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [slideSorterOpen, setSlideSorterOpen]       = useState(false)
@@ -542,6 +544,8 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         rerenderingAll={rerenderingAll}
         onColorSwap={() => setColorSwapOpen(true)}
         onShowStats={() => setStatsOpen(true)}
+        commentsOpen={commentsOpen}
+        onToggleComments={() => setCommentsOpen((o) => !o)}
       />
 
       {/* ── main area: slide strip + canvas + properties ── */}
@@ -647,6 +651,14 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           docId={doc.doc_id}
           onClose={() => setCommandPaletteOpen(false)}
           onJump={handleJumpToElement}
+        />
+      )}
+
+      {commentsOpen && (
+        <CommentsPanel
+          docId={doc.doc_id}
+          slideN={selectedSlide}
+          onClose={() => setCommentsOpen(false)}
         />
       )}
 

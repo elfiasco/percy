@@ -398,6 +398,42 @@ export async function generateSlideContent(
   })
 }
 
+export interface SlideCommentData {
+  id: string
+  slide_n: number
+  text: string
+  author: string
+  resolved: boolean
+  created_at: string
+}
+
+export async function fetchComments(docId: string, slideN?: number): Promise<{ comments: SlideCommentData[] }> {
+  const url = slideN !== undefined
+    ? `${BASE}/docs/${docId}/comments?slide_n=${slideN}`
+    : `${BASE}/docs/${docId}/comments`
+  return apiFetch(url)
+}
+
+export async function addComment(docId: string, slideN: number, text: string, author = "User"): Promise<SlideCommentData> {
+  return apiFetch(`${BASE}/docs/${docId}/comments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slide_n: slideN, text, author }),
+  })
+}
+
+export async function updateComment(docId: string, commentId: string, update: { text?: string; resolved?: boolean }): Promise<SlideCommentData> {
+  return apiFetch(`${BASE}/docs/${docId}/comments/${encodeURIComponent(commentId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slide_n: 0, text: update.text ?? "", resolved: update.resolved ?? false }),
+  })
+}
+
+export async function deleteComment(docId: string, commentId: string): Promise<{ ok: boolean }> {
+  return apiFetch(`${BASE}/docs/${docId}/comments/${encodeURIComponent(commentId)}`, { method: "DELETE" })
+}
+
 export function exportHtmlUrl(docId: string): string {
   return `${BASE}/docs/${docId}/export-html`
 }
