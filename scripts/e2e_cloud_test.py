@@ -87,13 +87,13 @@ def run(pptx_path: Path, api: str, api_key: str | None = None) -> None:
         job = r.json()
         print(f"  [{attempt+1:02d}] status={job['status']}")
         if job["status"] == "completed":
-            print(f"\n✅ Job complete!")
+            print(f"\nJob complete!")
             print(f"   bundle_uri:  {job['result'].get('bundle_uri')}")
             print(f"   summary_uri: {job['result'].get('summary_uri')}")
             print(f"   slides:      {job['result'].get('slide_count')}")
             return
         if job["status"] == "failed":
-            print(f"\n❌ Job failed: {job.get('error')}")
+            print(f"\nJob failed: {job.get('error')}")
             sys.exit(1)
 
     print("Timed out waiting for job to complete")
