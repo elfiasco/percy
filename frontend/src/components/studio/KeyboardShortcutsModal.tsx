@@ -49,6 +49,7 @@ const SECTIONS = [
     shortcuts: [
       { keys: "Ctrl+S",             desc: "Full rebuild (python-pptx)" },
       { keys: "Ctrl+H / Ctrl+F",    desc: "Find & Replace" },
+      { keys: "Ctrl+K",             desc: "Jump to element (command palette)" },
       { keys: "?",                  desc: "Show this help" },
       { keys: "Notes bar",          desc: "Speaker notes (bottom of canvas)" },
     ],

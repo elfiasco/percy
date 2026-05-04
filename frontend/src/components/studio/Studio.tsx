@@ -9,6 +9,7 @@ import StudioPropertiesPanel from "./StudioPropertiesPanel"
 import StudioToolbar from "./StudioToolbar"
 import StudioChat from "./StudioChat"
 import StudioNotesBar from "./StudioNotesBar"
+import CommandPalette from "./CommandPalette"
 import FindReplacePanel from "./FindReplacePanel"
 import KeyboardShortcutsModal from "./KeyboardShortcutsModal"
 
@@ -28,7 +29,8 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const [findReplaceOpen, setFindReplaceOpen] = useState(false)
   const [localSlideCount, setLocalSlideCount] = useState(doc.slide_count)
   const [savingToCloud, setSavingToCloud]     = useState(false)
-  const [shortcutsOpen, setShortcutsOpen]     = useState(false)
+  const [shortcutsOpen, setShortcutsOpen]       = useState(false)
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [dirtySlides, setDirtySlides]         = useState<Set<number>>(new Set())
   const [multiSelectIds, setMultiSelectIds]   = useState<Set<string>>(new Set())
   const [undoDepth, setUndoDepth]             = useState(0)
@@ -210,6 +212,13 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         return
       }
 
+      // Ctrl+K → command palette (jump to element)
+      if ((e.key === "k" || e.key === "K") && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        setCommandPaletteOpen((o) => !o)
+        return
+      }
+
       // Ctrl+Z → undo, Ctrl+Y or Ctrl+Shift+Z → redo
       if ((e.key === "z" || e.key === "Z") && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
         e.preventDefault()
@@ -289,6 +298,12 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
     setSelectedSlide(focusSlide)
     setSelectedElement(null)
     setRefreshKey((k) => k + 1)
+  }, [])
+
+  const handleJumpToElement = useCallback((slideN: number, _elementId: string) => {
+    setSelectedSlide(slideN)
+    setSelectedElement(null)
+    setMultiSelectIds(new Set())
   }, [])
 
   const handleSaveToCloud = useCallback(async () => {
@@ -391,6 +406,14 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
 
       {shortcutsOpen && (
         <KeyboardShortcutsModal onClose={() => setShortcutsOpen(false)} />
+      )}
+
+      {commandPaletteOpen && (
+        <CommandPalette
+          docId={doc.doc_id}
+          onClose={() => setCommandPaletteOpen(false)}
+          onJump={handleJumpToElement}
+        />
       )}
     </div>
   )

@@ -3681,6 +3681,33 @@ def search_text(doc_id: str, q: str):
     return matches
 
 
+@app.get("/api/docs/{doc_id}/search-elements")
+def search_elements(doc_id: str, q: str = ""):
+    """Search all elements by name or text content. Returns up to 60 matches."""
+    d = _require(doc_id)
+    cmp = q.strip().lower()
+    results = []
+    for slide in d["doc"].slides:
+        for i, el in enumerate(slide.elements):
+            name = getattr(getattr(el, "identification", None), "shape_name", None) or ""
+            label = getattr(getattr(el, "accessibility", None), "alt_text", None) or name
+            plain = _element_plain_text(el)
+            if not cmp or cmp in name.lower() or cmp in plain.lower():
+                results.append({
+                    "slide_n":      slide.slide_number,
+                    "element_id":   _element_id(el, i),
+                    "element_type": getattr(el, "element_type", ""),
+                    "name":         name,
+                    "label":        label,
+                    "preview":      plain[:80],
+                })
+            if len(results) >= 60:
+                break
+        if len(results) >= 60:
+            break
+    return results
+
+
 @app.post("/api/docs/{doc_id}/replace-text")
 def replace_text(doc_id: str, req: ReplaceTextRequest):
     """Replace all occurrences of req.find with req.replace across all slides."""

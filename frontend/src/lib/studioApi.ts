@@ -7,6 +7,15 @@ export interface TextSearchMatch {
   preview: string
 }
 
+export interface ElementSearchResult {
+  slide_n: number
+  element_id: string
+  element_type: string
+  name: string
+  label: string
+  preview: string
+}
+
 export interface ReplaceTextResult {
   replaced: number
   affected_slides: number[]
@@ -247,6 +256,10 @@ export async function fetchThemeColors(docId: string): Promise<{ theme_colors: R
 
 export async function searchText(docId: string, q: string): Promise<TextSearchMatch[]> {
   return apiFetch<TextSearchMatch[]>(`${BASE}/docs/${docId}/search-text?q=${encodeURIComponent(q)}`)
+}
+
+export async function searchElements(docId: string, q = ""): Promise<ElementSearchResult[]> {
+  return apiFetch<ElementSearchResult[]>(`${BASE}/docs/${docId}/search-elements?q=${encodeURIComponent(q)}`)
 }
 
 export async function replaceText(
