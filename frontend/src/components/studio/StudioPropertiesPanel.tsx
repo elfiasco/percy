@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import type { StudioElement, ElementStyleData } from "../../lib/studioTypes"
-import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, setAllSlidesBackground, setGradientBackground, replaceImage, fetchThemeColors, fetchDocStats } from "../../lib/studioApi"
+import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, setAllSlidesBackground, setGradientBackground, replaceImage, fetchThemeColors, fetchDocStats, setSlideBackgroundImage } from "../../lib/studioApi"
 import type { DocStats } from "../../lib/studioApi"
 import StudioTextPanel from "./StudioTextPanel"
 
@@ -571,6 +571,8 @@ interface GradStop { color: string; position: number }
 function SlidePropertiesPanel({ docId, slideN, onCommit }: { docId: string; slideN: number; onCommit: () => void }) {
   const [bgColor, setBgColor]     = useState("#FFFFFF")
   const [saving, setSaving]       = useState(false)
+  const bgImgRef                  = useRef<HTMLInputElement>(null)
+  const [bgImgUploading, setBgImgUploading] = useState(false)
   const [themeColors, setThemeColors] = useState<Record<string, string> | null>(null)
   const [stats, setStats]         = useState<DocStats | null>(null)
   const [gradStops, setGradStops] = useState<GradStop[]>([{ color: "#4472C4", position: 0 }, { color: "#1a1a2e", position: 1 }])
@@ -709,6 +711,34 @@ function SlidePropertiesPanel({ docId, slideN, onCommit }: { docId: string; slid
       >
         {saving ? "Applying…" : "Apply Gradient"}
       </button>
+
+      {/* Background image */}
+      <SectionHead title="Background Image" />
+      <input
+        ref={bgImgRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={async (e) => {
+          const file = e.target.files?.[0]
+          if (!file) return
+          setBgImgUploading(true)
+          try {
+            await setSlideBackgroundImage(docId, slideN, file)
+            onCommit()
+          } catch (err) { console.error("bg image upload failed:", err) }
+          finally { setBgImgUploading(false); e.target.value = "" }
+        }}
+      />
+      <button
+        onClick={() => bgImgRef.current?.click()}
+        disabled={bgImgUploading}
+        className="text-xs px-3 py-1 rounded bg-white/5 text-muted border border-edge
+                   hover:bg-white/10 hover:text-slate-200 transition-colors disabled:opacity-40"
+      >
+        {bgImgUploading ? "Uploading…" : "🖼 Upload Background Image"}
+      </button>
+      <p className="text-[10px] text-muted/60 mt-1">Fills slide; becomes bottom-most element</p>
 
       {themeColors && Object.keys(themeColors).length > 0 && (
         <>

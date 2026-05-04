@@ -361,3 +361,16 @@ export async function ungroupElement(
     method: "POST",
   })
 }
+
+export async function setSlideBackgroundImage(
+  docId: string,
+  slideN: number,
+  file: File,
+): Promise<StudioElement> {
+  const form = new FormData()
+  form.append("file", file)
+  return apiFetch<StudioElement>(`${BASE}/docs/${docId}/slides/${slideN}/background-image`, {
+    method: "POST",
+    body: form,
+  })
+}

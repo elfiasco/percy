@@ -3018,6 +3018,69 @@ def set_gradient_background(doc_id: str, n: int, req: GradientBackgroundRequest)
     return {"ok": True, "stops": len(req.stops), "angle": req.angle}
 
 
+@app.post("/api/docs/{doc_id}/slides/{n}/background-image")
+async def set_slide_background_image(doc_id: str, n: int, file: UploadFile = File(...)):
+    """Upload an image and set it as a full-slide background (z_index=0 BridgeImage)."""
+    from percy.bridge.elements import (  # type: ignore[attr-defined]
+        BridgeImage, ImageData, ImageFileInfo, ImageDimensions, ImageCropping,
+        ImageBorder, ShapeShadow, Position, Transform, Stacking, Identification, Accessibility,
+    )
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, "Uploaded file is empty")
+
+    try:
+        from PIL import Image as _PIL
+        import io as _io
+        with _PIL.open(_io.BytesIO(raw)) as img:
+            fmt = (img.format or "png").lower()
+            img_w, img_h = img.size
+    except Exception:
+        fmt = (file.filename or "").rsplit(".", 1)[-1].lower() or "png"
+        img_w, img_h = None, None
+
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    sw, sh = _get_slide_dims(doc, slide)
+    existing_ids = {getattr(getattr(e, "identification", None), "shape_id", None) for e in slide.elements}
+    new_id = max((x for x in existing_ids if x is not None), default=0) + 1
+
+    # Remove any existing background image elements (marked by name)
+    slide.elements = [e for e in slide.elements
+                      if not (getattr(getattr(e, "identification", None), "shape_name", None) == "__bg_image__")]
+
+    el = BridgeImage(
+        position=Position(left=0.0, top=0.0, width=sw, height=sh),
+        transforms=Transform(),
+        stacking=Stacking(z_index=0),
+        identification=Identification(shape_id=new_id, shape_name="__bg_image__"),
+        accessibility=Accessibility(alt_text="Slide background"),
+        image_data=ImageData(image_bytes=raw, image_format=fmt),
+        file_info=ImageFileInfo(original_filename=file.filename),
+        dimensions=ImageDimensions(width_px=img_w, height_px=img_h),
+        cropping=ImageCropping(),
+        border=ImageBorder(),
+        shadow=ShapeShadow(),
+    )
+    slide.elements.insert(0, el)
+
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    try:
+        from percy.diagnostics.render_png import SlideRenderer as _SR  # type: ignore[attr-defined]
+        _SR(theme=getattr(doc, "theme_colors", None)).render_slide(slide, bridge_dir)
+    except Exception:
+        pass
+
+    new_index = 0
+    log.info("studio: set background image on slide %d of %s", n, doc_id)
+    return _serialize_element(el, new_index, sw, sh)
+
+
 @app.patch("/api/docs/{doc_id}/background-all")
 def set_all_slides_background(doc_id: str, color: str | None = None):
     """Set the same background color on every slide in the document."""
