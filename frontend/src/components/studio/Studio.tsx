@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import type { DocInfo } from "../../lib/types"
 import type { StudioElement } from "../../lib/studioTypes"
-import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, updateElementFlags, applyLayoutPreset, groupElements, ungroupElement, generateSlideContent } from "../../lib/studioApi"
+import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, updateElementFlags, applyLayoutPreset, groupElements, ungroupElement, generateSlideContent, rerenderAllSlides } from "../../lib/studioApi"
 import type { ElementStyleData } from "../../lib/studioTypes"
 import * as api from "../../lib/api"
 import StudioSlideStrip from "./StudioSlideStrip"
@@ -38,6 +38,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const [outlineOpen, setOutlineOpen]         = useState(false)
   const [presenting, setPresenting]           = useState(false)
   const [layersOpen, setLayersOpen]           = useState(false)
+  const [rerenderingAll, setRerenderingAll]   = useState(false)
   const [shortcutsOpen, setShortcutsOpen]       = useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [slideSorterOpen, setSlideSorterOpen]       = useState(false)
@@ -465,6 +466,18 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
     setMultiSelectIds(new Set())
   }, [])
 
+  const handleRerenderAll = useCallback(async () => {
+    setRerenderingAll(true)
+    try {
+      await rerenderAllSlides(doc.doc_id)
+      setRefreshKey((k) => k + 1)
+    } catch (e) {
+      console.error("rerender-all failed:", e)
+    } finally {
+      setRerenderingAll(false)
+    }
+  }, [doc.doc_id])
+
   const handleSaveToCloud = useCallback(async () => {
     setSavingToCloud(true)
     try {
@@ -521,6 +534,8 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         onPresent={() => setPresenting(true)}
         layersOpen={layersOpen}
         onToggleLayers={() => setLayersOpen((o) => !o)}
+        onRerenderAll={handleRerenderAll}
+        rerenderingAll={rerenderingAll}
       />
 
       {/* ── main area: slide strip + canvas + properties ── */}

@@ -2610,6 +2610,144 @@ def render_single_slide(doc_id: str, n: int):
     return {"ok": True, "slide": n, "path": str(dest)}
 
 
+@app.post("/api/docs/{doc_id}/rerender-all")
+def rerender_all_slides(doc_id: str):
+    """Re-render every slide PNG for the current in-memory Bridge model.
+
+    Returns a count of slides rendered and any per-slide errors.
+    """
+    from percy.diagnostics.render_png import _register_embedded_fonts  # type: ignore[attr-defined]
+
+    d = _require(doc_id)
+    doc = d["doc"]
+
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    bridge_dir.mkdir(parents=True, exist_ok=True)
+
+    theme = getattr(doc, "theme_colors", None) or None
+    embedded_fonts = getattr(doc, "embedded_fonts", None)
+    if embedded_fonts:
+        _register_embedded_fonts(embedded_fonts)
+
+    renderer = SlideRenderer(theme=theme)
+    renderer.set_document(doc)
+
+    rendered = 0
+    errors: list[dict] = []
+    bridge_paths: list[str] = list(d.get("bridge_paths", []))
+
+    for slide in doc.slides:
+        n = slide.slide_number
+        dest = bridge_dir / f"slide-{n:03d}.png"
+        try:
+            fig = renderer.render_slide(slide)
+            fig.savefig(str(dest), dpi=96, bbox_inches="tight", pad_inches=0)
+            fig.clf()
+            if 1 <= n <= len(bridge_paths):
+                bridge_paths[n - 1] = str(dest)
+            rendered += 1
+        except Exception as exc:
+            errors.append({"slide": n, "error": str(exc)})
+
+    d["bridge_paths"] = bridge_paths
+    log.info("rerender_all_slides: %d slides rendered for %s (%d errors)", rendered, doc_id, len(errors))
+    return {"ok": True, "rendered": rendered, "errors": errors}
+
+
+class ReplaceColorRequest(BaseModel):
+    old_color: str   # hex like "#FF0000"
+    new_color: str   # hex like "#0070C0"
+    tolerance: int = 10  # 0-255 per-channel tolerance
+
+
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    h = hex_color.lstrip("#")
+    if len(h) == 6:
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    raise ValueError(f"Bad hex color: {hex_color!r}")
+
+
+def _colors_match(c1: str | None, target_rgb: tuple[int, int, int], tol: int) -> bool:
+    if not c1:
+        return False
+    try:
+        r1, g1, b1 = _hex_to_rgb(c1)
+        r2, g2, b2 = target_rgb
+        return abs(r1 - r2) <= tol and abs(g1 - g2) <= tol and abs(b1 - b2) <= tol
+    except ValueError:
+        return False
+
+
+def _apply_color_replacement(el: Any, old_rgb: tuple[int, int, int], new_hex: str, tol: int) -> int:
+    count = 0
+    # fill color
+    fill = getattr(el, "fill", None)
+    if fill and getattr(fill, "fill_type", None) == "solid":
+        fg = getattr(fill, "color", None) or getattr(fill, "fill_color", None)
+        cur = _color_to_str(fg)
+        if _colors_match(cur, old_rgb, tol):
+            if hasattr(fill, "color") and fill.color is not None:
+                fill.color = new_hex
+            elif hasattr(fill, "fill_color") and fill.fill_color is not None:
+                fill.fill_color = new_hex
+            count += 1
+    # line color
+    line = getattr(el, "line", None)
+    if line:
+        lc = getattr(line, "color", None) or getattr(line, "line_color", None)
+        cur = _color_to_str(lc)
+        if _colors_match(cur, old_rgb, tol):
+            if hasattr(line, "color") and line.color is not None:
+                line.color = new_hex
+            elif hasattr(line, "line_color") and line.line_color is not None:
+                line.line_color = new_hex
+            count += 1
+    # text run colors
+    paragraphs = []
+    tf = getattr(el, "text_frame", None) or getattr(el, "body", None)
+    if tf:
+        paragraphs = getattr(tf, "paragraphs", []) or []
+    for para in paragraphs:
+        for run in getattr(para, "runs", []) or []:
+            rf = getattr(run, "font", None) or run
+            rc = getattr(rf, "color", None) or getattr(rf, "font_color", None)
+            cur = _color_to_str(rc)
+            if _colors_match(cur, old_rgb, tol):
+                if hasattr(rf, "color"):
+                    rf.color = new_hex
+                elif hasattr(rf, "font_color"):
+                    rf.font_color = new_hex
+                count += 1
+    # recurse into group children
+    for child in getattr(el, "children", []) or []:
+        count += _apply_color_replacement(child, old_rgb, new_hex, tol)
+    return count
+
+
+@app.post("/api/docs/{doc_id}/replace-color")
+def replace_color(doc_id: str, req: ReplaceColorRequest):
+    """Swap all uses of old_color (within tolerance) with new_color across the entire deck."""
+    d = _require(doc_id)
+    _snapshot_doc(doc_id)
+    try:
+        old_rgb = _hex_to_rgb(req.old_color)
+    except ValueError:
+        raise HTTPException(400, f"Invalid old_color: {req.old_color!r}")
+
+    total = 0
+    affected_slides: list[int] = []
+    for slide in d["doc"].slides:
+        count = 0
+        for el in slide.elements:
+            count += _apply_color_replacement(el, old_rgb, req.new_color, req.tolerance)
+        if count:
+            affected_slides.append(slide.slide_number)
+            total += count
+    log.info("replace-color: %s→%s in %s: %d replacements on slides %s",
+             req.old_color, req.new_color, doc_id, total, affected_slides)
+    return {"replaced": total, "affected_slides": affected_slides}
+
+
 @app.get("/api/docs/{doc_id}/export")
 def export_pptx(doc_id: str):
     """Rebuild current Bridge model → stream rebuilt PPTX as a file download.

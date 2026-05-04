@@ -120,6 +120,8 @@ interface Props {
   onPresent?: () => void
   layersOpen?: boolean
   onToggleLayers?: () => void
+  onRerenderAll?: () => void
+  rerenderingAll?: boolean
 }
 
 export default function StudioToolbar({
@@ -146,6 +148,8 @@ export default function StudioToolbar({
   onPresent,
   layersOpen,
   onToggleLayers,
+  onRerenderAll,
+  rerenderingAll,
 }: Props) {
   const [insertOpen, setInsertOpen] = useState(false)
   const [copyToOpen, setCopyToOpen] = useState(false)
@@ -491,6 +495,22 @@ export default function StudioToolbar({
           )}
           Rebuild
         </button>
+
+        {onRerenderAll && (
+          <button
+            onClick={onRerenderAll}
+            disabled={rerenderingAll}
+            title="Re-render all slide PNGs from current Bridge model"
+            className="flex items-center gap-1.5 text-xs px-3 py-1 rounded
+                       bg-indigo-500/15 text-indigo-300 hover:bg-indigo-500/25 border border-indigo-500/25
+                       transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {rerenderingAll && (
+              <span className="inline-block w-2.5 h-2.5 border border-indigo-300 border-t-transparent rounded-full animate-spin" />
+            )}
+            ⟳ All
+          </button>
+        )}
 
         <a
           href={exportPptxUrl(doc.doc_id)}

@@ -385,6 +385,23 @@ export async function generateSlideContent(
   })
 }
 
+export async function rerenderAllSlides(docId: string): Promise<{ ok: boolean; rendered: number; errors: { slide: number; error: string }[] }> {
+  return apiFetch(`${BASE}/docs/${docId}/rerender-all`, { method: "POST" })
+}
+
+export async function replaceColor(
+  docId: string,
+  oldColor: string,
+  newColor: string,
+  tolerance = 10,
+): Promise<{ replaced: number; affected_slides: number[] }> {
+  return apiFetch(`${BASE}/docs/${docId}/replace-color`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ old_color: oldColor, new_color: newColor, tolerance }),
+  })
+}
+
 export async function setSlideBackgroundImage(
   docId: string,
   slideN: number,
