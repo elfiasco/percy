@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react"
-import { addSlide, deleteSlide, duplicateSlide, moveSlide, fetchNotesSummary, importSlides, fetchSlideLabels, setSlideLabel, setSlideTag, setSlideTransition, fetchSlideTransitions, fetchSlideSections, setSlideSection, fetchComments, exportSlideUrl } from "../../lib/studioApi"
+import { addSlide, deleteSlide, duplicateSlide, moveSlide, fetchNotesSummary, importSlides, fetchSlideLabels, setSlideLabel, setSlideTag, setSlideTransition, fetchSlideTransitions, fetchSlideSections, setSlideSection, fetchComments, exportSlideUrl, setSlidesBackground } from "../../lib/studioApi"
 
 const TAG_COLORS = [
   { color: null,      label: "None" },
@@ -51,6 +51,7 @@ export default function StudioSlideStrip({
   const [slideTransitions, setSlideTransitions] = useState<Record<number, string>>({})
   const [slideSections, setSlideSections]       = useState<Record<number, string>>({})
   const [filterTag, setFilterTag]     = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState("")
   const importInputRef                = useRef<HTMLInputElement>(null)
   const stripRef = useRef<HTMLDivElement>(null)
 
@@ -286,6 +287,23 @@ export default function StudioSlideStrip({
               title="Clear selection"
               className="text-[9px] px-1 text-muted/50 hover:text-muted transition-colors"
             >⊘</button>
+            {/* bg color picker for multi-selected */}
+            <label
+              title="Set background color for selected slides"
+              className="text-[9px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/15 text-muted transition-colors cursor-pointer"
+            >
+              🎨
+              <input
+                type="color"
+                className="hidden"
+                onChange={(e) => {
+                  const slides = [...multiSelected]
+                  setSlidesBackground(docId, slides, e.target.value)
+                    .then(() => setStripKey((k) => k + 1))
+                    .catch(() => {})
+                }}
+              />
+            </label>
           </div>
         ) : (
           <span>Slides</span>
@@ -351,9 +369,32 @@ export default function StudioSlideStrip({
         </div>
       )}
 
+      {/* search bar */}
+      <div className="px-2 py-1 border-b border-edge/40 shrink-0">
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search slides…"
+          className="w-full text-[10px] bg-base/60 border border-edge/50 rounded px-1.5 py-0.5
+                     text-slate-300 placeholder:text-muted/40 focus:outline-none focus:border-accent/50"
+          onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Escape") setSearchQuery("") }}
+        />
+      </div>
+
       {/* slide list */}
       <div key={stripKey} className="flex flex-col gap-1 p-2 overflow-y-auto flex-1 scrollbar-thin">
-        {Array.from({ length: slideCount }, (_, i) => i + 1).filter((n) => !filterTag || slideTags[n] === filterTag).map((n) => {
+        {Array.from({ length: slideCount }, (_, i) => i + 1).filter((n) => {
+          if (filterTag && slideTags[n] !== filterTag) return false
+          if (searchQuery.trim()) {
+            const q = searchQuery.toLowerCase()
+            const labelMatch = (slideLabels[n] ?? "").toLowerCase().includes(q)
+            const sectionMatch = (slideSections[n] ?? "").toLowerCase().includes(q)
+            const numMatch = String(n).includes(q)
+            if (!labelMatch && !sectionMatch && !numMatch) return false
+          }
+          return true
+        }).map((n) => {
           const active    = n === selectedSlide
           const dirty     = dirtySlides?.has(n) ?? false
           const hasNotes  = slidesWithNotes.has(n)

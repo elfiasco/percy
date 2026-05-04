@@ -509,12 +509,39 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
                 <span className="text-sm font-normal ml-1 text-white/30">/ {fmtTime(targetSecs)}</span>
               )}
             </div>
-            <div className="text-white/30 text-[9px] font-mono mt-0.5">
-              slide {fmtTime((slideTimes[current] ?? 0) + (elapsed - slideStart))}
-            </div>
+            {(() => {
+              const slideElapsed = (slideTimes[current] ?? 0) + (elapsed - slideStart)
+              const slideTarget = targetSecs != null ? Math.floor(targetSecs / slideCount) : null
+              const slideOver = slideTarget != null && slideElapsed > slideTarget
+              return (
+                <div className={`text-[9px] font-mono mt-0.5 ${slideOver ? "text-amber-400/80" : "text-white/30"}`}>
+                  slide {fmtTime(slideElapsed)}
+                  {slideTarget != null && (
+                    <span className="text-white/20 ml-1">/ {fmtTime(slideTarget)}</span>
+                  )}
+                </div>
+              )
+            })()}
             {overTime && (
               <div className="text-[9px] text-red-400 mt-0.5">⏱ Over time by {fmtTime(elapsed - targetSecs!)}</div>
             )}
+            {/* quick target presets */}
+            <div className="flex gap-0.5 mt-1 justify-end">
+              {[5, 10, 15, 20, 30, 45, 60].map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setTargetMinutes(m)}
+                  className={`text-[8px] px-1 py-0.5 rounded transition-colors ${
+                    targetMinutes === m
+                      ? "bg-white/20 text-white/80"
+                      : "bg-white/5 text-white/30 hover:bg-white/10 hover:text-white/60"
+                  }`}
+                  title={`Set target: ${m}min`}
+                >
+                  {m}m
+                </button>
+              ))}
+            </div>
             <div className="flex gap-1 mt-1.5 justify-end items-center">
               <input
                 type="number"

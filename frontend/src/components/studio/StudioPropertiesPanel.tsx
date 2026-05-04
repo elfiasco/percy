@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import type { StudioElement, ElementStyleData } from "../../lib/studioTypes"
-import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, setAllSlidesBackground, setGradientBackground, replaceImage, fetchThemeColors, fetchDocStats, setSlideBackgroundImage, bulkUpdateStyle, setSlideTransition, fetchSlideTransitions, setElementAnimation } from "../../lib/studioApi"
+import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, setAllSlidesBackground, setGradientBackground, replaceImage, fetchThemeColors, fetchDocStats, setSlideBackgroundImage, bulkUpdateStyle, setSlideTransition, fetchSlideTransitions, setElementAnimation, generateAltText } from "../../lib/studioApi"
 import type { DocStats } from "../../lib/studioApi"
 import StudioTextPanel from "./StudioTextPanel"
 
@@ -395,6 +395,30 @@ function StyleTab({ element, docId, slideN, onCommit }: StyleTabProps) {
   return (
     <div className="p-3 overflow-y-auto flex-1 scrollbar-thin">
 
+      {/* Quick Styles */}
+      <SectionHead title="Quick Styles" />
+      <div className="flex flex-wrap gap-1 mb-3">
+        {[
+          { label: "Flat Blue",    style: { fill_type: "solid", fill_color: "#3B82F6", line_color: null, line_width: null, opacity: 1, shadow_on: false } },
+          { label: "Flat Indigo",  style: { fill_type: "solid", fill_color: "#6366F1", line_color: null, line_width: null, opacity: 1, shadow_on: false } },
+          { label: "Flat Green",   style: { fill_type: "solid", fill_color: "#22C55E", line_color: null, line_width: null, opacity: 1, shadow_on: false } },
+          { label: "Flat Red",     style: { fill_type: "solid", fill_color: "#EF4444", line_color: null, line_width: null, opacity: 1, shadow_on: false } },
+          { label: "Outline Blue", style: { fill_type: null, fill_color: null, line_color: "#3B82F6", line_width: 2, opacity: 1, shadow_on: false } },
+          { label: "Ghost",        style: { fill_type: "solid", fill_color: "#FFFFFF", line_color: "#E2E8F0", line_width: 1, opacity: 0.08, shadow_on: false } },
+          { label: "Dark",         style: { fill_type: "solid", fill_color: "#1E293B", line_color: null, line_width: null, opacity: 1, shadow_on: false } },
+          { label: "Shadow Card",  style: { fill_type: "solid", fill_color: "#FFFFFF", line_color: null, line_width: null, opacity: 1, shadow_on: true, shadow_color: "#000000", shadow_blur: 12, shadow_offset_x: 0, shadow_offset_y: 4 } },
+        ].map((preset) => (
+          <button
+            key={preset.label}
+            title={preset.label}
+            onClick={() => patch(preset.style)}
+            className="text-[9px] px-2 py-0.5 rounded border border-edge text-muted hover:text-slate-200 hover:border-accent/40 transition-colors"
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
+
       {/* Opacity */}
       <SectionHead title="Opacity" />
       <div className="mb-3">
@@ -541,6 +565,7 @@ function StyleTab({ element, docId, slideN, onCommit }: StyleTabProps) {
             )
           })}
           <ImageReplaceButton docId={docId} slideN={slideN} elementId={element.id} onReplaced={onCommit} />
+          <AltTextButton docId={docId} slideN={slideN} elementId={element.id} onGenerated={onCommit} />
         </>
       )}
     </div>
@@ -579,6 +604,45 @@ function ImageReplaceButton({ docId, slideN, elementId, onReplaced }: {
         <input type="file" accept="image/*" className="hidden" onChange={handleFile} disabled={uploading} />
       </label>
       {msg && <p className={`text-[10px] mt-1 ${msg.startsWith("Error") ? "text-bad" : "text-good"}`}>{msg}</p>}
+    </div>
+  )
+}
+
+function AltTextButton({ docId, slideN, elementId, onGenerated }: {
+  docId: string; slideN: number; elementId: string; onGenerated: () => void
+}) {
+  const [loading, setLoading] = useState(false)
+  const [result, setResult]   = useState<string | null>(null)
+
+  const handleGenerate = async () => {
+    setLoading(true); setResult(null)
+    try {
+      const r = await generateAltText(docId, slideN, elementId)
+      setResult(r.alt_text)
+      onGenerated()
+    } catch (ex) {
+      setResult(`Error: ${ex}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="mt-2">
+      <button
+        onClick={handleGenerate}
+        disabled={loading}
+        title="Use AI to generate descriptive alt text for this image (updates element name)"
+        className="w-full flex items-center justify-center gap-1.5 text-xs px-2 py-1.5 rounded border border-indigo-500/30
+                   bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20 transition-colors disabled:opacity-40"
+      >
+        {loading ? "Generating…" : "✨ Generate Alt Text"}
+      </button>
+      {result && (
+        <p className={`text-[10px] mt-1 ${result.startsWith("Error") ? "text-bad" : "text-indigo-300/70"}`}>
+          {result}
+        </p>
+      )}
     </div>
   )
 }

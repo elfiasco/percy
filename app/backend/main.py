@@ -3398,6 +3398,25 @@ async def set_slide_background_image(doc_id: str, n: int, file: UploadFile = Fil
     return _serialize_element(el, new_index, sw, sh)
 
 
+class BulkSlidesBackgroundRequest(BaseModel):
+    slide_numbers: list[int]
+    color: str | None = None
+
+
+@app.patch("/api/docs/{doc_id}/background-slides")
+def set_slides_background(doc_id: str, req: BulkSlidesBackgroundRequest):
+    """Set background color for specific slides."""
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    updated = 0
+    for slide in d["doc"].slides:
+        if slide.slide_number in req.slide_numbers:
+            slide.background_color = req.color
+            slide.background_gradient_stops = []
+            updated += 1
+    return {"background_color": req.color, "slides_updated": updated}
+
+
 @app.patch("/api/docs/{doc_id}/background-all")
 def set_all_slides_background(doc_id: str, color: str | None = None):
     """Set the same background color on every slide in the document."""
@@ -5243,6 +5262,83 @@ def render_element_png(doc_id: str, n: int, element_id: str, v: int = 0):
         media_type="image/png",
         headers={"Cache-Control": "no-store"},
     )
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/generate-alt-text")
+def generate_alt_text(doc_id: str, n: int, element_id: str):
+    """Use Claude Vision to generate descriptive alt text for an image element."""
+    import anthropic as _anthropic
+    import base64 as _base64
+    import io as _io
+    from percy.diagnostics.render_png import _register_embedded_fonts  # type: ignore[attr-defined]
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured — cannot generate alt text")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    el = None
+    el_index = None
+    for i, e in enumerate(slide.elements):
+        if _element_id(e, i) == element_id:
+            el, el_index = e, i
+            break
+    if el is None:
+        raise HTTPException(404, f"Element {element_id!r} not found")
+    if getattr(el, "element_type", "") != "BridgeImage":
+        raise HTTPException(400, "Alt text generation is only supported for image elements")
+
+    # Render the element to PNG
+    theme = getattr(doc, "theme_colors", None) or None
+    embedded_fonts = getattr(doc, "embedded_fonts", None)
+    if embedded_fonts:
+        _register_embedded_fonts(embedded_fonts)
+
+    renderer = SlideRenderer(theme=theme)
+    renderer.set_document(doc)
+    renderer._default_text_color = getattr(slide, "default_text_color", None)
+    try:
+        fig = renderer.render_element(el, padding=0)
+        buf = _io.BytesIO()
+        fig.savefig(buf, format="png", dpi=96, transparent=False)
+        fig.clf()
+        buf.seek(0)
+        img_data = _base64.standard_b64encode(buf.read()).decode()
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to render image for alt text: {exc}")
+
+    # Call Claude Vision
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=150,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img_data}},
+                {"type": "text", "text": "Describe this image in 5-15 words suitable as alt text for accessibility. Be concise and descriptive. Reply with ONLY the description, no punctuation at end."},
+            ],
+        }],
+    )
+    alt_text = resp.content[0].text.strip().rstrip(".")
+
+    # Update the element's name with the generated alt text
+    _snapshot_doc(doc_id)
+    ident = getattr(el, "identification", None)
+    if ident is not None:
+        ident.name = alt_text
+    else:
+        try:
+            el.name = alt_text  # type: ignore[attr-defined]
+        except AttributeError:
+            pass
+
+    return {"alt_text": alt_text, "element_id": element_id}
 
 
 class ChatMessage(BaseModel):

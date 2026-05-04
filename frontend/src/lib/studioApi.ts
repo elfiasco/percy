@@ -587,3 +587,25 @@ export async function fetchPresentationCheck(docId: string): Promise<{ issues: P
 export function exportSlideUrl(docId: string, slideN: number): string {
   return `${BASE}/docs/${docId}/slides/${slideN}/export-slide`
 }
+
+export async function setSlidesBackground(
+  docId: string,
+  slideNumbers: number[],
+  color: string | null,
+): Promise<{ background_color: string | null; slides_updated: number }> {
+  return apiFetch(`${BASE}/docs/${docId}/background-slides`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slide_numbers: slideNumbers, color }),
+  })
+}
+
+export async function generateAltText(
+  docId: string,
+  slideN: number,
+  elementId: string,
+): Promise<{ alt_text: string; element_id: string }> {
+  return apiFetch(`${BASE}/docs/${docId}/slides/${slideN}/elements/${encodeURIComponent(elementId)}/generate-alt-text`, {
+    method: "POST",
+  })
+}
