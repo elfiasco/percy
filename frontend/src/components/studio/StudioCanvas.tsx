@@ -67,6 +67,19 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
       if (e.key === "Escape") { setSelectedIds(new Set()); onSelectElement(null); onMultiSelect?.(new Set()) }
       if (e.key === "g" || e.key === "G") { if (!e.ctrlKey && !e.metaKey) setGridOn((v) => !v) }
       if (e.key === "s" || e.key === "S") { if (!e.ctrlKey && !e.metaKey) setSnapOn((v) => !v) }
+      // Ctrl+= / Ctrl++ zoom in, Ctrl+- zoom out, Ctrl+0 reset
+      if ((e.key === "=" || e.key === "+") && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        setZoom((z) => Math.min(4, z + 0.25))
+      }
+      if (e.key === "-" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        setZoom((z) => Math.max(0.25, z - 0.25))
+      }
+      if (e.key === "0" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        setZoom(1)
+      }
       // Ctrl+A — select all
       if ((e.key === "a" || e.key === "A") && (e.ctrlKey || e.metaKey)) {
         e.preventDefault()
@@ -305,17 +318,24 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
           <span className="ml-auto flex items-center gap-1">
             <button
               onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))}
+              title="Zoom out (Ctrl+scroll)"
               className="w-5 h-5 flex items-center justify-center rounded hover:bg-white/10 transition-colors"
             >−</button>
             <span
               className="font-mono w-10 text-center cursor-pointer"
               onClick={() => setZoom(1)}
-              title="Click to reset zoom"
+              title="Click to reset to 100%"
             >{Math.round(zoom * 100)}%</span>
             <button
               onClick={() => setZoom((z) => Math.min(4, z + 0.25))}
+              title="Zoom in (Ctrl+scroll)"
               className="w-5 h-5 flex items-center justify-center rounded hover:bg-white/10 transition-colors"
             >+</button>
+            <button
+              onClick={() => setZoom(1)}
+              title="Fit slide (100%)"
+              className="text-[10px] px-1.5 rounded hover:bg-white/10 transition-colors text-muted"
+            >Fit</button>
           </span>
         </div>
       </div>

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react"
 import type { StudioElement, ElementStyleData } from "../../lib/studioTypes"
-import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, replaceImage } from "../../lib/studioApi"
+import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, replaceImage, fetchThemeColors } from "../../lib/studioApi"
 import StudioTextPanel from "./StudioTextPanel"
 
 const TYPE_COLOR: Record<string, string> = {
@@ -503,8 +503,15 @@ function ImageReplaceButton({ docId, slideN, elementId, onReplaced }: {
 // ── Slide properties (no element selected) ────────────────────────────────────
 
 function SlidePropertiesPanel({ docId, slideN, onCommit }: { docId: string; slideN: number; onCommit: () => void }) {
-  const [bgColor, setBgColor] = useState("#FFFFFF")
-  const [saving, setSaving]   = useState(false)
+  const [bgColor, setBgColor]     = useState("#FFFFFF")
+  const [saving, setSaving]       = useState(false)
+  const [themeColors, setThemeColors] = useState<Record<string, string> | null>(null)
+
+  useEffect(() => {
+    fetchThemeColors(docId)
+      .then((r) => setThemeColors(r.theme_colors))
+      .catch(() => {})
+  }, [docId])
 
   const applyBg = useCallback(async (color: string | null) => {
     setSaving(true)
@@ -544,6 +551,24 @@ function SlidePropertiesPanel({ docId, slideN, onCommit }: { docId: string; slid
       >
         Clear Background
       </button>
+
+      {themeColors && Object.keys(themeColors).length > 0 && (
+        <>
+          <SectionHead title="Theme Colors" />
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            {Object.entries(themeColors).map(([name, hex]) => (
+              <button
+                key={name}
+                title={`${name}: ${hex}`}
+                onClick={() => setBgColor(hex)}
+                className="w-6 h-6 rounded border border-edge/50 hover:scale-110 transition-transform shrink-0"
+                style={{ background: hex }}
+              />
+            ))}
+          </div>
+          <p className="text-[10px] text-muted/60 mt-1">Click to use as background</p>
+        </>
+      )}
     </div>
   )
 }
@@ -552,19 +577,23 @@ function SlidePropertiesPanel({ docId, slideN, onCommit }: { docId: string; slid
 
 interface Props {
   element: StudioElement | null
+  elements?: StudioElement[]
   slideN: number
   slideWidthIn: number
   slideHeightIn: number
   docId: string
   onTextCommit: () => void
+  onSelectElement?: (el: StudioElement) => void
 }
 
 type Tab = "position" | "style" | "text"
+type NoSelTab = "slide" | "elements"
 
 export default function StudioPropertiesPanel({
-  element, slideN, slideWidthIn: _slideWidthIn, slideHeightIn: _slideHeightIn, docId, onTextCommit,
+  element, elements, slideN, slideWidthIn: _slideWidthIn, slideHeightIn: _slideHeightIn, docId, onTextCommit, onSelectElement,
 }: Props) {
   const [tab, setTab] = useState<Tab>("position")
+  const [noSelTab, setNoSelTab] = useState<NoSelTab>("slide")
 
   // reset to position when element changes
   useEffect(() => { setTab("position") }, [element?.id])
@@ -591,30 +620,73 @@ export default function StudioPropertiesPanel({
 
         {/* tabs */}
         <div className="flex px-2 gap-0.5">
-          {(["position", "style", "text"] as Tab[]).map((t) => {
-            if (t === "text"  && !showTextTab)  return null
-            if (t === "style" && !showStyleTab) return null
-            return (
+          {!element ? (
+            (["slide", "elements"] as NoSelTab[]).map((t) => (
               <button
                 key={t}
-                onClick={() => setTab(t)}
+                onClick={() => setNoSelTab(t)}
                 className={[
                   "px-2.5 py-1 text-[11px] rounded-t transition-colors capitalize",
-                  tab === t
+                  noSelTab === t
                     ? "bg-base text-slate-200 border-t border-l border-r border-edge"
                     : "text-muted hover:text-slate-300",
                 ].join(" ")}
               >
-                {t}
+                {t === "elements" ? `Elements${elements ? ` (${elements.length})` : ""}` : t}
               </button>
-            )
-          })}
+            ))
+          ) : (
+            (["position", "style", "text"] as Tab[]).map((t) => {
+              if (t === "text"  && !showTextTab)  return null
+              if (t === "style" && !showStyleTab) return null
+              return (
+                <button
+                  key={t}
+                  onClick={() => setTab(t)}
+                  className={[
+                    "px-2.5 py-1 text-[11px] rounded-t transition-colors capitalize",
+                    tab === t
+                      ? "bg-base text-slate-200 border-t border-l border-r border-edge"
+                      : "text-muted hover:text-slate-300",
+                  ].join(" ")}
+                >
+                  {t}
+                </button>
+              )
+            })
+          )}
         </div>
       </div>
 
       {/* ── tab content ─────────────────────────────────────── */}
       {!element ? (
-        <SlidePropertiesPanel docId={docId} slideN={slideN} onCommit={onTextCommit} />
+        noSelTab === "elements" ? (
+          <div className="flex-1 overflow-y-auto p-2 scrollbar-thin">
+            {!elements || elements.length === 0 ? (
+              <p className="text-xs text-muted p-2">No elements on this slide.</p>
+            ) : (
+              [...elements].sort((a, b) => b.z_index - a.z_index).map((el) => (
+                <button
+                  key={el.id}
+                  onClick={() => onSelectElement?.(el)}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-left
+                             hover:bg-white/5 transition-colors group"
+                >
+                  <div
+                    className="w-2 h-2 rounded-sm shrink-0"
+                    style={{ background: TYPE_COLOR[el.type] ?? "#6366F1" }}
+                  />
+                  <span className="text-xs text-slate-300 truncate flex-1 min-w-0">{el.name}</span>
+                  {el.locked && <span className="text-[10px] text-muted shrink-0">🔒</span>}
+                  {el.hidden && <span className="text-[10px] text-muted shrink-0">👁</span>}
+                  <span className="text-[10px] text-muted shrink-0 opacity-0 group-hover:opacity-100">z{el.z_index}</span>
+                </button>
+              ))
+            )}
+          </div>
+        ) : (
+          <SlidePropertiesPanel docId={docId} slideN={slideN} onCommit={onTextCommit} />
+        )
       ) : tab === "position" ? (
         <div className="flex-1 min-h-0 flex flex-col">
           <PositionTab

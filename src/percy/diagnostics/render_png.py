@@ -296,41 +296,15 @@ _CHAR_SUBSTITUTIONS: dict[int, str] = {
     0x203A: ">",   # SINGLE RIGHT-POINTING ANGLE QUOTATION MARK
     0x00AB: "<<",  # LEFT-POINTING DOUBLE ANGLE QUOTATION MARK
     0x00BB: ">>",  # RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK
-    0x2026: "...", # HORIZONTAL ELLIPSIS
-    0x00B7: ".",   # MIDDLE DOT
-    0x2020: "+",   # DAGGER
-    0x2021: "+",   # DOUBLE DAGGER
-    0x00A9: "(c)", # COPYRIGHT SIGN
-    0x00AE: "(R)", # REGISTERED SIGN
-    0x2122: "(TM)",# TRADE MARK SIGN
-    0x20AC: "EUR", # EURO SIGN
-    0x00A3: "GBP", # POUND SIGN
-    0x00A5: "JPY", # YEN SIGN
-    0x00B0: "deg", # DEGREE SIGN
-    0x00B1: "+/-", # PLUS-MINUS SIGN
-    0x00D7: "x",   # MULTIPLICATION SIGN
-    0x00F7: "/",   # DIVISION SIGN
-    0x00BD: "1/2", # VULGAR FRACTION ONE HALF
-    0x00BC: "1/4", # VULGAR FRACTION ONE QUARTER
-    0x00BE: "3/4", # VULGAR FRACTION THREE QUARTERS
-    0x00B2: "2",   # SUPERSCRIPT TWO
-    0x00B3: "3",   # SUPERSCRIPT THREE
-    0x00B9: "1",   # SUPERSCRIPT ONE
-    0x2212: "-",   # MINUS SIGN
-    0x00D0: "D",   # LATIN CAPITAL LETTER ETH
-    0x00F0: "d",   # LATIN SMALL LETTER ETH
-    0x00DE: "Th",  # LATIN CAPITAL LETTER THORN
-    0x00FE: "th",  # LATIN SMALL LETTER THORN
-    0x0152: "OE",  # LATIN CAPITAL LIGATURE OE
-    0x0153: "oe",  # LATIN SMALL LIGATURE OE
-    0x0160: "S",   # LATIN CAPITAL LETTER S WITH CARON
-    0x0161: "s",   # LATIN SMALL LETTER S WITH CARON
-    0x0178: "Y",   # LATIN CAPITAL LETTER Y WITH DIAERESIS
-    0x017D: "Z",   # LATIN CAPITAL LETTER Z WITH CARON
-    0x017E: "z",   # LATIN SMALL LETTER Z WITH CARON
-    0x0192: "f",   # LATIN SMALL LETTER F WITH HOOK (florin)
-    0x02C6: "^",   # MODIFIER LETTER CIRCUMFLEX ACCENT
-    0x02DC: "~",   # SMALL TILDE
+    # Characters below are in DejaVu Sans and should pass through natively.
+    # Do NOT add © (0x00A9), ® (0x00AE), ™ (0x2122), € (0x20AC), £ (0x00A3),
+    # ¥ (0x00A5), ° (0x00B0), ± (0x00B1), ×/÷, fractions, superscripts, or
+    # accented Latin letters — matplotlib renders these correctly.
+    0x2026: chr(0x2026),  # HORIZONTAL ELLIPSIS — pass through (in DejaVu Sans)
+    0x00B7: chr(0x00B7),  # MIDDLE DOT — pass through
+    0x2212: chr(0x2212),  # MINUS SIGN — pass through
+    0x2020: "+",   # DAGGER (not in DejaVu Sans)
+    0x2021: "+",   # DOUBLE DAGGER (not in DejaVu Sans)
 }
 
 def _filter_pua(text: str) -> str:
@@ -444,7 +418,7 @@ def _is_spurious_bg_shape(el: "BridgeShape", slide_w: float, slide_h: float) -> 
     fill = el.fill
     if not fill or (fill.fill_type or "").lower() != "solid":
         return False
-    color = (fill.color or "").upper().lstrip("#")
+    color = _color(fill.color, "none").lstrip("#").upper()
     if color not in ("FFFFFF", "FFFFFFFF"):
         return False
     if el.line.visible:
@@ -668,7 +642,10 @@ class SlideRenderer:
         self, fig: plt.Figure, ax: plt.Axes,
         element: BridgeElement, W: float, H: float,
     ) -> None:
-        # Skip elements that are entirely outside the slide canvas
+        # Skip elements that are studio-hidden or entirely outside the slide canvas
+        custom = getattr(element, "custom_properties", None) or {}
+        if custom.get("studio_hidden"):
+            return
         p = element.position
         if (p.left + p.width < 0 or p.top + p.height < 0
                 or p.left > W or p.top > H):
@@ -815,16 +792,27 @@ class SlideRenderer:
                 linewidth=lw, zorder=z,
             ))
 
-        # Margins — use None-check so explicit 0.0 (PDF sources) is honoured.
-        ml = el.margins.margin_left if el.margins.margin_left is not None else 0.05
-        mt = el.margins.margin_top if el.margins.margin_top is not None else 0.05
-        mr = el.margins.margin_right if el.margins.margin_right is not None else 0.05
+        # Margins: prefer text_frame.body_insets (PPTX explicit values), fall back
+        # to el.margins (PDF source explicit values), then PPTX defaults (L/R=0.1", T/B=0.05").
+        _bi = getattr(el.text_frame, "body_insets", {}) or {}
+        ml = (_bi.get("left") if _bi.get("left") is not None
+              else el.margins.margin_left if el.margins.margin_left is not None
+              else 0.1)
+        mt = (_bi.get("top") if _bi.get("top") is not None
+              else el.margins.margin_top if el.margins.margin_top is not None
+              else 0.05)
+        mr = (_bi.get("right") if _bi.get("right") is not None
+              else el.margins.margin_right if el.margins.margin_right is not None
+              else 0.1)
         text_x = p.left + ml
         text_y = p.top + mt
         max_w = p.width - ml - mr
 
+        _tf_scale = el.text_frame.font_scale
+        _fs_factor = _tf_scale / 100000.0 if _tf_scale and _tf_scale != 100000 else 1.0
         self._draw_paragraphs(ax, el.paragraphs, text_x, text_y, max_w, z,
-                              pdf_mode=not el.text_frame.word_wrap)
+                              pdf_mode=el.text_frame.word_wrap is False,
+                              font_scale=_fs_factor)
 
     # ------------------------------------------------------------------
     # BridgeShape
@@ -1057,8 +1045,9 @@ class SlideRenderer:
                 [(L, T + cap_h / 2)]
             )
             codes = (
-                [mpath.Path.MOVETO] + [mpath.Path.LINETO] * (N + 1) +
-                [mpath.Path.LINETO] * (N + 1) + [mpath.Path.CLOSEPOLY]
+                [mpath.Path.MOVETO] + [mpath.Path.LINETO] * N +
+                [mpath.Path.LINETO] * 2 + [mpath.Path.LINETO] * N +
+                [mpath.Path.LINETO] + [mpath.Path.CLOSEPOLY]
             )
             return PathPatch(mpath.Path(verts, codes), **kw)
 
@@ -1119,6 +1108,13 @@ class SlideRenderer:
         sorted_stops = sorted(stops, key=lambda s: s.position)
         positions = [s.position for s in sorted_stops]
         colors_hex = [self._c(s.color, "#888888") for s in sorted_stops]
+        # LinearSegmentedColormap requires positions in [0, 1] starting at 0 and ending at 1.
+        if positions[0] > 0:
+            positions = [0.0] + positions
+            colors_hex = [colors_hex[0]] + colors_hex
+        if positions[-1] < 1:
+            positions = positions + [1.0]
+            colors_hex = colors_hex + [colors_hex[-1]]
         N = 256
         cmap = mcolors.LinearSegmentedColormap.from_list(
             "grad", list(zip(positions, colors_hex)), N=N
@@ -1179,12 +1175,19 @@ class SlideRenderer:
                 clip_patch=patch,
             )
 
-        # Text inside shape
+        # Text inside shape — honour explicit body insets, fall back to PPTX defaults
         if el.text_content.has_text and el.text_content.paragraphs:
+            _si = el.text_frame.text_insets or {}
+            _sml = _si.get("left", 0.1)
+            _smt = _si.get("top", 0.05)
+            _smr = _si.get("right", 0.1)
+            _stf_scale = el.text_frame.font_scale
+            _sfs = _stf_scale / 100000.0 if _stf_scale and _stf_scale != 100000 else 1.0
             self._draw_paragraphs(
                 ax, el.text_content.paragraphs,
-                p.left + 0.05, p.top + 0.05,
-                p.width - 0.1, z,
+                p.left + _sml, p.top + _smt,
+                p.width - _sml - _smr, z,
+                font_scale=_sfs,
             )
 
     # ------------------------------------------------------------------
@@ -1419,6 +1422,10 @@ class SlideRenderer:
         if fig_w <= 0 or fig_h <= 0:
             return
 
+        # Skip entirely if chart has no data — avoids rendering a bare default axes
+        if not el.series and not el.categories.categories and not el.categories.categories_raw:
+            return
+
         chart_ax = fig.add_axes([fig_left, fig_bottom, fig_w, fig_h])
         chart_ax.tick_params(labelsize=6)
         for spine in chart_ax.spines.values():
@@ -1455,6 +1462,11 @@ class SlideRenderer:
                           ha="center", va="center", transform=chart_ax.transAxes,
                           fontsize=8, color="#888888")
 
+        # Pie/donut: always turn off axes frame regardless of what happened inside
+        if mark in ("pie", "doughnut"):
+            chart_ax.axis("off")
+            chart_ax.set_aspect("equal")
+
         # Chart title
         title = el.title.title
         if title:
@@ -1465,11 +1477,19 @@ class SlideRenderer:
             chart_ax.legend(fontsize=6, loc=_legend_loc(el.legend.position))
 
         # Value axis — not applicable for pie/donut
+        # For horizontal bars, the value axis is X; for everything else it's Y.
         if mark not in ("pie", "doughnut"):
-            if el.value_axis.min_value is not None:
-                chart_ax.set_ylim(bottom=el.value_axis.min_value)
-            if el.value_axis.max_value is not None:
-                chart_ax.set_ylim(top=el.value_axis.max_value)
+            h_bar = mark in ("bar_h", "bar_h_stacked", "bar_h_pct")
+            if h_bar:
+                if el.value_axis.min_value is not None:
+                    chart_ax.set_xlim(left=el.value_axis.min_value)
+                if el.value_axis.max_value is not None:
+                    chart_ax.set_xlim(right=el.value_axis.max_value)
+            else:
+                if el.value_axis.min_value is not None:
+                    chart_ax.set_ylim(bottom=el.value_axis.min_value)
+                if el.value_axis.max_value is not None:
+                    chart_ax.set_ylim(top=el.value_axis.max_value)
             chart_ax.tick_params(axis="both", which="both", labelsize=6)
 
     def _chart_bar(
@@ -1720,10 +1740,12 @@ class SlideRenderer:
         max_w: float, z: int,
         clip_height: float | None = None,
         pdf_mode: bool = False,
+        font_scale: float = 1.0,
     ) -> float:
         """Draw paragraphs starting at (x0, y0); return final y position.
 
         pdf_mode=True: each paragraph is a single rendered PDF line.
+        font_scale: multiplier applied to all font sizes (PPTX normAutoFit fontScale).
         Auto-scale font size to fit max_w so font-substitution width creep
         doesn't cause false wraps that get clipped by clip_height.
         """
@@ -1742,7 +1764,7 @@ class SlideRenderer:
                 y += self._line_height(10)
                 continue
 
-            fs_pt = base_run.font_size or 10
+            fs_pt = (base_run.font_size or 10) * font_scale
             fc    = self._c(base_run.font_color, self._default_text_color or "#222222")
             _rfam, _rwt, _rst, _rpath = self._resolve_font(base_run.font_name)
             bold  = (base_run.font_bold if base_run.font_bold is not None
@@ -1764,7 +1786,10 @@ class SlideRenderer:
                 len(content_runs) > 1 and (
                     len({r.font_bold for r in content_runs}) > 1 or
                     len({r.font_italic for r in content_runs}) > 1 or
-                    len({(r.font_color or "").upper() for r in content_runs}) > 1
+                    len({_color(r.font_color, "") for r in content_runs}) > 1 or
+                    len({r.font_underline for r in content_runs}) > 1 or
+                    len({getattr(r, "strikethrough", None) for r in content_runs}) > 1 or
+                    len({getattr(r, "char_spacing", None) for r in content_runs}) > 1
                 )
             )
             needs_per_run = has_baseline_shift or has_mixed_style
@@ -1796,16 +1821,22 @@ class SlideRenderer:
                 # same line (e.g. transcript speaker names), mixed colours/sizes.
                 # Build a flat list of (text_fragment, style_props) tokens, each
                 # covering at most one word so we can do proper line-breaking.
-                _tokens: list[tuple[str, float, str, str, bool, bool, float]] = []
+                # Tuple: (text, size, color, family, bold, italic, shift, fpath, underline, strike, charsp)
+                # charsp: extra spacing per character in hundredths of a point (OOXML spc attribute)
+                _tokens: list[tuple] = []
                 for run in para.runs:
-                    if run.is_line_break or not run.text:
+                    if run.is_line_break:
+                        # Explicit line break (Shift+Enter): insert newline sentinel
+                        _tokens.append(("\n", fs_pt, fc, fname, bold, ital, 0.0, fpath, False, None, 0.0))
+                        continue
+                    if not run.text:
                         continue
                     if _is_icon_font(run.font_name):
                         continue
                     text = _filter_pua(run.text)
                     if not text:
                         continue
-                    rfs  = run.font_size or fs_pt
+                    rfs  = (run.font_size or (fs_pt / font_scale)) * font_scale
                     rfc  = self._c(run.font_color, self._default_text_color or "#222222")
                     _rfam2, _rwt2, _rst2, _rpath2 = self._resolve_font(run.font_name)
                     rfn  = _rfam2
@@ -1815,12 +1846,16 @@ class SlideRenderer:
                     rial  = (run.font_italic if run.font_italic is not None
                              else _rst2 in ("italic", "oblique"))
                     shift = getattr(run, "baseline_shift", None) or 0.0
+                    runderline = bool(run.font_underline)
+                    rstrike = getattr(run, "strikethrough", None)
+                    rstrike = rstrike if rstrike and rstrike != "noStrike" else None
+                    rcharsp = float(getattr(run, "char_spacing", None) or 0.0)
                     # Split run text at word boundaries, preserving trailing spaces
                     import re as _re
                     parts = _re.split(r'(?<=\s)(?=\S)|(?<=\S)(?=\s)', text)
                     for part in parts:
                         if part:
-                            _tokens.append((part, rfs, rfc, rfn, rbold, rial, shift, rfpath2))
+                            _tokens.append((part, rfs, rfc, rfn, rbold, rial, shift, rfpath2, runderline, rstrike, rcharsp))
 
                 if not any(tok[0].strip() for tok in _tokens):
                     y += line_h + (para.space_after or 0) / 72
@@ -1832,8 +1867,12 @@ class SlideRenderer:
                 import matplotlib.font_manager as _fmgr
                 if pdf_mode or eff_wrap <= 0:
                     cx = para_x0
-                    for (tok_text, rfs, rfc, rfn, rbold, rial, shift, rfpath) in _tokens:
-                        ry = y + shift * (fs_pt / 72)
+                    for (tok_text, rfs, rfc, rfn, rbold, rial, shift, rfpath, runderline, rstrike, rcharsp) in _tokens:
+                        if tok_text == "\n":
+                            y += line_h
+                            cx = para_x0
+                            continue
+                        ry = y + shift * (rfs / 72)
                         kw: dict = dict(
                             color=rfc,
                             ha="left", va=_va, clip_on=True,
@@ -1855,14 +1894,34 @@ class SlideRenderer:
                                 pass
                         _eff_rpath2 = rfpath or _resolve_font_path(rfn, rbold, rial)
                         ax.text(cx, ry, _safe_text_for_font(tok_text, _eff_rpath2), **kw)
-                        cx += _text_width_in(tok_text, rfs, rbold, rial, rfn, rfpath)
+                        tok_w = _text_width_in(tok_text, rfs, rbold, rial, rfn, rfpath)
+                        # Only apply positive char_spacing (wider tracking).
+                        # Negative spc would overlap glyphs since we can't condense within ax.text().
+                        if rcharsp and rcharsp > 0:
+                            tok_w += len(tok_text) * rcharsp / 100.0 / 72.0
+                        if runderline or rstrike:
+                            _lw = max(0.4, rfs * 0.04)
+                            if runderline:
+                                ax.plot([cx, cx + tok_w], [ry + rfs / 72 * 0.95, ry + rfs / 72 * 0.95],
+                                        color=rfc, linewidth=_lw, zorder=z + 0.2, solid_capstyle="butt", clip_on=True)
+                            if rstrike:
+                                ax.plot([cx, cx + tok_w], [ry + rfs / 72 * 0.4, ry + rfs / 72 * 0.4],
+                                        color=rfc, linewidth=_lw, zorder=z + 0.2, solid_capstyle="butt", clip_on=True)
+                        cx += tok_w
                     y += line_h
                 else:
                     # Word-wrap mixed-style runs: greedily fill lines
                     cx = para_x0
                     line_started = False
-                    for (tok_text, rfs, rfc, rfn, rbold, rial, shift, rfpath) in _tokens:
+                    for (tok_text, rfs, rfc, rfn, rbold, rial, shift, rfpath, runderline, rstrike, rcharsp) in _tokens:
+                        if tok_text == "\n":
+                            y += line_h
+                            cx = para_x0
+                            line_started = False
+                            continue
                         tok_w = _text_width_in(tok_text, rfs, rbold, rial, rfn, rfpath)
+                        if rcharsp and rcharsp > 0:
+                            tok_w += len(tok_text) * rcharsp / 100.0 / 72.0
                         stripped = tok_text.lstrip()
                         # Wrap: if adding this token exceeds max width and line has content
                         if line_started and cx + tok_w > para_x0 + eff_wrap + 1e-6:
@@ -1870,10 +1929,13 @@ class SlideRenderer:
                             y += line_h
                             cx = para_x0
                             tok_text = stripped
-                            tok_w = _text_width_in(tok_text, rfs, rbold, rial, rfn, rfpath) if stripped != tok_text else tok_w
+                            if stripped != tok_text:
+                                tok_w = _text_width_in(tok_text, rfs, rbold, rial, rfn, rfpath)
+                                if rcharsp and rcharsp > 0:
+                                    tok_w += len(tok_text) * rcharsp / 100.0 / 72.0
                         if not tok_text:
                             continue
-                        ry = y + shift * (fs_pt / 72)
+                        ry = y + shift * (rfs / 72)
                         kw = dict(
                             color=rfc,
                             ha="left", va=_va, clip_on=True,
@@ -1896,14 +1958,22 @@ class SlideRenderer:
                         _eff_rpath = rfpath or _resolve_font_path(rfn, rbold, rial)
                         draw_tok = _safe_text_for_font(tok_text, _eff_rpath)
                         ax.text(cx, ry, draw_tok, **kw)
+                        if runderline or rstrike:
+                            _lw = max(0.4, rfs * 0.04)
+                            if runderline:
+                                ax.plot([cx, cx + tok_w], [ry + rfs / 72 * 0.95, ry + rfs / 72 * 0.95],
+                                        color=rfc, linewidth=_lw, zorder=z + 0.2, solid_capstyle="butt", clip_on=True)
+                            if rstrike:
+                                ax.plot([cx, cx + tok_w], [ry + rfs / 72 * 0.4, ry + rfs / 72 * 0.4],
+                                        color=rfc, linewidth=_lw, zorder=z + 0.2, solid_capstyle="butt", clip_on=True)
                         cx += tok_w
                         if tok_text.strip():
                             line_started = True
                     y += line_h
             else:
                 full_text = _filter_pua("".join(
-                    r.text for r in para.runs
-                    if not r.is_line_break and not _is_icon_font(r.font_name)
+                    "\n" if r.is_line_break else (r.text if not _is_icon_font(r.font_name) else "")
+                    for r in para.runs
                 ))
                 if caps in ("all", "small"):
                     full_text = full_text.upper()
@@ -1960,6 +2030,19 @@ class SlideRenderer:
                     _eff_fpath = fpath or _resolve_font_path(fname, bold, ital)
                     draw_line = _safe_text_for_font(line, _eff_fpath)
                     ax.text(x, y, draw_line, **kw)
+                    _base_underline = bool(base_run.font_underline)
+                    _base_strike = getattr(base_run, "strikethrough", None)
+                    _base_strike = _base_strike if _base_strike and _base_strike != "noStrike" else None
+                    if _base_underline or _base_strike:
+                        _tw = _text_width_in(draw_line, render_fs, bold, ital, fname, fpath)
+                        _lw = max(0.4, render_fs * 0.04)
+                        _x1 = x - _tw / 2 if ha == "center" else (x - _tw if ha == "right" else x)
+                        if _base_underline:
+                            ax.plot([_x1, _x1 + _tw], [y + render_fs / 72 * 0.95, y + render_fs / 72 * 0.95],
+                                    color=fc, linewidth=_lw, zorder=z + 0.2, solid_capstyle="butt", clip_on=True)
+                        if _base_strike:
+                            ax.plot([_x1, _x1 + _tw], [y + render_fs / 72 * 0.4, y + render_fs / 72 * 0.4],
+                                    color=fc, linewidth=_lw, zorder=z + 0.2, solid_capstyle="butt", clip_on=True)
                     y += line_h
 
             y += (para.space_after or 0) / 72

@@ -229,6 +229,10 @@ export async function replaceImage(
   )
 }
 
+export async function fetchThemeColors(docId: string): Promise<{ theme_colors: Record<string, string> }> {
+  return apiFetch(`${BASE}/docs/${docId}/theme-colors`)
+}
+
 export async function searchText(docId: string, q: string): Promise<TextSearchMatch[]> {
   return apiFetch<TextSearchMatch[]>(`${BASE}/docs/${docId}/search-text?q=${encodeURIComponent(q)}`)
 }

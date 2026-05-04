@@ -30,6 +30,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const [multiSelectIds, setMultiSelectIds]   = useState<Set<string>>(new Set())
   const [undoDepth, setUndoDepth]             = useState(0)
   const [redoDepth, setRedoDepth]             = useState(0)
+  const [slideElements, setSlideElements]     = useState<StudioElement[]>([])
   const selectedSlideRef = useRef(1)
   selectedSlideRef.current = selectedSlide
   const clipboardRef = useRef<{ slideN: number; elementId: string } | null>(null)
@@ -45,15 +46,16 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       .catch(() => {})
   }, [doc.doc_id])
 
-  // fetch slide dimensions when slide changes
+  // fetch slide dimensions + element list when slide changes or refreshKey bumps
   useEffect(() => {
     fetchSlideElements(doc.doc_id, selectedSlide)
       .then((res) => {
         setSlideWidthIn(res.slide_width_in)
         setSlideHeightIn(res.slide_height_in)
+        setSlideElements(res.elements)
       })
       .catch(() => {})
-  }, [doc.doc_id, selectedSlide])
+  }, [doc.doc_id, selectedSlide, refreshKey])
 
   const markDirty = useCallback((n: number) => {
     setDirtySlides((prev) => { const next = new Set(prev); next.add(n); return next })
@@ -344,11 +346,13 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
 
         <StudioPropertiesPanel
           element={selectedElement}
+          elements={slideElements}
           slideN={selectedSlide}
           slideWidthIn={slideWidthIn}
           slideHeightIn={slideHeightIn}
           docId={doc.doc_id}
           onTextCommit={rerender}
+          onSelectElement={setSelectedElement}
         />
 
         {chatOpen && (

@@ -3619,6 +3619,15 @@ class ReplaceTextRequest(BaseModel):
     case_sensitive: bool = False
 
 
+@app.get("/api/docs/{doc_id}/theme-colors")
+def get_theme_colors(doc_id: str):
+    """Return the presentation's theme color palette."""
+    d = _require(doc_id)
+    doc = d["doc"]
+    colors = getattr(doc, "theme_colors", None) or {}
+    return {"theme_colors": colors}
+
+
 @app.get("/api/docs/{doc_id}/search-text")
 def search_text(doc_id: str, q: str):
     """Search all slides for text matching q. Returns list of matches with slide/element context."""
