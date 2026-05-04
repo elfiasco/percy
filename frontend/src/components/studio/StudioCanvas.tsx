@@ -14,9 +14,13 @@ interface Props {
   onSelectElement: (el: StudioElement | null) => void
   onMultiSelect?: (ids: Set<string>) => void
   onElementRotated?: (el: StudioElement) => void
+  onDeleteElement?: (id: string) => void
+  onDuplicateElement?: (id: string) => void
+  onToggleLockElement?: (id: string, locked: boolean) => void
+  onToggleHiddenElement?: (id: string, hidden: boolean) => void
 }
 
-export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightIn, refreshKey, onSelectElement, onMultiSelect, onElementRotated }: Props) {
+export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightIn, refreshKey, onSelectElement, onMultiSelect, onElementRotated, onDeleteElement, onDuplicateElement, onToggleLockElement, onToggleHiddenElement }: Props) {
   const containerRef               = useRef<HTMLDivElement>(null)
   const [elements, setElements]     = useState<StudioElement[]>([])
   const [bgColor, setBgColor]       = useState<string | null>(null)
@@ -30,8 +34,9 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
   const rbStart                     = useRef<{ x: number; y: number } | null>(null)
   const [gridOn, setGridOn]         = useState(false)
   const [snapOn, setSnapOn]         = useState(false)
-  const [snapGuides, setSnapGuides]   = useState<{ type: "h" | "v"; pos: number }[]>([])
+  const [snapGuides, setSnapGuides]     = useState<{ type: "h" | "v"; pos: number }[]>([])
   const [inlineEditId, setInlineEditId] = useState<string | null>(null)
+  const [ctxMenu, setCtxMenu]           = useState<{ id: string; x: number; y: number } | null>(null)
   const GRID_IN                     = 0.25
 
   // ── fetch elements when slide changes or parent refreshes ─────────────────
@@ -366,6 +371,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
                 onRotate={handleRotate}
                 onSnapLines={setSnapGuides}
                 onInlineEdit={(id) => { setInlineEditId(id) }}
+                onContextMenu={(id, x, y) => setCtxMenu({ id, x, y })}
               />
             ))}
             {/* multi-select bounding box */}
@@ -439,6 +445,52 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
             )}
           </div>
         </div>
+
+        {/* element context menu */}
+        {ctxMenu && (() => {
+          const el = elements.find((e) => e.id === ctxMenu.id)
+          if (!el) return null
+          return (
+            <div
+              className="fixed z-[99999] bg-surface border border-edge rounded shadow-xl py-1 min-w-[160px] text-xs"
+              style={{ left: ctxMenu.x, top: ctxMenu.y }}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              {[
+                { label: "Duplicate",                action: () => { onDuplicateElement?.(el.id); setCtxMenu(null) } },
+                { label: "Delete",                   action: () => { onDeleteElement?.(el.id); setCtxMenu(null) }, danger: true },
+                null,
+                { label: el.locked ? "Unlock" : "Lock",   action: () => { onToggleLockElement?.(el.id, !el.locked); setCtxMenu(null) } },
+                { label: el.hidden ? "Show" : "Hide",     action: () => { onToggleHiddenElement?.(el.id, !el.hidden); setCtxMenu(null) } },
+                null,
+                { label: "Bring to Front",           action: () => { handleRotate; handleCommit(el.id, el.left_in, el.top_in, el.width_in, el.height_in); setCtxMenu(null) }, disabled: true },
+              ].map((item, i) =>
+                item === null ? (
+                  <div key={i} className="border-t border-edge/50 my-1" />
+                ) : item.disabled ? null : (
+                  <button
+                    key={i}
+                    onClick={item.action}
+                    className={`w-full text-left px-3 py-1.5 hover:bg-white/10 transition-colors ${
+                      item.danger ? "text-red-400 hover:text-red-300" : "text-slate-300"
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                )
+              )}
+            </div>
+          )
+        })()}
+
+        {/* click-away to dismiss context menu */}
+        {ctxMenu && (
+          <div
+            className="fixed inset-0 z-[99998]"
+            onClick={() => setCtxMenu(null)}
+            onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null) }}
+          />
+        )}
 
         {/* status bar */}
         <div className="mt-3 flex items-center gap-3 text-xs text-muted shrink-0">

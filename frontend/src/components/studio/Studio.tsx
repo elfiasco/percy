@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import type { DocInfo } from "../../lib/types"
 import type { StudioElement } from "../../lib/studioTypes"
-import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, updateElementFlags, applyLayoutPreset, groupElements, ungroupElement, generateSlideContent, rerenderAllSlides } from "../../lib/studioApi"
+import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement as duplicateElementApi, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, updateElementFlags, applyLayoutPreset, groupElements, ungroupElement, generateSlideContent, rerenderAllSlides } from "../../lib/studioApi"
 import type { ElementStyleData } from "../../lib/studioTypes"
 import * as api from "../../lib/api"
 import StudioSlideStrip from "./StudioSlideStrip"
@@ -176,7 +176,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
     try {
       let lastDup: StudioElement | null = null
       for (const id of toDup) {
-        lastDup = await duplicateElement(doc.doc_id, selectedSlideRef.current, id)
+        lastDup = await duplicateElementApi(doc.doc_id, selectedSlideRef.current, id)
       }
       if (lastDup) setSelectedElement(lastDup)
       setMultiSelectIds(new Set())
@@ -578,6 +578,19 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
             refreshKey={refreshKey}
             onSelectElement={setSelectedElement}
             onMultiSelect={setMultiSelectIds}
+            onDeleteElement={handleDeleteById}
+            onDuplicateElement={async (id) => {
+              const el = slideElements.find((e) => e.id === id)
+              if (!el) return
+              try {
+                const dup = await duplicateElementApi(doc.doc_id, selectedSlideRef.current, id)
+                setSelectedElement(dup)
+                markDirty(selectedSlideRef.current)
+                setRefreshKey((k) => k + 1)
+              } catch (e) { console.error("duplicate failed:", e) }
+            }}
+            onToggleLockElement={(id, locked) => handleToggleFlags(id, { locked })}
+            onToggleHiddenElement={(id, hidden) => handleToggleFlags(id, { hidden })}
           />
           <StudioNotesBar docId={doc.doc_id} slideN={selectedSlide} />
         </div>
