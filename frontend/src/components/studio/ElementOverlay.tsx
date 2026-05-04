@@ -343,6 +343,7 @@ export default function ElementOverlay({
         if (!isLocked) onSelect(element.id)
         onContextMenu?.(element.id, e.clientX, e.clientY)
       }}
+      title={!selected ? `${element.label || element.name} (${element.type.replace("Bridge", "")})${isLocked ? " · locked" : ""}${isHidden ? " · hidden" : ""}` : undefined}
       onPointerDown={(e) => { if (selected && !isLocked) startInteraction(e, "move") }}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -393,6 +394,29 @@ export default function ElementOverlay({
           </div>
         )}
       </div>
+
+      {/* lock/hidden badges — always visible on non-selected elements */}
+      {!selected && (isLocked || isHidden) && (
+        <div
+          style={{
+            position: "absolute", bottom: 2, right: 2,
+            display: "flex", gap: 2,
+            pointerEvents: "none",
+            zIndex: 10001,
+          }}
+        >
+          {isLocked && (
+            <span style={{ fontSize: 10, lineHeight: 1, background: "rgba(0,0,0,0.55)", borderRadius: 3, padding: "1px 3px" }}>
+              🔒
+            </span>
+          )}
+          {isHidden && (
+            <span style={{ fontSize: 10, lineHeight: 1, background: "rgba(0,0,0,0.55)", borderRadius: 3, padding: "1px 3px" }}>
+              👁
+            </span>
+          )}
+        </div>
+      )}
 
       {/* type label badge — selected only */}
       {selected && (
