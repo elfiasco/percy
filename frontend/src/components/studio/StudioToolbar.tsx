@@ -92,6 +92,7 @@ interface Props {
   savingToCloud?: boolean
   undoDepth?: number
   redoDepth?: number
+  onShowShortcuts?: () => void
 }
 
 export default function StudioToolbar({
@@ -103,6 +104,7 @@ export default function StudioToolbar({
   findReplaceOpen, onToggleFindReplace,
   onSaveToCloud, savingToCloud,
   undoDepth, redoDepth,
+  onShowShortcuts,
 }: Props) {
   const [insertOpen, setInsertOpen] = useState(false)
   const imageInputRef = useRef<HTMLInputElement>(null)
@@ -381,6 +383,17 @@ export default function StudioToolbar({
               <span className="inline-block w-2.5 h-2.5 border border-sky-300 border-t-transparent rounded-full animate-spin" />
             )}
             ↑ Cloud
+          </button>
+        )}
+
+        {onShowShortcuts && (
+          <button
+            onClick={onShowShortcuts}
+            title="Keyboard shortcuts (?)"
+            className="w-7 h-7 flex items-center justify-center rounded border border-edge text-xs text-muted
+                       hover:text-slate-200 hover:bg-white/10 transition-colors"
+          >
+            ?
           </button>
         )}
       </div>

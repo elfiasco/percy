@@ -9,6 +9,7 @@ import StudioPropertiesPanel from "./StudioPropertiesPanel"
 import StudioToolbar from "./StudioToolbar"
 import StudioChat from "./StudioChat"
 import FindReplacePanel from "./FindReplacePanel"
+import KeyboardShortcutsModal from "./KeyboardShortcutsModal"
 
 interface Props {
   doc: DocInfo
@@ -26,6 +27,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const [findReplaceOpen, setFindReplaceOpen] = useState(false)
   const [localSlideCount, setLocalSlideCount] = useState(doc.slide_count)
   const [savingToCloud, setSavingToCloud]     = useState(false)
+  const [shortcutsOpen, setShortcutsOpen]     = useState(false)
   const [dirtySlides, setDirtySlides]         = useState<Set<number>>(new Set())
   const [multiSelectIds, setMultiSelectIds]   = useState<Set<string>>(new Set())
   const [undoDepth, setUndoDepth]             = useState(0)
@@ -200,6 +202,13 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         return
       }
 
+      // ? → keyboard shortcuts help
+      if (e.key === "?" && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        e.preventDefault()
+        setShortcutsOpen((o) => !o)
+        return
+      }
+
       // Ctrl+Z → undo, Ctrl+Y or Ctrl+Shift+Z → redo
       if ((e.key === "z" || e.key === "Z") && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
         e.preventDefault()
@@ -320,6 +329,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         savingToCloud={savingToCloud}
         undoDepth={undoDepth}
         redoDepth={redoDepth}
+        onShowShortcuts={() => setShortcutsOpen(true)}
       />
 
       {/* ── main area: slide strip + canvas + properties ── */}
@@ -374,6 +384,10 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           />
         )}
       </div>
+
+      {shortcutsOpen && (
+        <KeyboardShortcutsModal onClose={() => setShortcutsOpen(false)} />
+      )}
     </div>
   )
 }
