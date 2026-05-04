@@ -8,6 +8,7 @@ import StudioCanvas from "./StudioCanvas"
 import StudioPropertiesPanel from "./StudioPropertiesPanel"
 import StudioToolbar from "./StudioToolbar"
 import StudioChat from "./StudioChat"
+import StudioNotesBar from "./StudioNotesBar"
 import FindReplacePanel from "./FindReplacePanel"
 import KeyboardShortcutsModal from "./KeyboardShortcutsModal"
 
@@ -344,15 +345,18 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           onSlideCountChange={handleSlideCountChange}
         />
 
-        <StudioCanvas
-          docId={doc.doc_id}
-          slideN={selectedSlide}
-          slideWidthIn={slideWidthIn}
-          slideHeightIn={slideHeightIn}
-          refreshKey={refreshKey}
-          onSelectElement={setSelectedElement}
-          onMultiSelect={setMultiSelectIds}
-        />
+        <div className="flex flex-col flex-1 min-h-0 min-w-0">
+          <StudioCanvas
+            docId={doc.doc_id}
+            slideN={selectedSlide}
+            slideWidthIn={slideWidthIn}
+            slideHeightIn={slideHeightIn}
+            refreshKey={refreshKey}
+            onSelectElement={setSelectedElement}
+            onMultiSelect={setMultiSelectIds}
+          />
+          <StudioNotesBar docId={doc.doc_id} slideN={selectedSlide} />
+        </div>
 
         <StudioPropertiesPanel
           element={selectedElement}

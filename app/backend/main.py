@@ -2884,6 +2884,38 @@ def set_slide_background(doc_id: str, n: int, color: str | None = None):
     return {"background_color": slide.background_color}
 
 
+@app.get("/api/docs/{doc_id}/slides/{n}/notes")
+def get_slide_notes(doc_id: str, n: int):
+    """Return speaker notes text for a slide."""
+    d = _require(doc_id)
+    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+    cp = getattr(slide, "custom_properties", None) or {}
+    return {"notes_text": cp.get("notes_text", "")}
+
+
+class SlideNotesUpdate(BaseModel):
+    notes_text: str
+
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/notes")
+def update_slide_notes(doc_id: str, n: int, req: SlideNotesUpdate):
+    """Set (or clear) speaker notes text for a slide."""
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+    cp = getattr(slide, "custom_properties", None)
+    if cp is None:
+        slide.custom_properties = {}
+        cp = slide.custom_properties
+    cp["notes_text"] = req.notes_text
+    log.info("studio: updated notes for slide %d of %s", n, doc_id)
+    return {"notes_text": req.notes_text}
+
+
 @app.get("/api/docs/{doc_id}/slides/{n}/elements")
 def get_slide_elements(doc_id: str, n: int):
     """Return all Bridge elements on slide *n* with position in inches and percent."""

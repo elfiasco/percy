@@ -46,6 +46,18 @@ export async function setSlideBackground(docId: string, n: number, color: string
   return apiFetch(`${BASE}/docs/${docId}/slides/${n}/background${params}`, { method: "PATCH" })
 }
 
+export async function getSlideNotes(docId: string, n: number): Promise<{ notes_text: string }> {
+  return apiFetch(`${BASE}/docs/${docId}/slides/${n}/notes`)
+}
+
+export async function updateSlideNotes(docId: string, n: number, notesText: string): Promise<{ notes_text: string }> {
+  return apiFetch(`${BASE}/docs/${docId}/slides/${n}/notes`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ notes_text: notesText }),
+  })
+}
+
 export async function createNewElement(
   docId: string,
   slideN: number,

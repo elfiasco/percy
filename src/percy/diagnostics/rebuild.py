@@ -99,6 +99,7 @@ def rebuild_pptx(document: PercyDocument, out_path: str | Path) -> dict[str, Any
 
     for bridge_slide, pptx_slide in zip(document.slides, presentation.slides):
         _apply_slide_background(pptx_slide, bridge_slide, theme_colors)
+        _apply_slide_notes(pptx_slide, bridge_slide)
         slide_default_text_color = getattr(bridge_slide, "default_text_color", None)
         for element in bridge_slide.elements:
             diagnostics.extend(_add_element(pptx_slide, element, theme_colors, slide_default_text_color))
@@ -127,6 +128,20 @@ def _apply_slide_background(pptx_slide: Any, bridge_slide: Any, theme_colors: di
         fill = pptx_slide.background.fill
         fill.solid()
         _set_color(fill.fore_color, bg_color, theme_colors)
+    except Exception:
+        pass
+
+
+def _apply_slide_notes(pptx_slide: Any, bridge_slide: Any) -> None:
+    """Write speaker notes text to the pptx slide notes_slide if present."""
+    cp = getattr(bridge_slide, "custom_properties", None) or {}
+    notes_text: str = cp.get("notes_text", "")
+    if not notes_text:
+        return
+    try:
+        notes_slide = pptx_slide.notes_slide
+        tf = notes_slide.notes_text_frame
+        tf.text = notes_text
     except Exception:
         pass
 
