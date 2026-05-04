@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from aws_cdk import CfnOutput, Duration, RemovalPolicy, Stack
+from aws_cdk import aws_applicationautoscaling as autoscaling
 from aws_cdk import aws_apprunner as apprunner
 from aws_cdk import aws_cloudwatch as cloudwatch
 from aws_cdk import aws_cloudwatch_actions as cw_actions
@@ -354,15 +355,35 @@ class PercyCloudDemoStack(Stack):
             description="Worker to Postgres",
         )
 
-        ecs.FargateService(
+        worker_service = ecs.FargateService(
             self,
             "OnboardWorkerService",
             cluster=cluster,
             task_definition=worker_task,
-            desired_count=1,
+            desired_count=0,
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_ISOLATED),
             security_groups=[worker_sg],
             assign_public_ip=False,
+        )
+
+        # Auto-scale 0→3 based on SQS queue depth
+        scalable_target = worker_service.auto_scale_task_count(
+            min_capacity=0,
+            max_capacity=3,
+        )
+        scalable_target.scale_on_metric(
+            "ScaleOnQueueDepth",
+            metric=onboard_queue.metric_approximate_number_of_messages_visible(
+                period=Duration.minutes(1)
+            ),
+            scaling_steps=[
+                autoscaling.ScalingInterval(upper=0, change=-1),   # scale in when empty
+                autoscaling.ScalingInterval(lower=1, change=+1),   # 1 task per message
+                autoscaling.ScalingInterval(lower=10, change=+1),  # 2 tasks at 10+
+                autoscaling.ScalingInterval(lower=25, change=+1),  # 3 tasks at 25+
+            ],
+            adjustment_type=autoscaling.AdjustmentType.CHANGE_IN_CAPACITY,
+            cooldown=Duration.minutes(2),
         )
 
         # ------------------------------------------------------------------
