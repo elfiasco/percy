@@ -60,6 +60,19 @@ export async function setAllSlidesBackground(docId: string, color: string | null
   return apiFetch(`${BASE}/docs/${docId}/background-all${params}`, { method: "PATCH" })
 }
 
+export async function setGradientBackground(
+  docId: string,
+  slideN: number,
+  stops: { color: string; position: number }[],
+  angle: number,
+): Promise<{ ok: boolean }> {
+  return apiFetch(`${BASE}/docs/${docId}/slides/${slideN}/gradient-background`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stops, angle }),
+  })
+}
+
 export async function getSlideNotes(docId: string, n: number): Promise<{ notes_text: string }> {
   return apiFetch(`${BASE}/docs/${docId}/slides/${n}/notes`)
 }

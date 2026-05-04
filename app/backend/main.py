@@ -2940,6 +2940,37 @@ def set_slide_background(doc_id: str, n: int, color: str | None = None):
     return {"background_color": slide.background_color}
 
 
+class GradientStopSpec(BaseModel):
+    color: str        # "#RRGGBB"
+    position: float   # 0.0 – 1.0
+
+
+class GradientBackgroundRequest(BaseModel):
+    stops: list[GradientStopSpec]
+    angle: float = 0.0
+
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/gradient-background")
+def set_gradient_background(doc_id: str, n: int, req: GradientBackgroundRequest):
+    """Set a linear gradient background on a slide."""
+    from percy.bridge.elements import GradientStop as _GStop, ColorSpec as _CS  # type: ignore[attr-defined]
+    if len(req.stops) < 2:
+        raise HTTPException(400, "Gradient requires at least 2 stops")
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+    slide.background_color = None
+    slide.background_gradient_angle = req.angle
+    slide.background_gradient_stops = [
+        _GStop(position=s.position, color=_CS(value=s.color))
+        for s in req.stops
+    ]
+    log.info("studio: set slide %d gradient (%d stops, %.1f°) in %s", n, len(req.stops), req.angle, doc_id)
+    return {"ok": True, "stops": len(req.stops), "angle": req.angle}
+
+
 @app.patch("/api/docs/{doc_id}/background-all")
 def set_all_slides_background(doc_id: str, color: str | None = None):
     """Set the same background color on every slide in the document."""

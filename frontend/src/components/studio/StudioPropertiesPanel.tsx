@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react"
 import type { StudioElement, ElementStyleData } from "../../lib/studioTypes"
-import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, setAllSlidesBackground, replaceImage, fetchThemeColors, fetchDocStats } from "../../lib/studioApi"
+import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, setAllSlidesBackground, setGradientBackground, replaceImage, fetchThemeColors, fetchDocStats } from "../../lib/studioApi"
 import type { DocStats } from "../../lib/studioApi"
 import StudioTextPanel from "./StudioTextPanel"
 
@@ -545,11 +545,15 @@ const TYPE_ICON_MAP: Record<string, string> = {
   BridgeGroup:     "⊞",
 }
 
+interface GradStop { color: string; position: number }
+
 function SlidePropertiesPanel({ docId, slideN, onCommit }: { docId: string; slideN: number; onCommit: () => void }) {
   const [bgColor, setBgColor]     = useState("#FFFFFF")
   const [saving, setSaving]       = useState(false)
   const [themeColors, setThemeColors] = useState<Record<string, string> | null>(null)
   const [stats, setStats]         = useState<DocStats | null>(null)
+  const [gradStops, setGradStops] = useState<GradStop[]>([{ color: "#4472C4", position: 0 }, { color: "#1a1a2e", position: 1 }])
+  const [gradAngle, setGradAngle] = useState(90)
 
   useEffect(() => {
     fetchThemeColors(docId)
@@ -611,6 +615,78 @@ function SlidePropertiesPanel({ docId, slideN, onCommit }: { docId: string; slid
         title="Apply this background color to every slide"
       >
         Apply to All Slides
+      </button>
+
+      {/* Gradient background */}
+      <SectionHead title="Gradient Background" />
+      <div className="space-y-1 mb-2">
+        {gradStops.map((stop, idx) => (
+          <div key={idx} className="flex items-center gap-1.5">
+            <input
+              type="color"
+              value={stop.color}
+              onChange={(e) => {
+                const next = [...gradStops]
+                next[idx] = { ...stop, color: e.target.value }
+                setGradStops(next)
+              }}
+              className="w-6 h-6 rounded border border-edge cursor-pointer bg-transparent p-0.5 shrink-0"
+            />
+            <input
+              type="range" min={0} max={1} step={0.01}
+              value={stop.position}
+              onChange={(e) => {
+                const next = [...gradStops]
+                next[idx] = { ...stop, position: parseFloat(e.target.value) }
+                setGradStops(next)
+              }}
+              className="flex-1 accent-accent"
+            />
+            <span className="text-[10px] font-mono text-muted w-8">{Math.round(stop.position * 100)}%</span>
+            {gradStops.length > 2 && (
+              <button onClick={() => setGradStops(gradStops.filter((_, i) => i !== idx))}
+                className="text-bad/60 hover:text-bad text-xs w-4 shrink-0">✕</button>
+            )}
+          </div>
+        ))}
+      </div>
+      <button
+        onClick={() => setGradStops([...gradStops, { color: "#FFFFFF", position: 1 }])}
+        className="text-[10px] text-muted hover:text-slate-200 transition-colors"
+      >+ Add stop</button>
+      <FieldRow label="Angle">
+        <div className="flex items-center gap-1">
+          <input type="range" min={0} max={360} step={5} value={gradAngle}
+            onChange={(e) => setGradAngle(parseInt(e.target.value))}
+            className="flex-1 accent-accent" />
+          <span className="text-[10px] font-mono text-muted w-8">{gradAngle}°</span>
+        </div>
+      </FieldRow>
+      {/* preview swatch */}
+      <div
+        className="h-5 w-full rounded mb-2 border border-edge/50"
+        style={{
+          background: `linear-gradient(${gradAngle}deg, ${gradStops
+            .slice()
+            .sort((a, b) => a.position - b.position)
+            .map((s) => `${s.color} ${Math.round(s.position * 100)}%`)
+            .join(", ")})`,
+        }}
+      />
+      <button
+        onClick={async () => {
+          setSaving(true)
+          try {
+            await setGradientBackground(docId, slideN, gradStops, gradAngle)
+            onCommit()
+          } catch (e) { console.error("gradient failed:", e) }
+          finally { setSaving(false) }
+        }}
+        disabled={saving}
+        className="text-xs px-3 py-1 rounded bg-accent/20 text-accent border border-accent/30
+                   hover:bg-accent/30 transition-colors disabled:opacity-40"
+      >
+        {saving ? "Applying…" : "Apply Gradient"}
       </button>
 
       {themeColors && Object.keys(themeColors).length > 0 && (
