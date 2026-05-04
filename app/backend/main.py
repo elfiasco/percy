@@ -4812,6 +4812,104 @@ if _CLOUD_API_URL:
                             media_type="application/json")
 
 
+class GenerateSlideRequest(BaseModel):
+    prompt: str
+    slide_n: int = 1
+
+
+@app.post("/api/docs/{doc_id}/generate-slide")
+def generate_slide(doc_id: str, req: GenerateSlideRequest):
+    """Use Claude to generate a complete slide layout from a text prompt.
+    Creates text box elements based on the AI's suggested content.
+    """
+    import anthropic as _anthropic
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    _require(doc_id)
+    d = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == req.slide_n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {req.slide_n} not found")
+
+    sw, sh = _get_slide_dims(doc, slide)
+
+    system = (
+        f"You are a slide content designer. The slide is {sw:.2f}\" × {sh:.2f}\".\n"
+        "Given a topic/prompt, respond with ONLY a JSON array of text elements to place on the slide.\n"
+        "Each element: {\"label\": str, \"text\": str, \"left_in\": float, \"top_in\": float, \"width_in\": float, \"height_in\": float}\n"
+        "Create 2-5 elements with natural slide layout. Use clear, concise text.\n"
+        "Respond with ONLY the JSON array, no other text."
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=1024,
+        system=system,
+        messages=[{"role": "user", "content": req.prompt}],
+    )
+    raw = resp.content[0].text.strip()
+
+    # Parse JSON response
+    import json as _json
+    if raw.startswith("```"):
+        raw = "\n".join(raw.split("\n")[1:])
+        if raw.endswith("```"):
+            raw = raw[:-3]
+    try:
+        specs = _json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(500, f"AI returned invalid JSON: {exc}\nRaw: {raw[:200]}")
+
+    from percy.bridge.elements import (
+        BridgeShape, Position, Transform, Stacking, Identification, Accessibility,
+        ShapeIdentification, ShapeFill, ShapeLine, ShapeShadow,
+        ShapeTextContent, ShapeTextFrame, ShapeBorders,
+    )
+
+    _snapshot_doc(doc_id)
+    existing_ids = {getattr(getattr(e, "identification", None), "shape_id", None) for e in slide.elements}
+    max_id = max((x for x in existing_ids if x is not None), default=0)
+    max_z  = max((getattr(e.stacking, "z_index", 1) for e in slide.elements), default=0)
+
+    created = []
+    for spec in specs:
+        if not isinstance(spec, dict): continue
+        max_id += 1; max_z += 1
+        el = BridgeShape(
+            position=Position(
+                left=float(spec.get("left_in", 0.5)), top=float(spec.get("top_in", 0.5)),
+                width=float(spec.get("width_in", 5.0)), height=float(spec.get("height_in", 1.0)),
+            ),
+            transforms=Transform(),
+            stacking=Stacking(z_index=max_z),
+            identification=Identification(shape_id=max_id, shape_name=spec.get("label", "Text")),
+            accessibility=Accessibility(alt_text=spec.get("label", "Text")),
+            shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+            fill=ShapeFill(fill_type="none"),
+            line=ShapeLine(visible=False),
+            shadow=ShapeShadow(),
+            text_content=ShapeTextContent(),
+            text_frame=ShapeTextFrame(),
+            borders=ShapeBorders(),
+        )
+        # Set text content
+        from percy.bridge.elements import TextParagraph, TextRun  # type: ignore[attr-defined]
+        el.text_content.paragraphs = [
+            TextParagraph(runs=[TextRun(text=line)])
+            for line in spec.get("text", "").split("\n")
+        ]
+        slide.elements.append(el)
+        new_index = len(slide.elements) - 1
+        created.append(_serialize_element(el, new_index, sw, sh))
+
+    log.info("studio: AI generated %d elements on slide %d of %s", len(created), req.slide_n, doc_id)
+    return {"elements": created, "prompt": req.prompt}
+
+
 # ── serve built frontend in production ────────────────────────────────────────
 _FRONTEND_DIST = _ROOT / "frontend" / "dist"
 if _FRONTEND_DIST.exists():

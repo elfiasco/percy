@@ -362,6 +362,18 @@ export async function ungroupElement(
   })
 }
 
+export async function generateSlideContent(
+  docId: string,
+  slideN: number,
+  prompt: string,
+): Promise<{ elements: StudioElement[]; prompt: string }> {
+  return apiFetch(`${BASE}/docs/${docId}/generate-slide`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, slide_n: slideN }),
+  })
+}
+
 export async function setSlideBackgroundImage(
   docId: string,
   slideN: number,

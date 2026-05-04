@@ -113,6 +113,8 @@ interface Props {
   onApplyLayout?: (layout: string) => void
   onGroupElements?: () => void
   onUngroupElement?: () => void
+  onGenerateSlide?: (prompt: string) => void
+  generating?: boolean
 }
 
 export default function StudioToolbar({
@@ -132,10 +134,14 @@ export default function StudioToolbar({
   onApplyLayout,
   onGroupElements,
   onUngroupElement,
+  onGenerateSlide,
+  generating,
 }: Props) {
   const [insertOpen, setInsertOpen] = useState(false)
   const [copyToOpen, setCopyToOpen] = useState(false)
   const [layoutOpen, setLayoutOpen] = useState(false)
+  const [generateOpen, setGenerateOpen] = useState(false)
+  const [generatePrompt, setGeneratePrompt] = useState("")
 
   const LAYOUT_OPTIONS = [
     { id: "title",          label: "Title Slide" },
@@ -532,6 +538,59 @@ export default function StudioToolbar({
           >
             ⌕ Find
           </button>
+        )}
+
+        {onGenerateSlide && (
+          <div className="relative">
+            <button
+              onClick={() => setGenerateOpen((o) => !o)}
+              disabled={generating}
+              title="AI: Generate slide content from a prompt"
+              className={`flex items-center gap-1.5 text-xs px-3 py-1 rounded border transition-colors ${
+                generateOpen
+                  ? "bg-emerald-500/30 text-emerald-300 border-emerald-500/40"
+                  : "bg-white/5 text-muted hover:text-emerald-300 border-edge hover:bg-emerald-500/10"
+              } disabled:opacity-50`}
+            >
+              {generating && <span className="inline-block w-2.5 h-2.5 border border-emerald-300 border-t-transparent rounded-full animate-spin" />}
+              ✨ AI Gen
+            </button>
+            {generateOpen && (
+              <div className="absolute right-0 top-full mt-1 z-[9999] bg-surface border border-edge rounded-lg shadow-xl p-3 w-72">
+                <div className="text-[10px] text-muted uppercase tracking-wide mb-1.5">Generate slide from prompt</div>
+                <input
+                  autoFocus
+                  className="w-full text-xs bg-black/30 border border-edge rounded px-2 py-1.5 text-slate-200
+                             focus:outline-none focus:border-emerald-500/60 mb-2"
+                  placeholder="e.g. 'Q3 sales results with key metrics'"
+                  value={generatePrompt}
+                  onChange={(e) => setGeneratePrompt(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && generatePrompt.trim()) {
+                      onGenerateSlide(generatePrompt.trim())
+                      setGenerateOpen(false)
+                      setGeneratePrompt("")
+                    }
+                    if (e.key === "Escape") setGenerateOpen(false)
+                  }}
+                />
+                <button
+                  onClick={() => {
+                    if (generatePrompt.trim()) {
+                      onGenerateSlide(generatePrompt.trim())
+                      setGenerateOpen(false)
+                      setGeneratePrompt("")
+                    }
+                  }}
+                  disabled={!generatePrompt.trim()}
+                  className="w-full text-xs py-1.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30
+                             hover:bg-emerald-500/30 transition-colors disabled:opacity-40"
+                >
+                  Generate ↵
+                </button>
+              </div>
+            )}
+          </div>
         )}
 
         <button

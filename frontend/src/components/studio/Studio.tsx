@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import type { DocInfo } from "../../lib/types"
 import type { StudioElement } from "../../lib/studioTypes"
-import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, updateElementFlags, applyLayoutPreset, groupElements, ungroupElement } from "../../lib/studioApi"
+import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, updateElementFlags, applyLayoutPreset, groupElements, ungroupElement, generateSlideContent } from "../../lib/studioApi"
 import type { ElementStyleData } from "../../lib/studioTypes"
 import * as api from "../../lib/api"
 import StudioSlideStrip from "./StudioSlideStrip"
@@ -31,6 +31,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const [findReplaceOpen, setFindReplaceOpen] = useState(false)
   const [localSlideCount, setLocalSlideCount] = useState(doc.slide_count)
   const [savingToCloud, setSavingToCloud]     = useState(false)
+  const [generating, setGenerating]           = useState(false)
   const [shortcutsOpen, setShortcutsOpen]       = useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [slideSorterOpen, setSlideSorterOpen]       = useState(false)
@@ -195,6 +196,16 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       markDirty(selectedSlideRef.current)
       setRefreshKey((k) => k + 1)
     } catch (e) { console.error("ungroup failed:", e) }
+  }, [doc.doc_id, markDirty])
+
+  const handleGenerateSlide = useCallback(async (prompt: string) => {
+    setGenerating(true)
+    try {
+      await generateSlideContent(doc.doc_id, selectedSlideRef.current, prompt)
+      markDirty(selectedSlideRef.current)
+      setRefreshKey((k) => k + 1)
+    } catch (e) { console.error("generate failed:", e) }
+    finally { setGenerating(false) }
   }, [doc.doc_id, markDirty])
 
   const handleApplyLayout = useCallback(async (layout: string) => {
@@ -490,6 +501,8 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         onApplyLayout={handleApplyLayout}
         onGroupElements={multiSelectIds.size > 1 ? handleGroupElements : undefined}
         onUngroupElement={selectedElement?.type === "BridgeGroup" ? handleUngroupElement : undefined}
+        onGenerateSlide={handleGenerateSlide}
+        generating={generating}
       />
 
       {/* ── main area: slide strip + canvas + properties ── */}
