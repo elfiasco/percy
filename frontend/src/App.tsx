@@ -10,9 +10,10 @@ import TableauView from "./components/TableauView"
 import DiagPanel from "./components/DiagPanel"
 import LogPanel from "./components/LogPanel"
 import Studio from "./components/studio/Studio"
+import CloudLibrary from "./components/CloudLibrary"
 import { log } from "./lib/logger"
 
-type AppMode = "roundtrip" | "studio"
+type AppMode = "roundtrip" | "studio" | "cloud"
 
 export default function App() {
   const [mode, setMode]                   = useState<AppMode>("roundtrip")
@@ -247,7 +248,7 @@ export default function App() {
         <span className="text-accent font-bold text-base tracking-tight">PERCY</span>
         {/* ── mode toggle ── */}
         <div className="flex items-center gap-0.5 ml-2 bg-base rounded p-0.5 border border-edge">
-          {(["roundtrip", "studio"] as AppMode[]).map((m) => (
+          {(["roundtrip", "studio", "cloud"] as AppMode[]).map((m) => (
             <button
               key={m}
               onClick={() => setMode(m)}
@@ -258,7 +259,7 @@ export default function App() {
                   : "text-muted hover:text-slate-300",
               ].join(" ")}
             >
-              {m === "roundtrip" ? "Roundtrip" : "Studio"}
+              {m === "roundtrip" ? "Roundtrip" : m === "studio" ? "Studio" : "Cloud"}
             </button>
           ))}
         </div>
@@ -277,7 +278,20 @@ export default function App() {
 
       {/* ── body ───────────────────────────────────────────── */}
       <div className="flex flex-1 min-h-0">
-        {mode === "studio" ? (
+        {mode === "cloud" ? (
+          /* ── CLOUD MODE ──────────────────────────────────── */
+          <div className="flex flex-1 min-h-0 min-w-0">
+            <div className="w-72 shrink-0 border-r border-edge overflow-hidden flex flex-col">
+              <CloudLibrary />
+            </div>
+            <div className="flex flex-col items-center justify-center flex-1 gap-2 text-center px-10">
+              <p className="text-slate-300 font-semibold text-lg">Percy Cloud</p>
+              <p className="text-muted text-sm max-w-sm leading-relaxed">
+                Browse your cloud organisations and projects. Upload a <strong className="text-slate-400">.pptx</strong> or <strong className="text-slate-400">.pdf</strong> to a project — Percy will onboard it in the cloud and store a Bridge bundle in S3.
+              </p>
+            </div>
+          </div>
+        ) : mode === "studio" ? (
           /* ── STUDIO MODE ─────────────────────────────────── */
           selectedDoc && selectedDoc.source_format === "pptx" ? (
             <Studio
