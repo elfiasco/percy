@@ -6,6 +6,7 @@ interface Props {
   slideCount: number
   selectedSlide: number
   dirtySlides?: Set<number>
+  refreshKey?: number
   onSelect: (n: number) => void
   onSlideCountChange: (newCount: number, focusSlide: number) => void
 }
@@ -17,7 +18,7 @@ interface ContextMenu {
 }
 
 export default function StudioSlideStrip({
-  docId, slideCount, selectedSlide, dirtySlides, onSelect, onSlideCountChange,
+  docId, slideCount, selectedSlide, dirtySlides, refreshKey, onSelect, onSlideCountChange,
 }: Props) {
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null)
   const [busy, setBusy]               = useState(false)
@@ -124,7 +125,7 @@ export default function StudioSlideStrip({
             >
               <div className="w-full aspect-video bg-base rounded overflow-hidden relative">
                 <img
-                  src={`/api/docs/${docId}/slides/${n}/bridge.png?v=${stripKey}`}
+                  src={`/api/docs/${docId}/slides/${n}/bridge.png?v=${stripKey}-${refreshKey ?? 0}`}
                   alt={`Slide ${n}`}
                   className="w-full h-full object-cover"
                   draggable={false}

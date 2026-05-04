@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import type { DocInfo } from "../../lib/types"
 import type { StudioElement } from "../../lib/studioTypes"
-import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement } from "../../lib/studioApi"
+import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState } from "../../lib/studioApi"
 import * as api from "../../lib/api"
 import StudioSlideStrip from "./StudioSlideStrip"
 import StudioCanvas from "./StudioCanvas"
@@ -37,6 +37,13 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   // keep a ref so the arrow-key handler always sees the latest element
   const selectedElementRef = useRef<StudioElement | null>(null)
   selectedElementRef.current = selectedElement
+
+  // fetch initial undo/redo state on mount
+  useEffect(() => {
+    fetchUndoState(doc.doc_id)
+      .then((r) => { setUndoDepth(r.undo_depth); setRedoDepth(r.redo_depth) })
+      .catch(() => {})
+  }, [doc.doc_id])
 
   // fetch slide dimensions when slide changes
   useEffect(() => {
@@ -320,6 +327,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           slideCount={localSlideCount}
           selectedSlide={selectedSlide}
           dirtySlides={dirtySlides}
+          refreshKey={refreshKey}
           onSelect={handleSlideSelect}
           onSlideCountChange={handleSlideCountChange}
         />

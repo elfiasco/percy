@@ -124,6 +124,15 @@ export default function ElementOverlay({
         const newT = Math.max(0, Math.min(t + h - 1, t + dyPct))
         h = h + (t - newT); t = newT
       }
+      // Shift-resize: lock aspect ratio (use width as the leading axis)
+      if (e.shiftKey && ds.startHeightPct > 0) {
+        const ar = ds.startWidthPct / ds.startHeightPct
+        if (dir.includes("e") || dir.includes("w")) {
+          h = w / ar
+        } else {
+          w = h * ar
+        }
+      }
     }
 
     el.style.left   = `${l}%`

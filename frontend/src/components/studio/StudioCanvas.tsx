@@ -23,6 +23,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
   const [loading, setLoading]       = useState(false)
   const [error, setError]           = useState<string | null>(null)
   const [renderKeys, setRenderKeys] = useState<Record<string, number>>({})
+  const elementsRef                 = useRef<StudioElement[]>([])
   const [zoom, setZoom]             = useState(1.0)
   const [gridOn, setGridOn]         = useState(false)
   const [snapOn, setSnapOn]         = useState(false)
@@ -37,6 +38,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
       .then((res) => {
         if (!cancelled) {
           setElements(res.elements)
+          elementsRef.current = res.elements
           setBgColor(res.background_color)
           setLoading(false)
           // bump all render keys so every element PNG reloads
@@ -65,6 +67,31 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
       if (e.key === "Escape") { setSelectedIds(new Set()); onSelectElement(null); onMultiSelect?.(new Set()) }
       if (e.key === "g" || e.key === "G") { if (!e.ctrlKey && !e.metaKey) setGridOn((v) => !v) }
       if (e.key === "s" || e.key === "S") { if (!e.ctrlKey && !e.metaKey) setSnapOn((v) => !v) }
+      // Ctrl+A — select all
+      if ((e.key === "a" || e.key === "A") && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        const all = new Set(elementsRef.current.map((el) => el.id))
+        onSelectElement(null)
+        onMultiSelect?.(all)
+        setSelectedIds(all)
+      }
+      // Tab / Shift+Tab — cycle through elements
+      if (e.key === "Tab") {
+        e.preventDefault()
+        const sorted = [...elementsRef.current].sort((a, b) => a.z_index - b.z_index)
+        if (!sorted.length) return
+        setSelectedIds((prev) => {
+          const prevId = prev.size === 1 ? [...prev][0] : null
+          const idx = prevId ? sorted.findIndex((el) => el.id === prevId) : -1
+          const next = e.shiftKey
+            ? sorted[(idx - 1 + sorted.length) % sorted.length]
+            : sorted[(idx + 1) % sorted.length]
+          const next_set = new Set([next.id])
+          onSelectElement(next)
+          onMultiSelect?.(next_set)
+          return next_set
+        })
+      }
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)

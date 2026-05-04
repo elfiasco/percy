@@ -104,6 +104,10 @@ export async function updateElementText(
   )
 }
 
+export async function fetchUndoState(docId: string): Promise<{ undo_depth: number; redo_depth: number }> {
+  return apiFetch(`${BASE}/docs/${docId}/undo-state`)
+}
+
 export async function undoDoc(docId: string): Promise<{ ok: boolean; undo_depth: number; redo_depth: number }> {
   return apiFetch(`${BASE}/docs/${docId}/undo`, { method: "POST" })
 }

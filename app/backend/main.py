@@ -3217,6 +3217,16 @@ def _snapshot_doc(doc_id: str) -> None:
     d["_redo_stack"] = []
 
 
+@app.get("/api/docs/{doc_id}/undo-state")
+def get_undo_state(doc_id: str):
+    """Return current undo and redo stack depths."""
+    d = _require(doc_id)
+    return {
+        "undo_depth": len(d.get("_undo_stack", [])),
+        "redo_depth": len(d.get("_redo_stack", [])),
+    }
+
+
 @app.post("/api/docs/{doc_id}/undo")
 def undo(doc_id: str):
     """Restore previous Bridge model snapshot."""
