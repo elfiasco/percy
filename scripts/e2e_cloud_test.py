@@ -81,7 +81,7 @@ def run(pptx_path: Path, api: str, api_key: str | None = None) -> None:
 
     # 7. Poll until complete or failed
     print("Polling for job completion...")
-    for attempt in range(60):
+    for attempt in range(120):
         time.sleep(5)
         r = s.get(f"{api}/api/cloud/jobs/{job_id}"); r.raise_for_status()
         job = r.json()

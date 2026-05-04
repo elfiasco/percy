@@ -50,7 +50,7 @@ def _build_storage():
     bucket = os.environ.get("S3_BUCKET")
     if bucket:
         from app.cloud.s3_storage import S3ObjectStorage
-        return S3ObjectStorage(bucket=bucket, prefix="artifacts")
+        return S3ObjectStorage(bucket=bucket)
     from app.cloud.storage import LocalObjectStorage
     return LocalObjectStorage(root="/tmp/percy-artifacts")
 
