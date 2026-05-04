@@ -2973,6 +2973,98 @@ def update_element_position(doc_id: str, n: int, element_id: str, req: ElementPo
     return _serialize_element(el, el_index, w, h)
 
 
+class AlignElementsRequest(BaseModel):
+    element_ids: list[str]
+    alignment: str   # left|center|right|top|middle|bottom|distribute_h|distribute_v
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/align-elements")
+def align_elements(doc_id: str, n: int, req: AlignElementsRequest):
+    """Align or distribute a set of elements on a slide."""
+    if len(req.element_ids) < 2:
+        raise HTTPException(400, "Need at least 2 element IDs to align")
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    id_set = set(req.element_ids)
+    els: list[tuple[Any, int]] = []
+    for i, e in enumerate(slide.elements):
+        if _element_id(e, i) in id_set:
+            els.append((e, i))
+
+    if not els:
+        raise HTTPException(404, "No matching elements found")
+
+    # Collect geometry
+    def geo(el: Any):
+        p = el.position
+        return p.left, p.top, p.width, p.height
+
+    lefts  = [geo(e)[0]                for e, _ in els]
+    tops   = [geo(e)[1]                for e, _ in els]
+    rights = [geo(e)[0] + geo(e)[2]    for e, _ in els]
+    bottoms= [geo(e)[1] + geo(e)[3]    for e, _ in els]
+    widths = [geo(e)[2]                for e, _ in els]
+    heights= [geo(e)[3]                for e, _ in els]
+    centers_h = [(l + r) / 2 for l, r in zip(lefts, rights)]
+    middles_v = [(t + b) / 2 for t, b in zip(tops, bottoms)]
+
+    a = req.alignment
+    if a == "left":
+        anchor = min(lefts)
+        for (e, _), _ in zip(els, lefts):
+            e.position.left = anchor
+    elif a == "center":
+        anchor = (min(lefts) + max(rights)) / 2
+        for (e, _), w in zip(els, widths):
+            e.position.left = anchor - w / 2
+    elif a == "right":
+        anchor = max(rights)
+        for (e, _), w in zip(els, widths):
+            e.position.left = anchor - w
+    elif a == "top":
+        anchor = min(tops)
+        for (e, _), _ in zip(els, tops):
+            e.position.top = anchor
+    elif a == "middle":
+        anchor = (min(tops) + max(bottoms)) / 2
+        for (e, _), h in zip(els, heights):
+            e.position.top = anchor - h / 2
+    elif a == "bottom":
+        anchor = max(bottoms)
+        for (e, _), h in zip(els, heights):
+            e.position.top = anchor - h
+    elif a == "distribute_h":
+        if len(els) >= 2:
+            sorted_pairs = sorted(zip(lefts, els), key=lambda x: x[0])
+            total_span = sorted_pairs[-1][0] + widths[els.index(sorted_pairs[-1][1])] - sorted_pairs[0][0]
+            total_widths = sum(widths)
+            gap = (total_span - total_widths) / (len(els) - 1)
+            cursor = sorted_pairs[0][0]
+            for left_val, (e, _) in sorted_pairs:
+                e.position.left = cursor
+                cursor += e.position.width + gap
+    elif a == "distribute_v":
+        if len(els) >= 2:
+            sorted_pairs = sorted(zip(tops, els), key=lambda x: x[0])
+            total_span = sorted_pairs[-1][0] + heights[els.index(sorted_pairs[-1][1])] - sorted_pairs[0][0]
+            total_heights = sum(heights)
+            gap = (total_span - total_heights) / (len(els) - 1)
+            cursor = sorted_pairs[0][0]
+            for top_val, (e, _) in sorted_pairs:
+                e.position.top = cursor
+                cursor += e.position.height + gap
+    else:
+        raise HTTPException(400, f"Unknown alignment: {req.alignment!r}")
+
+    w, h = _get_slide_dims(doc, slide)
+    return [_serialize_element(e, i, w, h) for e, i in els]
+
+
 class ElementFlagsUpdate(BaseModel):
     locked: bool | None = None
     hidden: bool | None = None

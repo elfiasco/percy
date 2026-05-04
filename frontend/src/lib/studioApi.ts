@@ -181,6 +181,18 @@ export async function updateElementStyle(
   )
 }
 
+export async function alignElements(
+  docId: string,
+  slideN: number,
+  elementIds: string[],
+  alignment: string,
+): Promise<StudioElement[]> {
+  return apiFetch<StudioElement[]>(
+    `${BASE}/docs/${docId}/slides/${slideN}/align-elements`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ element_ids: elementIds, alignment }) },
+  )
+}
+
 export async function updateElementFlags(
   docId: string,
   slideN: number,

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import type { DocInfo } from "../../lib/types"
 import type { StudioElement } from "../../lib/studioTypes"
-import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState } from "../../lib/studioApi"
+import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements } from "../../lib/studioApi"
 import * as api from "../../lib/api"
 import StudioSlideStrip from "./StudioSlideStrip"
 import StudioCanvas from "./StudioCanvas"
@@ -145,6 +145,19 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       setRefreshKey((k) => k + 1)
     } catch (e) {
       console.error("duplicate failed:", e)
+    }
+  }, [doc.doc_id, markDirty])
+
+  // ── align multiple selected elements ─────────────────────────────────────
+  const handleAlignElements = useCallback(async (alignment: string) => {
+    const ids = [...multiSelectIdsRef.current]
+    if (ids.length < 2) return
+    try {
+      await alignElements(doc.doc_id, selectedSlideRef.current, ids, alignment)
+      markDirty(selectedSlideRef.current)
+      setRefreshKey((k) => k + 1)
+    } catch (e) {
+      console.error("align failed:", e)
     }
   }, [doc.doc_id, markDirty])
 
@@ -346,6 +359,8 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         undoDepth={undoDepth}
         redoDepth={redoDepth}
         onShowShortcuts={() => setShortcutsOpen(true)}
+        multiSelectIds={multiSelectIds}
+        onAlignElements={handleAlignElements}
       />
 
       {/* ── main area: slide strip + canvas + properties ── */}

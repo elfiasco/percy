@@ -3,6 +3,17 @@ import type { StudioElement } from "../../lib/studioTypes"
 import type { DocInfo } from "../../lib/types"
 import { exportPptxUrl } from "../../lib/studioApi"
 
+const MULTI_ALIGN_BUTTONS = [
+  { title: "Align left edges",          symbol: "⫷L", alignment: "left" },
+  { title: "Center horizontally",       symbol: "⫷C", alignment: "center" },
+  { title: "Align right edges",         symbol: "⫷R", alignment: "right" },
+  { title: "Align top edges",           symbol: "⫸T", alignment: "top" },
+  { title: "Center vertically",         symbol: "⫸M", alignment: "middle" },
+  { title: "Align bottom edges",        symbol: "⫸B", alignment: "bottom" },
+  { title: "Distribute horizontally",   symbol: "⇿H", alignment: "distribute_h" },
+  { title: "Distribute vertically",     symbol: "⇿V", alignment: "distribute_v" },
+]
+
 // ── single labelled number input ──────────────────────────────────────────────
 function PosInput({
   label, value, disabled, onChange, onCommit,
@@ -93,6 +104,8 @@ interface Props {
   undoDepth?: number
   redoDepth?: number
   onShowShortcuts?: () => void
+  multiSelectIds?: Set<string>
+  onAlignElements?: (alignment: string) => void
 }
 
 export default function StudioToolbar({
@@ -105,6 +118,7 @@ export default function StudioToolbar({
   onSaveToCloud, savingToCloud,
   undoDepth, redoDepth,
   onShowShortcuts,
+  multiSelectIds, onAlignElements,
 }: Props) {
   const [insertOpen, setInsertOpen] = useState(false)
   const imageInputRef = useRef<HTMLInputElement>(null)
@@ -215,6 +229,27 @@ export default function StudioToolbar({
           </button>
         ))}
       </div>
+
+      {/* ── multi-element alignment ───────────────────────── */}
+      {multiSelectIds && multiSelectIds.size > 1 && onAlignElements && (
+        <>
+          <div className="w-px h-5 bg-edge mx-3 shrink-0" />
+          <div className="flex items-center gap-0">
+            <span className="text-[10px] text-indigo-300 mr-1.5">Multi</span>
+            {MULTI_ALIGN_BUTTONS.map(({ title, symbol, alignment }) => (
+              <button
+                key={alignment}
+                title={title}
+                onClick={() => onAlignElements(alignment)}
+                className="w-5 h-6 flex items-center justify-center text-[9px] text-muted
+                           hover:text-indigo-300 hover:bg-indigo-500/10 rounded transition-colors font-mono"
+              >
+                {symbol.replace(/[⫷⫸⇿]/, "")}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
 
       <div className="w-px h-5 bg-edge mx-3 shrink-0" />
 
