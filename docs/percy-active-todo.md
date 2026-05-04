@@ -30,8 +30,8 @@ Start the Percy Enterprise foundation without disrupting the existing local roun
 - [x] Add persistent Postgres-backed repository design.
 - [x] Add document registration model.
 - [x] Add job model and local job lifecycle endpoints.
-- [ ] Add local job runner.
-- [ ] Wire existing PPTX onboarding into cloud document jobs.
+- [x] Add local job runner (ECS Fargate worker + SQS long-poll loop).
+- [x] Wire existing PPTX onboarding into cloud document jobs.
 - [ ] Add frontend organization/project navigation.
 - [ ] Define first Python snippet contract for Bridge elements.
 - [x] Add Percy Studio canvas (Bridge element overlays, drag/resize, properties panel, mode toggle).

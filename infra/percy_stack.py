@@ -2,6 +2,8 @@ from pathlib import Path
 
 from aws_cdk import CfnOutput, Duration, RemovalPolicy, Stack
 from aws_cdk import aws_apprunner as apprunner
+from aws_cdk import aws_cloudwatch as cloudwatch
+from aws_cdk import aws_cloudwatch_actions as cw_actions
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_ecr_assets as ecr_assets
 from aws_cdk import aws_ecs as ecs
@@ -9,6 +11,7 @@ from aws_cdk import aws_iam as iam
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_rds as rds
 from aws_cdk import aws_s3 as s3
+from aws_cdk import aws_sns as sns
 from aws_cdk import aws_sqs as sqs
 from constructs import Construct
 
@@ -362,6 +365,38 @@ class PercyCloudDemoStack(Stack):
             assign_public_ip=False,
         )
 
+        # ------------------------------------------------------------------
+        # Observability — CloudWatch alarms
+        # ------------------------------------------------------------------
+        alerts_topic = sns.Topic(self, "PercyAlerts", display_name="Percy Dev Alerts")
+
+        # DLQ depth — any message here means a job failed 3x
+        cloudwatch.Alarm(
+            self, "OnboardDlqDepth",
+            metric=onboard_dlq.metric_approximate_number_of_messages_visible(
+                period=Duration.minutes(5)
+            ),
+            threshold=1,
+            evaluation_periods=1,
+            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            alarm_description="Percy onboard DLQ has messages — jobs failing repeatedly",
+            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+        ).add_alarm_action(cw_actions.SnsAction(alerts_topic))
+
+        # Queue depth — jobs piling up
+        cloudwatch.Alarm(
+            self, "OnboardQueueDepth",
+            metric=onboard_queue.metric_approximate_number_of_messages_visible(
+                period=Duration.minutes(5)
+            ),
+            threshold=50,
+            evaluation_periods=2,
+            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            alarm_description="Percy onboard queue depth high — worker may be stuck",
+            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+        ).add_alarm_action(cw_actions.SnsAction(alerts_topic))
+
         CfnOutput(self, "PercyDbSecretArn", value=db.secret.secret_arn)
         CfnOutput(self, "PercyArtifactsBucket", value=artifacts_bucket.bucket_name)
         CfnOutput(self, "PercyOnboardQueueUrl", value=onboard_queue.queue_url)
+        CfnOutput(self, "PercyAlertsTopicArn", value=alerts_topic.topic_arn)
