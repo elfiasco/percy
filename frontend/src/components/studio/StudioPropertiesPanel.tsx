@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react"
 import type { StudioElement, ElementStyleData } from "../../lib/studioTypes"
-import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, replaceImage, fetchThemeColors } from "../../lib/studioApi"
+import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, replaceImage, fetchThemeColors, fetchDocStats } from "../../lib/studioApi"
+import type { DocStats } from "../../lib/studioApi"
 import StudioTextPanel from "./StudioTextPanel"
 
 const TYPE_COLOR: Record<string, string> = {
@@ -533,14 +534,29 @@ function ImageReplaceButton({ docId, slideN, elementId, onReplaced }: {
 
 // ── Slide properties (no element selected) ────────────────────────────────────
 
+const TYPE_ICON_MAP: Record<string, string> = {
+  BridgeText:      "T",
+  BridgeShape:     "■",
+  BridgeImage:     "🖼",
+  BridgeChart:     "📊",
+  BridgeTable:     "▦",
+  BridgeConnector: "⟶",
+  BridgeFreeform:  "✏",
+  BridgeGroup:     "⊞",
+}
+
 function SlidePropertiesPanel({ docId, slideN, onCommit }: { docId: string; slideN: number; onCommit: () => void }) {
   const [bgColor, setBgColor]     = useState("#FFFFFF")
   const [saving, setSaving]       = useState(false)
   const [themeColors, setThemeColors] = useState<Record<string, string> | null>(null)
+  const [stats, setStats]         = useState<DocStats | null>(null)
 
   useEffect(() => {
     fetchThemeColors(docId)
       .then((r) => setThemeColors(r.theme_colors))
+      .catch(() => {})
+    fetchDocStats(docId)
+      .then(setStats)
       .catch(() => {})
   }, [docId])
 
@@ -598,6 +614,39 @@ function SlidePropertiesPanel({ docId, slideN, onCommit }: { docId: string; slid
             ))}
           </div>
           <p className="text-[10px] text-muted/60 mt-1">Click to use as background</p>
+        </>
+      )}
+
+      {stats && (
+        <>
+          <SectionHead title="Presentation Stats" />
+          <div className="space-y-1 text-[11px]">
+            <div className="flex justify-between">
+              <span className="text-muted">Slides</span>
+              <span className="font-mono text-slate-300">{stats.slide_count}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted">Total elements</span>
+              <span className="font-mono text-slate-300">{stats.total_elements}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted">Word count</span>
+              <span className="font-mono text-slate-300">{stats.word_count.toLocaleString()}</span>
+            </div>
+          </div>
+          {Object.keys(stats.type_counts).length > 0 && (
+            <div className="mt-2 space-y-0.5">
+              {Object.entries(stats.type_counts)
+                .sort(([, a], [, b]) => b - a)
+                .map(([type, count]) => (
+                  <div key={type} className="flex items-center gap-1.5 text-[10px] text-muted">
+                    <span className="w-3 text-center">{TYPE_ICON_MAP[type] ?? "?"}</span>
+                    <span className="flex-1">{type.replace("Bridge", "")}</span>
+                    <span className="font-mono text-slate-400">{count}</span>
+                  </div>
+                ))}
+            </div>
+          )}
         </>
       )}
     </div>

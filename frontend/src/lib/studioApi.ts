@@ -262,6 +262,17 @@ export async function searchElements(docId: string, q = ""): Promise<ElementSear
   return apiFetch<ElementSearchResult[]>(`${BASE}/docs/${docId}/search-elements?q=${encodeURIComponent(q)}`)
 }
 
+export interface DocStats {
+  slide_count: number
+  total_elements: number
+  type_counts: Record<string, number>
+  word_count: number
+}
+
+export async function fetchDocStats(docId: string): Promise<DocStats> {
+  return apiFetch<DocStats>(`${BASE}/docs/${docId}/stats`)
+}
+
 export async function replaceText(
   docId: string,
   find: string,

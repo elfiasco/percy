@@ -3681,6 +3681,28 @@ def search_text(doc_id: str, q: str):
     return matches
 
 
+@app.get("/api/docs/{doc_id}/stats")
+def get_doc_stats(doc_id: str):
+    """Return presentation-level statistics: slide count, element counts, word count."""
+    d = _require(doc_id)
+    doc = d["doc"]
+    type_counts: dict[str, int] = {}
+    word_count = 0
+    for slide in doc.slides:
+        for el in slide.elements:
+            et = getattr(el, "element_type", "Unknown")
+            type_counts[et] = type_counts.get(et, 0) + 1
+            plain = _element_plain_text(el)
+            if plain.strip():
+                word_count += len(plain.split())
+    return {
+        "slide_count":  len(doc.slides),
+        "total_elements": sum(type_counts.values()),
+        "type_counts":  type_counts,
+        "word_count":   word_count,
+    }
+
+
 @app.get("/api/docs/{doc_id}/search-elements")
 def search_elements(doc_id: str, q: str = ""):
     """Search all elements by name or text content. Returns up to 60 matches."""
