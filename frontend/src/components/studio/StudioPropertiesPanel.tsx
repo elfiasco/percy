@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import type { StudioElement, ElementStyleData } from "../../lib/studioTypes"
 import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, setAllSlidesBackground, setGradientBackground, replaceImage, fetchThemeColors, fetchDocStats } from "../../lib/studioApi"
 import type { DocStats } from "../../lib/studioApi"
@@ -790,6 +790,20 @@ export default function StudioPropertiesPanel({
   const [tab, setTab] = useState<Tab>("position")
   const [noSelTab, setNoSelTab] = useState<NoSelTab>("slide")
   const [elemCtxMenu, setElemCtxMenu] = useState<{ x: number; y: number; el: StudioElement } | null>(null)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameVal, setRenameVal] = useState("")
+  const renameInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => { if (renamingId) renameInputRef.current?.focus() }, [renamingId])
+
+  const commitRename = useCallback(async (el: StudioElement) => {
+    const trimmed = renameVal.trim()
+    if (trimmed && trimmed !== el.name) {
+      try { await updateElementPosition(docId, slideN, el.id, { name: trimmed }) }
+      catch (e) { console.error("rename failed:", e) }
+    }
+    setRenamingId(null)
+  }, [renameVal, docId, slideN])
 
   // reset to position when element changes
   useEffect(() => { setTab("position") }, [element?.id])
@@ -862,22 +876,43 @@ export default function StudioPropertiesPanel({
               <p className="text-xs text-muted p-2">No elements on this slide.</p>
             ) : (
               [...elements].sort((a, b) => b.z_index - a.z_index).map((el) => (
-                <button
+                <div
                   key={el.id}
-                  onClick={() => onSelectElement?.(el)}
                   onContextMenu={(e) => { e.preventDefault(); setElemCtxMenu({ x: e.clientX, y: e.clientY, el }) }}
                   className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-left
-                             hover:bg-white/5 transition-colors group"
+                             hover:bg-white/5 transition-colors group cursor-pointer"
+                  onClick={() => { if (renamingId !== el.id) onSelectElement?.(el) }}
                 >
                   <div
                     className="w-2 h-2 rounded-sm shrink-0"
                     style={{ background: TYPE_COLOR[el.type] ?? "#6366F1" }}
                   />
-                  <span className="text-xs text-slate-300 truncate flex-1 min-w-0">{el.name}</span>
+                  {renamingId === el.id ? (
+                    <input
+                      ref={renameInputRef}
+                      className="flex-1 min-w-0 text-xs bg-black/40 border border-accent/60 rounded px-1 py-0 text-slate-200 focus:outline-none"
+                      value={renameVal}
+                      onChange={(e) => setRenameVal(e.target.value)}
+                      onBlur={() => commitRename(el)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") { e.preventDefault(); commitRename(el) }
+                        if (e.key === "Escape") setRenamingId(null)
+                        e.stopPropagation()
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  ) : (
+                    <span
+                      className="text-xs text-slate-300 truncate flex-1 min-w-0"
+                      onDoubleClick={(e) => { e.stopPropagation(); setRenamingId(el.id); setRenameVal(el.name) }}
+                    >
+                      {el.name}
+                    </span>
+                  )}
                   {el.locked && <span className="text-[10px] text-muted shrink-0">🔒</span>}
                   {el.hidden && <span className="text-[10px] text-muted shrink-0">👁</span>}
                   <span className="text-[10px] text-muted shrink-0 opacity-0 group-hover:opacity-100">z{el.z_index}</span>
-                </button>
+                </div>
               ))
             )}
 
