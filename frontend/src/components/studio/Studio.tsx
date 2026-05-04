@@ -18,6 +18,7 @@ import OutlinePanel from "./OutlinePanel"
 import PresentationMode from "./PresentationMode"
 import LayersPanel from "./LayersPanel"
 import ColorSwapPanel from "./ColorSwapPanel"
+import DocStatsModal from "./DocStatsModal"
 
 interface Props {
   doc: DocInfo
@@ -41,6 +42,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const [layersOpen, setLayersOpen]           = useState(false)
   const [rerenderingAll, setRerenderingAll]   = useState(false)
   const [colorSwapOpen, setColorSwapOpen]     = useState(false)
+  const [statsOpen, setStatsOpen]             = useState(false)
   const [shortcutsOpen, setShortcutsOpen]       = useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [slideSorterOpen, setSlideSorterOpen]       = useState(false)
@@ -539,6 +541,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         onRerenderAll={handleRerenderAll}
         rerenderingAll={rerenderingAll}
         onColorSwap={() => setColorSwapOpen(true)}
+        onShowStats={() => setStatsOpen(true)}
       />
 
       {/* ── main area: slide strip + canvas + properties ── */}
@@ -643,6 +646,13 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           docId={doc.doc_id}
           onClose={() => setCommandPaletteOpen(false)}
           onJump={handleJumpToElement}
+        />
+      )}
+
+      {statsOpen && (
+        <DocStatsModal
+          docId={doc.doc_id}
+          onClose={() => setStatsOpen(false)}
         />
       )}
 

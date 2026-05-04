@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import type { StudioElement } from "../../lib/studioTypes"
 import type { DocInfo } from "../../lib/types"
-import { exportPptxUrl, exportPdfUrl, exportPngZipUrl } from "../../lib/studioApi"
+import { exportPptxUrl, exportPdfUrl, exportPngZipUrl, notesExportUrl } from "../../lib/studioApi"
 
 const MULTI_ALIGN_BUTTONS = [
   { title: "Align left edges",          symbol: "⫷L", alignment: "left" },
@@ -123,6 +123,7 @@ interface Props {
   onRerenderAll?: () => void
   rerenderingAll?: boolean
   onColorSwap?: () => void
+  onShowStats?: () => void
 }
 
 export default function StudioToolbar({
@@ -152,6 +153,7 @@ export default function StudioToolbar({
   onRerenderAll,
   rerenderingAll,
   onColorSwap,
+  onShowStats,
 }: Props) {
   const [insertOpen, setInsertOpen] = useState(false)
   const [copyToOpen, setCopyToOpen] = useState(false)
@@ -558,6 +560,17 @@ export default function StudioToolbar({
           ↓ PNG
         </a>
 
+        <a
+          href={notesExportUrl(doc.doc_id)}
+          download
+          title="Download all speaker notes as a .txt file"
+          className="flex items-center gap-1 text-xs px-3 py-1 rounded
+                     bg-slate-500/15 text-slate-300 hover:bg-slate-500/25 border border-slate-500/25
+                     transition-colors no-underline"
+        >
+          ↓ Notes
+        </a>
+
         {onColorSwap && (
           <button
             onClick={onColorSwap}
@@ -711,6 +724,17 @@ export default function StudioToolbar({
                        hover:text-slate-200 hover:bg-white/10 transition-colors"
           >
             ⊞
+          </button>
+        )}
+
+        {onShowStats && (
+          <button
+            onClick={onShowStats}
+            title="Document statistics"
+            className="w-7 h-7 flex items-center justify-center rounded border border-edge text-xs text-muted
+                       hover:text-slate-200 hover:bg-white/10 transition-colors"
+          >
+            📊
           </button>
         )}
 

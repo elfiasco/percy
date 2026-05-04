@@ -385,6 +385,10 @@ export async function generateSlideContent(
   })
 }
 
+export function notesExportUrl(docId: string): string {
+  return `${BASE}/docs/${docId}/notes-export`
+}
+
 export async function fetchColorPalette(docId: string): Promise<{ colors: string[] }> {
   return apiFetch(`${BASE}/docs/${docId}/color-palette`)
 }

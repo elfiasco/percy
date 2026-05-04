@@ -3263,6 +3263,29 @@ def update_slide_notes(doc_id: str, n: int, req: SlideNotesUpdate):
     return {"notes_text": req.notes_text}
 
 
+@app.get("/api/docs/{doc_id}/notes-export")
+def export_all_notes(doc_id: str):
+    """Export all slides' speaker notes as a plain-text download."""
+    from fastapi.responses import PlainTextResponse
+    d = _require(doc_id)
+    lines: list[str] = []
+    for slide in d["doc"].slides:
+        cp   = getattr(slide, "custom_properties", None) or {}
+        note = cp.get("notes_text", "").strip()
+        if note:
+            lines.append(f"=== Slide {slide.slide_number} ===")
+            lines.append(note)
+            lines.append("")
+    if not lines:
+        lines = ["(No speaker notes found in this document)"]
+    stem = Path(d.get("name", "notes")).stem
+    content = "\n".join(lines)
+    return PlainTextResponse(
+        content=content,
+        headers={"Content-Disposition": f'attachment; filename="{stem}_notes.txt"'},
+    )
+
+
 @app.get("/api/docs/{doc_id}/slides/{n}/elements")
 def get_slide_elements(doc_id: str, n: int):
     """Return all Bridge elements on slide *n* with position in inches and percent."""
