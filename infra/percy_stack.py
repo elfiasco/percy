@@ -317,6 +317,12 @@ class PercyCloudDemoStack(Stack):
             file="Dockerfile.studio",
         )
 
+        # Anthropic API key secret (must be manually populated after first deploy)
+        from aws_cdk import aws_secretsmanager as secretsmanager  # noqa: F811
+        anthropic_secret = secretsmanager.Secret.from_secret_name_v2(
+            self, "AnthropicApiKeySecret", "percy/anthropic-api-key"
+        )
+
         studio_instance_role = iam.Role(
             self,
             "PercyStudioInstanceRole",
@@ -324,6 +330,7 @@ class PercyCloudDemoStack(Stack):
         )
         artifacts_bucket.grant_read_write(studio_instance_role)
         api_key_secret.grant_read(studio_instance_role)
+        anthropic_secret.grant_read(studio_instance_role)
 
         studio_service = apprunner.CfnService(
             self,
@@ -358,6 +365,10 @@ class PercyCloudDemoStack(Stack):
                             apprunner.CfnService.KeyValuePairProperty(
                                 name="PERCY_API_KEY",
                                 value=api_key_secret.secret_arn,
+                            ),
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="ANTHROPIC_API_KEY",
+                                value=anthropic_secret.secret_arn,
                             ),
                         ],
                     ),
