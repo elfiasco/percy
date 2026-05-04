@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import type { StudioElement } from "../../lib/studioTypes"
 import type { DocInfo } from "../../lib/types"
-import { exportPptxUrl, exportPdfUrl, exportPngZipUrl, notesExportUrl } from "../../lib/studioApi"
+import { exportPptxUrl, exportPdfUrl, exportPngZipUrl, notesExportUrl, exportHtmlUrl } from "../../lib/studioApi"
 
 const MULTI_ALIGN_BUTTONS = [
   { title: "Align left edges",          symbol: "⫷L", alignment: "left" },
@@ -558,6 +558,17 @@ export default function StudioToolbar({
                      transition-colors no-underline"
         >
           ↓ PNG
+        </a>
+
+        <a
+          href={exportHtmlUrl(doc.doc_id)}
+          download
+          title="Export as self-contained HTML slideshow (embeds all PNGs)"
+          className="flex items-center gap-1 text-xs px-3 py-1 rounded
+                     bg-orange-500/15 text-orange-300 hover:bg-orange-500/25 border border-orange-500/25
+                     transition-colors no-underline"
+        >
+          ↓ HTML
         </a>
 
         <a

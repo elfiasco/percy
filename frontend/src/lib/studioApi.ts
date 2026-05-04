@@ -398,6 +398,10 @@ export async function generateSlideContent(
   })
 }
 
+export function exportHtmlUrl(docId: string): string {
+  return `${BASE}/docs/${docId}/export-html`
+}
+
 export function notesExportUrl(docId: string): string {
   return `${BASE}/docs/${docId}/notes-export`
 }

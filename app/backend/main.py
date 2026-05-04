@@ -2883,6 +2883,139 @@ def export_png_zip(doc_id: str):
     )
 
 
+@app.get("/api/docs/{doc_id}/export-html")
+def export_html_slideshow(doc_id: str):
+    """Export all slides as a self-contained HTML slideshow (base64-embedded PNGs)."""
+    import base64 as _b64
+    import io as _io
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+
+    slides_data: list[tuple[int, str, str]] = []  # (n, title, b64_png)
+
+    def _get_png_path(n: int) -> Path | None:
+        for name in [f"slide-{n:03d}.png", f"slide_{n:04d}.png"]:
+            p = bridge_dir / name
+            if p.exists():
+                return p
+        return None
+
+    def _slide_title(slide: Any) -> str:
+        for el in slide.elements:
+            tf = getattr(el, "text_frame", None) or getattr(el, "body", None)
+            if tf:
+                paras = getattr(tf, "paragraphs", []) or []
+                if paras:
+                    txt = "".join(r.text for r in (getattr(paras[0], "runs", []) or []))
+                    if txt.strip():
+                        return txt.strip()[:60]
+        return f"Slide {slide.slide_number}"
+
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        p = _get_png_path(n)
+        if p and p.exists():
+            b64 = _b64.b64encode(p.read_bytes()).decode("ascii")
+            slides_data.append((n, _slide_title(slide), b64))
+
+    if not slides_data:
+        raise HTTPException(404, "No rendered slides found — open the deck in Studio and render first")
+
+    stem = Path(d.get("name", "presentation")).stem
+
+    # Build HTML
+    slides_js = ",\n".join(
+        f'{{n:{n}, title:{json.dumps(t)}, src:"data:image/png;base64,{b64}"}}'
+        for n, t, b64 in slides_data
+    )
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{stem}</title>
+<style>
+  *{{ box-sizing:border-box; margin:0; padding:0 }}
+  body{{ background:#111; color:#eee; font-family:system-ui,sans-serif; height:100vh; overflow:hidden }}
+  #stage{{ width:100vw; height:100vh; display:flex; align-items:center; justify-content:center; position:relative }}
+  #slide-img{{ max-width:100%; max-height:100%; object-fit:contain; display:block; user-select:none }}
+  #controls{{ position:fixed; bottom:16px; left:50%; transform:translateX(-50%);
+              display:flex; gap:8px; align-items:center; background:rgba(0,0,0,0.6);
+              padding:6px 12px; border-radius:999px; backdrop-filter:blur(4px) }}
+  button{{ background:rgba(255,255,255,0.1); border:none; color:#eee; padding:4px 12px;
+           border-radius:4px; cursor:pointer; font-size:13px }}
+  button:hover{{ background:rgba(255,255,255,0.2) }}
+  button:disabled{{ opacity:0.3; cursor:default }}
+  #counter{{ font-size:12px; font-variant-numeric:tabular-nums; min-width:60px; text-align:center }}
+  #title{{ position:fixed; top:12px; left:50%; transform:translateX(-50%);
+           font-size:13px; color:rgba(255,255,255,0.5); max-width:60vw; truncate:ellipsis;
+           white-space:nowrap; overflow:hidden; text-overflow:ellipsis }}
+  #dots{{ display:flex; gap:5px; align-items:center }}
+  .dot{{ width:6px; height:6px; border-radius:50%; background:rgba(255,255,255,0.25); cursor:pointer; transition:background .15s }}
+  .dot.active{{ background:#fff }}
+</style>
+</head>
+<body>
+<div id="stage"><img id="slide-img" alt=""></div>
+<div id="title"></div>
+<div id="controls">
+  <button id="prev" onclick="go(cur-1)">&#8249;</button>
+  <div id="dots"></div>
+  <span id="counter"></span>
+  <button id="next" onclick="go(cur+1)">&#8250;</button>
+</div>
+<script>
+const slides = [{slides_js}];
+let cur = 0;
+const img = document.getElementById('slide-img');
+const ctr = document.getElementById('counter');
+const ttl = document.getElementById('title');
+const dotsEl = document.getElementById('dots');
+
+if (slides.length <= 30) {{
+  slides.forEach((s,i) => {{
+    const d = document.createElement('div');
+    d.className = 'dot'; d.onclick = () => go(i);
+    dotsEl.appendChild(d);
+  }});
+}}
+
+function go(n) {{
+  cur = Math.max(0, Math.min(slides.length-1, n));
+  img.src = slides[cur].src;
+  ctr.textContent = (cur+1) + ' / ' + slides.length;
+  ttl.textContent = slides[cur].title;
+  document.getElementById('prev').disabled = cur === 0;
+  document.getElementById('next').disabled = cur === slides.length-1;
+  document.querySelectorAll('.dot').forEach((d,i) => d.classList.toggle('active', i===cur));
+}}
+
+document.addEventListener('keydown', e => {{
+  if (e.key==='ArrowRight'||e.key==='PageDown'||e.key===' ') {{ e.preventDefault(); go(cur+1); }}
+  if (e.key==='ArrowLeft'||e.key==='PageUp')  {{ e.preventDefault(); go(cur-1); }}
+  if (e.key==='Home') go(0);
+  if (e.key==='End')  go(slides.length-1);
+}});
+
+go(0);
+</script>
+</body>
+</html>"""
+
+    from fastapi.responses import Response as _HtmlResp
+    return _HtmlResp(
+        content=html,
+        media_type="text/html",
+        headers={
+            "Content-Disposition": f'attachment; filename="{stem}.html"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 @app.post("/api/docs/{doc_id}/grades")
 def set_grade(doc_id: str, req: GradeRequest):
     d = _require(doc_id)
