@@ -157,6 +157,35 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
     }
   }, [docId, slideN, onSelectElement, snap, selectedIds])
 
+  const handleMultiMove = useCallback(async (deltaLeftIn: number, deltaTopIn: number) => {
+    const ids = [...selectedIds]
+    const currentElements = elementsRef.current
+    try {
+      const updates = await Promise.all(
+        ids.map((id) => {
+          const el = currentElements.find((e) => e.id === id)
+          if (!el) return Promise.resolve(null)
+          return updateElementPosition(docId, slideN, id, {
+            left_in: snap(el.left_in + deltaLeftIn),
+            top_in:  snap(el.top_in  + deltaTopIn),
+          })
+        })
+      )
+      const valid = updates.filter((u): u is NonNullable<typeof u> => u !== null)
+      setElements((prev) => {
+        const map = new Map(valid.map((u) => [u.id, u]))
+        return prev.map((el) => map.get(el.id) ?? el)
+      })
+      setRenderKeys((prev) => {
+        const next = { ...prev }
+        for (const u of valid) next[u.id] = (prev[u.id] ?? 0) + 1
+        return next
+      })
+    } catch (e) {
+      console.error("multi-move failed:", e)
+    }
+  }, [docId, slideN, selectedIds, snap])
+
   const handleRotate = useCallback(async (id: string, rotation: number) => {
     try {
       const updated = await updateElementPosition(docId, slideN, id, { rotation })
@@ -234,11 +263,13 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
                 key={el.id}
                 element={el}
                 selected={selectedIds.has(el.id)}
+                isMultiSelected={selectedIds.size > 1 && selectedIds.has(el.id)}
                 docId={docId}
                 slideN={slideN}
                 renderKey={renderKeys[el.id] ?? 0}
                 onSelect={handleSelect}
                 onCommit={handleCommit}
+                onMultiMove={handleMultiMove}
                 onRotate={handleRotate}
               />
             ))}

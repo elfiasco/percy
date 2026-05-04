@@ -42,16 +42,18 @@ interface DragState {
 interface Props {
   element: StudioElement
   selected: boolean
+  isMultiSelected: boolean
   docId: string
   slideN: number
   renderKey: number
   onSelect: (id: string, shiftKey?: boolean) => void
   onCommit: (id: string, leftIn: number, topIn: number, widthIn: number, heightIn: number) => void
+  onMultiMove?: (deltaLeftIn: number, deltaTopIn: number) => void
   onRotate?: (id: string, rotation: number) => void
 }
 
 export default function ElementOverlay({
-  element, selected, docId, slideN, renderKey, onSelect, onCommit, onRotate,
+  element, selected, isMultiSelected, docId, slideN, renderKey, onSelect, onCommit, onMultiMove, onRotate,
 }: Props) {
   const { containerRef, slideWidthIn, slideHeightIn } = useCanvas()
   const overlayRef   = useRef<HTMLDivElement>(null)
@@ -195,14 +197,20 @@ export default function ElementOverlay({
 
     if (!moved) return
 
-    onCommit(
-      element.id,
-      lPct / 100 * slideWidthIn,
-      tPct / 100 * slideHeightIn,
-      wPct / 100 * slideWidthIn,
-      hPct / 100 * slideHeightIn,
-    )
-  }, [element.id, slideWidthIn, slideHeightIn, onCommit])
+    if (ds.mode === "move" && isMultiSelected && onMultiMove) {
+      const deltaLeftIn  = (lPct - ds.startLeftPct)  / 100 * slideWidthIn
+      const deltaTopIn   = (tPct - ds.startTopPct)   / 100 * slideHeightIn
+      onMultiMove(deltaLeftIn, deltaTopIn)
+    } else {
+      onCommit(
+        element.id,
+        lPct / 100 * slideWidthIn,
+        tPct / 100 * slideHeightIn,
+        wPct / 100 * slideWidthIn,
+        hPct / 100 * slideHeightIn,
+      )
+    }
+  }, [element.id, isMultiSelected, slideWidthIn, slideHeightIn, onCommit, onMultiMove])
 
   const isLocked = element.locked
   const isHidden = element.hidden
