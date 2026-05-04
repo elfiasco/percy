@@ -3396,6 +3396,37 @@ def update_slide_notes(doc_id: str, n: int, req: SlideNotesUpdate):
     return {"notes_text": req.notes_text}
 
 
+class SlideLabelUpdate(BaseModel):
+    label: str
+
+
+@app.get("/api/docs/{doc_id}/slide-labels")
+def get_slide_labels(doc_id: str):
+    """Return all slide labels keyed by slide number."""
+    d = _require(doc_id)
+    labels: dict[str, str] = {}
+    for slide in d["doc"].slides:
+        cp = getattr(slide, "custom_properties", None) or {}
+        lbl = cp.get("label", "").strip()
+        if lbl:
+            labels[str(slide.slide_number)] = lbl
+    return {"labels": labels}
+
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/label")
+def set_slide_label(doc_id: str, n: int, req: SlideLabelUpdate):
+    """Set a display label for slide *n*."""
+    d = _require(doc_id)
+    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+    if not hasattr(slide, "custom_properties") or slide.custom_properties is None:
+        slide.custom_properties = {}
+    slide.custom_properties["label"] = req.label
+    log.info("studio: set label for slide %d of %s: %r", n, doc_id, req.label)
+    return {"slide_n": n, "label": req.label}
+
+
 @app.get("/api/docs/{doc_id}/notes-export")
 def export_all_notes(doc_id: str):
     """Export all slides' speaker notes as a plain-text download."""

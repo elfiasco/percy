@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react"
-import { addSlide, deleteSlide, duplicateSlide, moveSlide, fetchNotesSummary, importSlides } from "../../lib/studioApi"
+import { addSlide, deleteSlide, duplicateSlide, moveSlide, fetchNotesSummary, importSlides, fetchSlideLabels, setSlideLabel } from "../../lib/studioApi"
 
 interface Props {
   docId: string
@@ -31,15 +31,30 @@ export default function StudioSlideStrip({
   const [importing, setImporting]     = useState(false)
   const [multiSelected, setMultiSelected] = useState<Set<number>>(new Set())
   const [thumbnailSize, setThumbnailSize] = useState<"sm" | "md">("sm")
+  const [slideLabels, setSlideLabels] = useState<Record<number, string>>({})
+  const [editingLabel, setEditingLabel] = useState<number | null>(null)
+  const [editLabelText, setEditLabelText] = useState("")
   const importInputRef                = useRef<HTMLInputElement>(null)
   const stripRef = useRef<HTMLDivElement>(null)
 
-  // Fetch notes summary to show indicators
+  // Fetch notes summary and slide labels on mount/refresh
   useEffect(() => {
     fetchNotesSummary(docId)
       .then((r) => setSlidesWithNotes(new Set(r.slides_with_notes)))
       .catch(() => {})
+    fetchSlideLabels(docId)
+      .then((r) => setSlideLabels(Object.fromEntries(Object.entries(r.labels).map(([k, v]) => [Number(k), v]))))
+      .catch(() => {})
   }, [docId, stripKey, refreshKey])
+
+  const commitLabel = useCallback(async (n: number, text: string) => {
+    setEditingLabel(null)
+    const trimmed = text.trim()
+    setSlideLabels((prev) => ({ ...prev, [n]: trimmed }))
+    try {
+      await setSlideLabel(docId, n, trimmed)
+    } catch (e) { console.error("label save failed:", e) }
+  }, [docId])
 
   // close context menu on outside click
   useEffect(() => {
@@ -319,9 +334,43 @@ export default function StudioSlideStrip({
                   </span>
                 )}
               </div>
-              <span className={`text-[10px] ${active ? "text-accent-light" : dirty ? "text-amber-400" : "text-muted"}`}>
-                {n}
-              </span>
+              <div className="w-full flex items-center justify-between gap-0.5 min-w-0">
+                <span className={`text-[10px] shrink-0 ${active ? "text-accent-light" : dirty ? "text-amber-400" : "text-muted"}`}>
+                  {n}
+                </span>
+                {editingLabel === n ? (
+                  <input
+                    autoFocus
+                    value={editLabelText}
+                    onChange={(e) => setEditLabelText(e.target.value)}
+                    onBlur={() => commitLabel(n, editLabelText)}
+                    onKeyDown={(e) => {
+                      e.stopPropagation()
+                      if (e.key === "Enter") { e.preventDefault(); commitLabel(n, editLabelText) }
+                      if (e.key === "Escape") { setEditingLabel(null) }
+                    }}
+                    className="flex-1 min-w-0 text-[9px] bg-base border border-accent/50 rounded px-1 py-0 text-slate-300 focus:outline-none"
+                    style={{ maxWidth: "100%" }}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                ) : slideLabels[n] ? (
+                  <span
+                    title={`Label: ${slideLabels[n]} — double-click to edit`}
+                    onDoubleClick={(e) => { e.stopPropagation(); setEditingLabel(n); setEditLabelText(slideLabels[n] ?? "") }}
+                    className="flex-1 min-w-0 text-[9px] text-indigo-300/70 truncate text-right cursor-text"
+                  >
+                    {slideLabels[n]}
+                  </span>
+                ) : (
+                  <span
+                    title="Double-click to add label"
+                    onDoubleClick={(e) => { e.stopPropagation(); setEditingLabel(n); setEditLabelText("") }}
+                    className="flex-1 text-[9px] text-muted/0 hover:text-muted/30 transition-colors text-right cursor-text"
+                  >
+                    +label
+                  </span>
+                )}
+              </div>
             </div>
           )
         })}
@@ -354,6 +403,10 @@ export default function StudioSlideStrip({
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onMouseDown={(e) => e.stopPropagation()}
         >
+          <CtxItem onClick={() => { setEditingLabel(contextMenu.slideN); setEditLabelText(slideLabels[contextMenu.slideN] ?? ""); setContextMenu(null) }}>
+            Rename slide
+          </CtxItem>
+          <div className="border-t border-edge/50 my-1" />
           <CtxItem onClick={() => run(() => addSlide(docId, contextMenu.slideN - 1), (r) => r.new_slide_n ?? contextMenu.slideN)}>
             Insert before
           </CtxItem>
