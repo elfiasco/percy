@@ -173,6 +173,15 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
     }
   }, [doc.doc_id, markDirty])
 
+  const handleCopyToSlide = useCallback(async (targetN: number) => {
+    const el = selectedElementRef.current
+    if (!el) return
+    try {
+      await copyElementToSlide(doc.doc_id, selectedSlideRef.current, el.id, targetN)
+      markDirty(targetN)
+    } catch (e) { console.error("copy-to-slide failed:", e) }
+  }, [doc.doc_id, markDirty])
+
   // ── align multiple selected elements ─────────────────────────────────────
   const handleAlignElements = useCallback(async (alignment: string) => {
     const ids = [...multiSelectIdsRef.current]
@@ -445,6 +454,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         onAlignElements={handleAlignElements}
         onFormatPaint={handleFormatPaint}
         formatPaintMode={formatPaintMode}
+        onCopyToSlide={selectedElement ? handleCopyToSlide : undefined}
       />
 
       {/* ── main area: slide strip + canvas + properties ── */}

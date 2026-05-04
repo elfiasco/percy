@@ -109,6 +109,7 @@ interface Props {
   onFormatPaint?: () => void
   formatPaintMode?: boolean
   onShowSlideSorter?: () => void
+  onCopyToSlide?: (targetN: number) => void
 }
 
 export default function StudioToolbar({
@@ -124,8 +125,10 @@ export default function StudioToolbar({
   multiSelectIds, onAlignElements,
   onFormatPaint, formatPaintMode,
   onShowSlideSorter,
+  onCopyToSlide,
 }: Props) {
   const [insertOpen, setInsertOpen] = useState(false)
+  const [copyToOpen, setCopyToOpen] = useState(false)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const [x, setX] = useState("")
   const [y, setY] = useState("")
@@ -277,6 +280,36 @@ export default function StudioToolbar({
           className="w-6 h-6 flex items-center justify-center text-sm text-muted
                      hover:text-slate-200 hover:bg-white/10 rounded transition-colors"
         >⧉</button>
+        {onCopyToSlide && (
+          <div className="relative">
+            <button
+              title="Copy element to another slide"
+              onClick={() => setCopyToOpen((o) => !o)}
+              className="w-6 h-6 flex items-center justify-center text-sm text-muted
+                         hover:text-slate-200 hover:bg-white/10 rounded transition-colors"
+            >⤵</button>
+            {copyToOpen && (
+              <>
+                <div className="fixed inset-0 z-[9998]" onClick={() => setCopyToOpen(false)} />
+                <div className="absolute left-0 top-full mt-1 z-[9999] bg-surface border border-edge rounded shadow-xl py-1 min-w-[110px] max-h-48 overflow-y-auto scrollbar-thin">
+                  <div className="px-3 py-0.5 text-[10px] text-muted uppercase tracking-wide border-b border-edge mb-1">Copy to slide</div>
+                  {Array.from({ length: doc.slide_count }, (_, i) => i + 1)
+                    .filter((n) => n !== slideN)
+                    .map((n) => (
+                      <button
+                        key={n}
+                        onClick={() => { onCopyToSlide(n); setCopyToOpen(false) }}
+                        className="w-full text-left px-3 py-1 text-xs text-slate-300 hover:bg-white/10 transition-colors"
+                      >
+                        Slide {n}
+                      </button>
+                    ))
+                  }
+                </div>
+              </>
+            )}
+          </div>
+        )}
         <button
           title="Delete element (Delete key)"
           onClick={onDelete}
