@@ -308,6 +308,72 @@ class PercyCloudDemoStack(Stack):
         )
 
         # ------------------------------------------------------------------
+        # Percy Studio — workspace API + React frontend
+        # ------------------------------------------------------------------
+        studio_image = ecr_assets.DockerImageAsset(
+            self,
+            "PercyStudioImage",
+            directory=str(repo_root),
+            file="Dockerfile.studio",
+        )
+
+        studio_instance_role = iam.Role(
+            self,
+            "PercyStudioInstanceRole",
+            assumed_by=iam.ServicePrincipal("tasks.apprunner.amazonaws.com"),
+        )
+        artifacts_bucket.grant_read_write(studio_instance_role)
+
+        studio_service = apprunner.CfnService(
+            self,
+            "PercyStudio",
+            service_name="percy-studio-dev",
+            source_configuration=apprunner.CfnService.SourceConfigurationProperty(
+                authentication_configuration=apprunner.CfnService.AuthenticationConfigurationProperty(
+                    access_role_arn=access_role.role_arn,
+                ),
+                auto_deployments_enabled=False,
+                image_repository=apprunner.CfnService.ImageRepositoryProperty(
+                    image_identifier=studio_image.image_uri,
+                    image_repository_type="ECR",
+                    image_configuration=apprunner.CfnService.ImageConfigurationProperty(
+                        port="8000",
+                        runtime_environment_variables=[
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="PERCY_ENV", value="dev"
+                            ),
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="S3_BUCKET", value=artifacts_bucket.bucket_name
+                            ),
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="AWS_DEFAULT_REGION", value=self.region
+                            ),
+                        ],
+                    ),
+                ),
+            ),
+            instance_configuration=apprunner.CfnService.InstanceConfigurationProperty(
+                cpu="1 vCPU",
+                memory="2 GB",
+                instance_role_arn=studio_instance_role.role_arn,
+            ),
+            health_check_configuration=apprunner.CfnService.HealthCheckConfigurationProperty(
+                protocol="HTTP",
+                path="/api/workspace",
+                interval=10,
+                timeout=5,
+                healthy_threshold=1,
+                unhealthy_threshold=5,
+            ),
+        )
+
+        CfnOutput(
+            self,
+            "PercyStudioUrl",
+            value=f"https://{studio_service.attr_service_url}",
+        )
+
+        # ------------------------------------------------------------------
         # ECS cluster + onboard worker service
         # ------------------------------------------------------------------
         cluster = ecs.Cluster(self, "PercyWorkerCluster", vpc=vpc)
