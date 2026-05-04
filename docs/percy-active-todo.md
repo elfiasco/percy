@@ -18,6 +18,7 @@ Start the Percy Enterprise foundation without disrupting the existing local roun
 
 ## Next
 
+- [x] Add AWS hosting plan.
 - [ ] Add persistent Postgres-backed repository design.
 - [ ] Add document registration model.
 - [ ] Add job model and local job runner.
