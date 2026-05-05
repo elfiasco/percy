@@ -1,6 +1,7 @@
 import { useRef, useCallback, useState, type CSSProperties } from "react"
 import type { StudioElement, ResizeHandle } from "../../lib/studioTypes"
 import { useCanvas } from "./CanvasContext"
+import { getRenderer } from "./renderers/RendererRegistry"
 
 const TYPE_COLOR: Record<string, string> = {
   BridgeShape:     "#6366F1",
@@ -58,20 +59,24 @@ interface Props {
   onInlineEdit?: (id: string) => void
   onContextMenu?: (id: string, x: number, y: number) => void
   onDragInfo?: (info: { x: number; y: number; w: number; h: number } | null) => void
+  hasConnect?: boolean   // show a corner badge if element has a Python connect attached
 }
 
 const TEXT_TYPES = new Set(["BridgeText", "BridgeShape"])
 
 export default function ElementOverlay({
-  element, selected, isMultiSelected, snapEnabled, otherElements, docId, slideN, renderKey, onSelect, onCommit, onMultiMove, onRotate, onSnapLines, onInlineEdit, onContextMenu, onDragInfo,
+  element, selected, isMultiSelected, snapEnabled, otherElements, docId, slideN, renderKey, onSelect, onCommit, onMultiMove, onRotate, onSnapLines, onInlineEdit, onContextMenu, onDragInfo, hasConnect,
 }: Props) {
   const { containerRef, slideWidthIn, slideHeightIn } = useCanvas()
   const overlayRef   = useRef<HTMLDivElement>(null)
   const dragState    = useRef<DragState | null>(null)
   const rotDragStart = useRef<{ clientX: number; clientY: number; startRot: number; centerX: number; centerY: number } | null>(null)
   const [liveRotation, setLiveRotation] = useState<number | null>(null)
+  const [activeResize, setActiveResize] = useState(false)
   const color      = TYPE_COLOR[element.type] ?? "#6366F1"
   const [imgOk, setImgOk] = useState(true)
+  // For text/shape elements, stretch doesn't make visual sense — use contain
+  const isTextLike = element.type === "BridgeText" || element.type === "BridgeShape"
 
   // Reset img error state when renderKey changes
   const prevKeyRef = useRef(renderKey)
@@ -105,6 +110,7 @@ export default function ElementOverlay({
       containerW:     rect.width,
       containerH:     rect.height,
     }
+    if (mode === "resize") setActiveResize(true)
     ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
   }, [element, containerRef])
 
@@ -312,6 +318,7 @@ export default function ElementOverlay({
     const el = overlayRef.current
     if (!ds || !el) return
     dragState.current = null
+    setActiveResize(false)
     onSnapLines?.([])
     onDragInfo?.(null)
 
@@ -355,6 +362,10 @@ export default function ElementOverlay({
       }}
       onDoubleClick={(e) => {
         e.stopPropagation()
+        // BridgeText now renders natively as contentEditable inside the
+        // element body — its own click handler drives edit mode, no need
+        // for the legacy textarea overlay.
+        if (element.type === "BridgeText") return
         if (!isLocked && onInlineEdit && TEXT_TYPES.has(element.type)) {
           onInlineEdit(element.id)
         }
@@ -365,7 +376,8 @@ export default function ElementOverlay({
         if (!isLocked) onSelect(element.id)
         onContextMenu?.(element.id, e.clientX, e.clientY)
       }}
-      title={!selected ? `${element.label || element.name} (${element.type.replace("Bridge", "")})${isLocked ? " · locked" : ""}${isHidden ? " · hidden" : ""}` : undefined}
+      title={!selected ? `${element.label || element.name} (${element.type.replace("Bridge", "")})${element.text_preview ? `\n"${element.text_preview}"` : ""}${isLocked ? " · locked" : ""}${isHidden ? " · hidden" : ""}` : undefined}
+      data-element="true"
       onPointerDown={(e) => { if (selected && !isLocked) startInteraction(e, "move") }}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -376,7 +388,10 @@ export default function ElementOverlay({
         width:         `${element.width_pct}%`,
         height:        `${element.height_pct}%`,
         transform:     (liveRotation ?? element.rotation) ? `rotate(${liveRotation ?? element.rotation}deg)` : undefined,
-        zIndex:        selected ? 9999 : element.z_index,
+        // Offset z-index by +2000 so PowerPoint background placeholders (which use
+        // large negative z-indices in the Bridge model, e.g. -1000) still render
+        // above the slide background div. Selected stays on top via 9999.
+        zIndex:        selected ? 9999 : element.z_index + 2000,
         boxSizing:     "border-box",
         cursor:        isLocked ? "not-allowed" : (selected ? "move" : "pointer"),
         overflow:      "visible",
@@ -386,36 +401,93 @@ export default function ElementOverlay({
         opacity:       isHidden ? 0.25 : 1,
       }}
     >
-      {/* inner content — clipped to element bounds */}
-      <div style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
-        {imgOk ? (
-          <img
-            src={imgSrc}
-            alt=""
-            draggable={false}
-            style={{
-              width: "100%",
-              height: "100%",
-              display: "block",
-              objectFit: "fill",
-              userSelect: "none",
-              pointerEvents: "none",
-            }}
-            onError={() => setImgOk(false)}
-            onLoad={() => setImgOk(true)}
-          />
-        ) : (
+      {/* inner content — clipped to element bounds (except connectors, whose
+         arrowheads can extend past the bbox) */}
+      <div style={{
+        position: "absolute", inset: 0,
+        overflow: element.type === "BridgeConnector" ? "visible" : "hidden",
+      }}>
+        {/* During active resize of text/shape, hide image and show a dashed placeholder so text doesn't stretch */}
+        {isTextLike && activeResize ? (
           <div
             style={{
               width: "100%", height: "100%",
+              background: `${color}10`,
+              border: `1.5px dashed ${color}60`,
               display: "flex", alignItems: "center", justifyContent: "center",
-              background: `${color}22`, color, fontSize: 9, fontFamily: "monospace", opacity: 0.5,
+              fontSize: 9, color, fontFamily: "monospace", opacity: 0.7,
+              boxSizing: "border-box",
             }}
           >
             {element.label}
           </div>
-        )}
+        ) : (() => {
+          // Native renderer (charts, future tables/connectors): registered components draw
+          // their own DOM/SVG using typed Bridge data; the PNG fallback is skipped.
+          const NativeR = getRenderer(element.type)
+          if (NativeR) {
+            return (
+              <NativeR
+                element={element}
+                docId={docId}
+                slideN={slideN}
+                renderKey={renderKey}
+                selected={selected}
+              />
+            )
+          }
+          return imgOk ? (
+            <img
+              src={imgSrc}
+              alt=""
+              draggable={false}
+              style={{
+                width: "100%",
+                height: "100%",
+                display: "block",
+                objectFit: "fill",
+                userSelect: "none",
+                pointerEvents: "none",
+              }}
+              onError={() => setImgOk(false)}
+              onLoad={() => setImgOk(true)}
+            />
+          ) : (
+            <div
+              style={{
+                width: "100%", height: "100%",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                background: `${color}22`, color, fontSize: 9, fontFamily: "monospace", opacity: 0.5,
+              }}
+            >
+              {element.label}
+            </div>
+          )
+        })()}
       </div>
+
+      {/* connect badge — visible when an element has a Python binding (champagne) */}
+      {hasConnect && (
+        <div
+          title="Bound to a Python connect"
+          style={{
+            position: "absolute",
+            top: 2, right: 2,
+            background: "var(--champagne)",
+            color: "#0a0a0a",
+            fontSize: 9,
+            fontWeight: 600,
+            padding: "1px 5px",
+            borderRadius: 0,                    // sharp corners — calling-card style
+            pointerEvents: "none",
+            zIndex: 10001,
+            letterSpacing: "0.14em",
+            textTransform: "uppercase",
+          }}
+        >
+          PY
+        </div>
+      )}
 
       {/* lock/hidden badges — always visible on non-selected elements */}
       {!selected && (isLocked || isHidden) && (

@@ -41,6 +41,21 @@ tags
 .claude/scheduled_tasks.lock
 .claude/scheduled_tasks.json
 
+# Studio user uploads — never commit (these are end-user content)
+/uploads/
+
+# Other agent's local-only artifacts
+/.local-data/
+/.studio-cache/
+
+# Local SQLite databases
+percy_app.db
+percy_app.db-journal
+percy_app.db-shm
+percy_app.db-wal
+*.db-shm
+*.db-wal
+
 # Generated visual comparison artifacts at repo root
 /*_bridge.png
 /*_diff.png

@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from "react"
 import type { StudioElement } from "../../lib/studioTypes"
-import { fetchSlideElements, updateElementPosition, createImageElement } from "../../lib/studioApi"
+import { fetchSlideElements, updateElementPosition, createImageElement, elementPngUrl, broadcastElement, rewriteElementText, generateTalkingPoints } from "../../lib/studioApi"
 import { CanvasContext } from "./CanvasContext"
 import ElementOverlay from "./ElementOverlay"
 import InlineTextEditor from "./InlineTextEditor"
+import AnnotationOverlay from "./AnnotationOverlay"
 
 interface Props {
   docId: string
@@ -19,11 +20,19 @@ interface Props {
   onToggleLockElement?: (id: string, locked: boolean) => void
   onToggleHiddenElement?: (id: string, hidden: boolean) => void
   onZIndexChange?: (id: string) => void
+  onGroupElements?: () => void
+  onUngroupElement?: (id: string) => void
   focusMode?: boolean
   onToggleFocusMode?: () => void
+  onSlideContextMenu?: (x: number, y: number) => void
+  onBroadcastElement?: (pushedTo: number) => void
+  onSplitElement?: (elementId: string) => void
+  onEditConnect?: (elementId: string) => void
+  connectIds?: Set<string>   // element IDs (on this slide) that have a Python connect attached
+  colorBlindMode?: string | null
 }
 
-export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightIn, refreshKey, onSelectElement, onMultiSelect, onElementRotated, onDeleteElement, onDuplicateElement, onToggleLockElement, onToggleHiddenElement, onZIndexChange, focusMode, onToggleFocusMode }: Props) {
+export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightIn, refreshKey, onSelectElement, onMultiSelect, onElementRotated, onDeleteElement, onDuplicateElement, onToggleLockElement, onToggleHiddenElement, onZIndexChange, onGroupElements, onUngroupElement, focusMode, onToggleFocusMode, onSlideContextMenu, onBroadcastElement, onSplitElement, onEditConnect, connectIds, colorBlindMode }: Props) {
   const containerRef               = useRef<HTMLDivElement>(null)
   const [elements, setElements]     = useState<StudioElement[]>([])
   const [bgColor, setBgColor]       = useState<string | null>(null)
@@ -32,6 +41,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
   const [error, setError]           = useState<string | null>(null)
   const [renderKeys, setRenderKeys] = useState<Record<string, number>>({})
   const elementsRef                 = useRef<StudioElement[]>([])
+  const selectedIdsRef              = useRef<Set<string>>(new Set())
   const [zoom, setZoom]             = useState(1.0)
   const [rubberBand, setRubberBand] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const rbStart                     = useRef<{ x: number; y: number } | null>(null)
@@ -41,10 +51,16 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
   const [snapGuides, setSnapGuides]     = useState<{ type: "h" | "v"; pos: number }[]>([])
   const [inlineEditId, setInlineEditId] = useState<string | null>(null)
   const [ctxMenu, setCtxMenu]           = useState<{ id: string; x: number; y: number } | null>(null)
+  const [rewriteInput, setRewriteInput] = useState<{ id: string; instruction: string; busy: boolean } | null>(null)
+  const [talkingPoints, setTalkingPoints] = useState<{ id: string; points: string[]; loading: boolean } | null>(null)
   const [dragOver, setDragOver]         = useState(false)
   const [uploading, setUploading]       = useState(false)
   const [dragInfo, setDragInfo]         = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  const [annotating, setAnnotating]     = useState(false)
   const GRID_IN                     = 0.25
+
+  // Keep selectedIdsRef in sync for use in keyboard handler
+  useEffect(() => { selectedIdsRef.current = selectedIds }, [selectedIds])
 
   // ── fetch elements when slide changes or parent refreshes ─────────────────
   useEffect(() => {
@@ -105,6 +121,36 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
         onSelectElement(null)
         onMultiSelect?.(all)
         setSelectedIds(all)
+      }
+      // Ctrl+[ send backward, Ctrl+] bring forward
+      if ((e.key === "[" || e.key === "]") && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        const elsList = elementsRef.current
+        const sorted = [...elsList].sort((a, b) => a.z_index - b.z_index)
+        const selId = selectedIdsRef.current.size === 1 ? [...selectedIdsRef.current][0] : null
+        const el = selId ? elsList.find((e) => e.id === selId) : null
+        if (el) {
+          const idx = sorted.findIndex((e) => e.id === el.id)
+          const maxZ = Math.max(...sorted.map((e) => e.z_index))
+          const minZ = Math.min(...sorted.map((e) => e.z_index))
+          let newZ: number | null = null
+          if (e.key === "]") {
+            const above = sorted[idx + 1]
+            newZ = above ? above.z_index + 0.5 : maxZ
+          } else {
+            const below = sorted[idx - 1]
+            newZ = below ? below.z_index - 0.5 : minZ
+          }
+          if (newZ !== null && newZ !== el.z_index) {
+            updateElementPosition(docId, slideN, el.id, { z_index: newZ })
+              .then((updated) => {
+                setElements((prev) => prev.map((e) => e.id === el.id ? updated : e))
+                onSelectElement(updated)
+                onZIndexChange?.(el.id)
+              })
+              .catch(() => {})
+          }
+        }
       }
       // Tab / Shift+Tab — cycle through elements
       if (e.key === "Tab") {
@@ -323,9 +369,12 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
   return (
     <CanvasContext.Provider value={{ containerRef, slideWidthIn, slideHeightIn }}>
       <div
-        className="flex flex-col items-center justify-center w-full h-full p-6 bg-base select-none overflow-auto"
+        className="relative flex flex-col items-center justify-center w-full h-full p-6 bg-base select-none overflow-auto"
         onWheel={handleWheel}
       >
+        {/* floating zoom control — bottom-right, like Figma / Keynote */}
+        <ZoomControl zoom={zoom} setZoom={setZoom} />
+
         {/* canvas wrapper — maintains slide aspect ratio */}
         <div
           className="relative shadow-2xl shrink-0"
@@ -336,6 +385,11 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
             overflow: rulerOn ? "visible" : "hidden",
           }}
           onClick={handleDeselect}
+          onContextMenu={(e) => {
+            if ((e.target as Element).closest("[data-element]")) return
+            e.preventDefault()
+            onSlideContextMenu?.(e.clientX, e.clientY)
+          }}
         >
           {/* rulers */}
           {rulerOn && slideWidthIn > 0 && slideHeightIn > 0 && (() => {
@@ -393,9 +447,28 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
               </>
             )
           })()}
+          {/* SVG filter defs for color blindness simulation */}
+          <svg width="0" height="0" className="absolute" aria-hidden="true">
+            <defs>
+              <filter id="percy-cb-protanopia" colorInterpolationFilters="linearRGB">
+                <feColorMatrix type="matrix" values="0.567 0.433 0 0 0  0.558 0.442 0 0 0  0 0.242 0.758 0 0  0 0 0 1 0" />
+              </filter>
+              <filter id="percy-cb-deuteranopia" colorInterpolationFilters="linearRGB">
+                <feColorMatrix type="matrix" values="0.625 0.375 0 0 0  0.7 0.3 0 0 0  0 0.3 0.7 0 0  0 0 0 1 0" />
+              </filter>
+              <filter id="percy-cb-tritanopia" colorInterpolationFilters="linearRGB">
+                <feColorMatrix type="matrix" values="0.95 0.05 0 0 0  0 0.433 0.567 0 0  0 0.475 0.525 0 0  0 0 0 1 0" />
+              </filter>
+              <filter id="percy-cb-achromatopsia" colorInterpolationFilters="linearRGB">
+                <feColorMatrix type="matrix" values="0.299 0.587 0.114 0 0  0.299 0.587 0.114 0 0  0.299 0.587 0.114 0 0  0 0 0 1 0" />
+              </filter>
+            </defs>
+          </svg>
+
           <div
             ref={containerRef}
             className="absolute inset-0"
+            style={colorBlindMode ? { filter: `url(#percy-cb-${colorBlindMode})` } : undefined}
             onPointerDown={handleCanvasPointerDown}
             onPointerMove={handleCanvasPointerMove}
             onPointerUp={handleCanvasPointerUp}
@@ -407,13 +480,13 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
             {(dragOver || uploading) && (
               <div className="absolute inset-0 z-[99000] flex items-center justify-center pointer-events-none"
                 style={{ background: "rgba(99,102,241,0.15)", border: "3px dashed rgba(99,102,241,0.8)" }}>
-                <span className="text-indigo-300 text-sm font-semibold bg-black/60 px-4 py-2 rounded-lg">
+                <span className="text-paper text-sm font-semibold bg-black/60 px-4 py-2 rounded-lg">
                   {uploading ? "Uploading…" : "Drop image to insert"}
                 </span>
               </div>
             )}
             {/* slide background — use document background color or white */}
-            <div className="absolute inset-0" style={{ background: bgColor ?? "#FFFFFF" }} />
+            <div className="absolute inset-0" style={{ background: bgColor ?? "#FFFFFF", zIndex: 0 }} />
 
             {/* grid overlay */}
             {gridOn && slideWidthIn > 0 && slideHeightIn > 0 && (
@@ -480,6 +553,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
                 onInlineEdit={(id) => { setInlineEditId(id) }}
                 onContextMenu={(id, x, y) => setCtxMenu({ id, x, y })}
                 onDragInfo={setDragInfo}
+                hasConnect={connectIds?.has(el.id) ?? false}
               />
             ))}
             {/* multi-select bounding box */}
@@ -552,6 +626,14 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
               </div>
             )}
           </div>
+
+          {/* annotation overlay */}
+          {annotating && (
+            <AnnotationOverlay
+              slideN={slideN}
+              onClose={() => setAnnotating(false)}
+            />
+          )}
         </div>
 
         {/* element context menu */}
@@ -575,11 +657,20 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
           }
 
           const items: ({ label: string; action: () => void; danger?: boolean; dim?: boolean } | null)[] = [
+            { label: "⚙ Edit Connect…", action: () => { onEditConnect?.(el.id); setCtxMenu(null) } },
+            null,
             { label: "Duplicate", action: () => { onDuplicateElement?.(el.id); setCtxMenu(null) } },
             { label: "Delete",    action: () => { onDeleteElement?.(el.id); setCtxMenu(null) }, danger: true },
             null,
             { label: el.locked ? "Unlock" : "Lock", action: () => { onToggleLockElement?.(el.id, !el.locked); setCtxMenu(null) } },
             { label: el.hidden ? "Show" : "Hide",   action: () => { onToggleHiddenElement?.(el.id, !el.hidden); setCtxMenu(null) } },
+            null,
+            selectedIds.size > 1 && onGroupElements
+              ? { label: `Group ${selectedIds.size} Elements`, action: () => { onGroupElements(); setCtxMenu(null) } }
+              : null,
+            el.type === "BridgeGroup" && onUngroupElement
+              ? { label: "Ungroup", action: () => { onUngroupElement(el.id); setCtxMenu(null) } }
+              : null,
             null,
             { label: "Bring to Front",  action: () => changeZ(maxZ + 1), dim: el.z_index === maxZ },
             { label: "Bring Forward",   action: () => { const above = sorted[idx + 1]; if (above) changeZ(above.z_index + 0.5); else setCtxMenu(null) }, dim: idx >= sorted.length - 1 },
@@ -621,6 +712,131 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
                   </button>
                 )
               )}
+              <div className="border-t border-edge/50 my-1" />
+              <button
+                onClick={() => {
+                  broadcastElement(docId, slideN, el.id)
+                    .then((r) => { onBroadcastElement?.(r.pushed_to) })
+                    .catch((err) => console.error("broadcast failed:", err))
+                  setCtxMenu(null)
+                }}
+                title="Copy this element to every other slide at the same position"
+                className="w-full text-left px-3 py-1.5 hover:bg-sky-500/10 hover:text-sky-300 transition-colors text-slate-300"
+              >
+                ⊕ Push to all slides
+              </button>
+              {onSplitElement && (el.type === "BridgeText" || el.type === "BridgeShape" || el.type === "BridgeFreeform") && (
+                <>
+                  <button
+                    onClick={() => { onSplitElement(el.id); setCtxMenu(null) }}
+                    title="Split each paragraph of this element onto its own new slide"
+                    className="w-full text-left px-3 py-1.5 hover:bg-paper/10 hover:text-paper transition-colors text-slate-300"
+                  >
+                    ⊗ Split to slides
+                  </button>
+                </>
+              )}
+              <div className="border-t border-edge/50 my-1" />
+              {/* AI Rewrite */}
+              {rewriteInput?.id === el.id ? (
+                <div className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
+                  <div className="text-[10px] text-muted mb-1">Rewrite instruction</div>
+                  <div className="flex gap-1">
+                    <input
+                      autoFocus
+                      value={rewriteInput.instruction}
+                      onChange={(e) => setRewriteInput((r) => r ? { ...r, instruction: e.target.value } : r)}
+                      onKeyDown={(e) => {
+                        e.stopPropagation()
+                        if (e.key === "Enter" && rewriteInput.instruction.trim() && !rewriteInput.busy) {
+                          setRewriteInput((r) => r ? { ...r, busy: true } : r)
+                          rewriteElementText(docId, slideN, el.id, rewriteInput.instruction)
+                            .then(() => {
+                              setRenderKeys((prev) => ({ ...prev, [el.id]: (prev[el.id] ?? 0) + 1 }))
+                              onZIndexChange?.(el.id)
+                              setCtxMenu(null)
+                              setRewriteInput(null)
+                            })
+                            .catch((err) => { console.error("rewrite failed:", err); setRewriteInput((r) => r ? { ...r, busy: false } : r) })
+                        }
+                        if (e.key === "Escape") { setRewriteInput(null) }
+                      }}
+                      placeholder="e.g. make shorter, formal tone…"
+                      className="flex-1 text-[11px] bg-base border border-edge rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-accent"
+                    />
+                    <button
+                      disabled={!rewriteInput.instruction.trim() || rewriteInput.busy}
+                      onClick={() => {
+                        if (!rewriteInput.instruction.trim()) return
+                        setRewriteInput((r) => r ? { ...r, busy: true } : r)
+                        rewriteElementText(docId, slideN, el.id, rewriteInput.instruction)
+                          .then(() => {
+                            setRenderKeys((prev) => ({ ...prev, [el.id]: (prev[el.id] ?? 0) + 1 }))
+                            onZIndexChange?.(el.id)
+                            setCtxMenu(null)
+                            setRewriteInput(null)
+                          })
+                          .catch((err) => { console.error("rewrite failed:", err); setRewriteInput((r) => r ? { ...r, busy: false } : r) })
+                      }}
+                      className="px-2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30 transition-colors disabled:opacity-40 text-[10px]"
+                    >
+                      {rewriteInput.busy ? "…" : "↵"}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => { setRewriteInput({ id: el.id, instruction: "", busy: false }) }}
+                  title="Use AI to rewrite this element's text"
+                  className="w-full text-left px-3 py-1.5 hover:bg-emerald-500/10 hover:text-emerald-300 transition-colors text-slate-300"
+                >
+                  ✨ AI Rewrite…
+                </button>
+              )}
+              {/* Talking Points */}
+              {(el.type === "BridgeText" || el.type === "BridgeShape" || el.type === "BridgeFreeform") && (
+                talkingPoints?.id === el.id ? (
+                  <div className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[10px] text-amber-300/80">Talking Points</span>
+                      <button onClick={() => setTalkingPoints(null)} className="text-[10px] text-white/30 hover:text-white/60">×</button>
+                    </div>
+                    {talkingPoints.loading ? (
+                      <div className="text-[10px] text-white/40 py-1 animate-pulse">Generating…</div>
+                    ) : (
+                      <ul className="space-y-1">
+                        {talkingPoints.points.map((pt, i) => (
+                          <li key={i} className="text-[10px] text-white/70 leading-relaxed pl-2 border-l border-amber-400/30">
+                            {pt}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setTalkingPoints({ id: el.id, points: [], loading: true })
+                      generateTalkingPoints(docId, slideN, el.id)
+                        .then((r) => setTalkingPoints({ id: el.id, points: r.points, loading: false }))
+                        .catch(() => setTalkingPoints(null))
+                    }}
+                    title="Generate talking points for this element's text"
+                    className="w-full text-left px-3 py-1.5 hover:bg-amber-500/10 hover:text-amber-300 transition-colors text-slate-300"
+                  >
+                    💬 Talking Points…
+                  </button>
+                )
+              )}
+              <div className="border-t border-edge/50 my-1" />
+              <a
+                href={elementPngUrl(docId, slideN, el.id)}
+                download={`${el.name.replace(/[^a-z0-9]/gi, "_")}.png`}
+                onClick={() => setCtxMenu(null)}
+                className="w-full text-left px-3 py-1.5 hover:bg-white/10 transition-colors text-slate-300 flex items-center gap-1.5 no-underline"
+              >
+                ↓ Download as PNG
+              </a>
             </div>
           )
         })()}
@@ -654,7 +870,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
             </span>
           )}
           {selectedIds.size > 1 && (
-            <span className="text-indigo-300">
+            <span className="text-paper">
               · {selectedIds.size} elements selected
             </span>
           )}
@@ -663,7 +879,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
             title="Toggle grid overlay (0.25 in)"
             className={`px-2 py-0.5 rounded border text-[10px] transition-colors ${
               gridOn
-                ? "bg-indigo-500/30 text-indigo-300 border-indigo-500/40"
+                ? "bg-paper/30 text-paper border-paper/40"
                 : "bg-white/5 border-edge hover:bg-white/10"
             }`}
           >
@@ -674,7 +890,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
             title="Toggle snap to grid"
             className={`px-2 py-0.5 rounded border text-[10px] transition-colors ${
               snapOn
-                ? "bg-indigo-500/30 text-indigo-300 border-indigo-500/40"
+                ? "bg-paper/30 text-paper border-paper/40"
                 : "bg-white/5 border-edge hover:bg-white/10"
             }`}
           >
@@ -685,7 +901,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
             title="Toggle rulers (R)"
             className={`px-2 py-0.5 rounded border text-[10px] transition-colors ${
               rulerOn
-                ? "bg-indigo-500/30 text-indigo-300 border-indigo-500/40"
+                ? "bg-paper/30 text-paper border-paper/40"
                 : "bg-white/5 border-edge hover:bg-white/10"
             }`}
           >
@@ -704,30 +920,90 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
               {focusMode ? "⊙ Focus" : "Focus"}
             </button>
           )}
-          <span className="ml-auto flex items-center gap-1">
-            <button
-              onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))}
-              title="Zoom out (Ctrl+scroll)"
-              className="w-5 h-5 flex items-center justify-center rounded hover:bg-white/10 transition-colors"
-            >−</button>
-            <span
-              className="font-mono w-10 text-center cursor-pointer"
-              onClick={() => setZoom(1)}
-              title="Click to reset to 100%"
-            >{Math.round(zoom * 100)}%</span>
-            <button
-              onClick={() => setZoom((z) => Math.min(4, z + 0.25))}
-              title="Zoom in (Ctrl+scroll)"
-              className="w-5 h-5 flex items-center justify-center rounded hover:bg-white/10 transition-colors"
-            >+</button>
-            <button
-              onClick={() => setZoom(1)}
-              title="Fit slide (100%)"
-              className="text-[10px] px-1.5 rounded hover:bg-white/10 transition-colors text-muted"
-            >Fit</button>
-          </span>
+          <button
+            onClick={() => setAnnotating((a) => !a)}
+            title="Toggle annotation/markup mode"
+            className={`px-2 py-0.5 rounded border text-[10px] transition-colors ${
+              annotating
+                ? "bg-red-500/30 text-red-300 border-red-500/40"
+                : "bg-white/5 border-edge hover:bg-white/10"
+            }`}
+          >
+            {annotating ? "✏ Annotate" : "Annotate"}
+          </button>
+          {/* Zoom moved to a floating control at the canvas corner — see ZoomControl. */}
         </div>
       </div>
     </CanvasContext.Provider>
+  )
+}
+
+// ── Floating zoom control ────────────────────────────────────────────────────
+// Lives at the bottom-right of the canvas area, à la Figma / Keynote.
+
+const ZOOM_PRESETS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4] as const
+
+function ZoomControl({ zoom, setZoom }: { zoom: number; setZoom: (fn: (z: number) => number) => void }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener("mousedown", onDoc)
+    return () => document.removeEventListener("mousedown", onDoc)
+  }, [open])
+
+  return (
+    <div
+      ref={ref}
+      className="absolute bottom-3 right-3 z-30 flex items-center bg-surface/95 border border-edge shadow-lg backdrop-blur-sm"
+      style={{ background: "rgb(var(--surface))" }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <button
+        onClick={() => setZoom((z) => Math.max(0.1, z - 0.1))}
+        title="Zoom out (⌘−)"
+        className="w-7 h-7 flex items-center justify-center text-paper hover:bg-paper/10 transition-colors text-base"
+      >−</button>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="font-mono text-[11px] text-paper px-2 h-7 hover:bg-paper/5 transition-colors min-w-[60px] tabular-nums"
+        title="Set zoom level"
+      >
+        {Math.round(zoom * 100)}%
+      </button>
+      <button
+        onClick={() => setZoom((z) => Math.min(8, z + 0.1))}
+        title="Zoom in (⌘+)"
+        className="w-7 h-7 flex items-center justify-center text-paper hover:bg-paper/10 transition-colors text-base"
+      >+</button>
+      <div className="w-px h-5 bg-edge mx-1" />
+      <button
+        onClick={() => setZoom(() => 1)}
+        title="Fit (⌘0)"
+        className="px-2 h-7 text-[10px] tracking-[0.14em] uppercase text-muted hover:text-paper hover:bg-paper/5 transition-colors"
+      >Fit</button>
+
+      {open && (
+        <div
+          className="absolute bottom-full right-0 mb-1 bg-surface border border-edge shadow-2xl min-w-[120px]"
+          style={{ background: "rgb(var(--surface))" }}
+        >
+          {ZOOM_PRESETS.map((p) => (
+            <button
+              key={p}
+              onClick={() => { setZoom(() => p); setOpen(false) }}
+              className={`w-full text-left px-3 py-1.5 text-[11px] font-mono hover:bg-paper/10 transition-colors ${
+                Math.abs(zoom - p) < 0.01 ? "text-paper bg-paper/5" : "text-muted"
+              }`}
+            >
+              {Math.round(p * 100)}%
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }

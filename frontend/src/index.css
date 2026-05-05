@@ -2,30 +2,103 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Theme variables — Suit-and-Tie monochrome ────────────────────────────────
+ *
+ * Two themes share the same vocabulary; only the values change.
+ *
+ * Tokens are space-separated RGB triples so Tailwind's opacity modifier
+ * (`bg-paper/10`, `text-muted/70`, etc.) works via `rgb(var(--token) / <alpha-value>)`.
+ *
+ *   ink       primary background surface
+ *   surface   slightly inset panel surface
+ *   paper     primary text / foreground
+ *   muted     secondary text
+ *   edge      hairline border (rgba — special, set as full color)
+ *   champagne single restrained accent
+ *   cream     warm off-white tint
+ *   silver    cool light gray
+ *   sage / ochre / brick — muted status tones
+ *   verdigris               cool accent — copper-patina teal, our second-string color
+ *                           (used for primary chart series, callouts, "look here" moments)
+ *
+ * The default theme is .theme-dark (Gatsby evening).
+ * Apply .theme-light on <html> to swap to paper-on-ink.
+ */
+
+:root, .theme-dark {
+  --ink:               10 10 10;
+  --base:              10 10 10;
+  --surface:           17 17 17;
+  --paper:             245 245 240;
+  --muted:             138 138 133;
+  --edge:              rgba(245, 245, 240, 0.10);   /* used as full color, not via opacity modifier */
+  --champagne:         232 201 122;
+  --champagne-light:   240 219 153;
+  --cream:             240 232 216;
+  --silver:            184 184 179;
+  --sage:              138 160 122;
+  --ochre:             200 169 110;
+  --brick:             184 88 66;
+  --verdigris:         100 162 152;     /* patina teal — copper/bronze oxidized green, our cool accent */
+  --verdigris-light:   132 192 182;
+}
+
+.theme-light {
+  --ink:               248 246 239;
+  --base:              248 246 239;
+  --surface:           255 255 255;
+  --paper:             26 26 24;
+  --muted:             106 106 100;
+  --edge:              rgba(26, 26, 24, 0.12);
+  --champagne:         176 136 56;
+  --champagne-light:   198 157 74;
+  --cream:             239 231 211;
+  --silver:            154 154 147;
+  --sage:              106 128 89;
+  --ochre:             160 127 74;
+  --brick:             151 64 46;
+  --verdigris:         46 110 102;
+  --verdigris-light:   72 138 128;
+}
+
 @layer base {
   * { box-sizing: border-box; }
   html, body, #root {
     height: 100%;
     margin: 0;
     padding: 0;
-    background: #0F1117;
-    color: #E2E8F0;
+    background: rgb(var(--ink));
+    color: rgb(var(--paper));
     font-family: Inter, system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
+  body { transition: background-color 220ms ease, color 220ms ease; }
 }
 
 @layer components {
   .btn-xs {
     @apply flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-edge
-           text-slate-400 hover:text-slate-200 hover:border-slate-500 hover:bg-white/10
+           text-muted hover:text-paper hover:bg-paper/5
            disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0;
   }
+
+  /* Wordmark — used for the Percy logotype across the app. Tracked uppercase
+     in semibold weight, paper-cream. Always feels like a calling card. */
+  .wordmark {
+    font-family: Inter, system-ui, sans-serif;
+    font-weight: 600;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: rgb(var(--paper));
+  }
+
+  .hairline { border-color: var(--edge); }
 }
 
 @layer utilities {
   .scrollbar-thin::-webkit-scrollbar { width: 4px; height: 4px; }
   .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
-  .scrollbar-thin::-webkit-scrollbar-thumb { background: #2D3048; border-radius: 2px; }
-  .scrollbar-thin::-webkit-scrollbar-thumb:hover { background: #404460; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 2px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover { background: rgb(var(--silver)); }
 }

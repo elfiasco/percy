@@ -23,10 +23,10 @@ const TYPE_LABEL: Record<string, string> = {
 }
 
 const TYPE_COLOR: Record<string, string> = {
-  BridgeShape:     "bg-indigo-500",
+  BridgeShape:     "bg-paper",
   BridgeText:      "bg-green-500",
   BridgeChart:     "bg-amber-500",
-  BridgeTable:     "bg-purple-500",
+  BridgeTable:     "bg-paper",
   BridgeImage:     "bg-pink-500",
   BridgeFreeform:  "bg-cyan-500",
   BridgeConnector: "bg-slate-400",
@@ -56,7 +56,7 @@ export default function DocStatsModal({ docId, onClose }: Props) {
       onClick={onClose}
     >
       <div
-        className="bg-surface border border-edge rounded-xl shadow-2xl w-[380px]"
+        className="bg-surface border border-edge rounded-xl shadow-2xl w-[420px] max-h-[85vh] overflow-y-auto scrollbar-thin"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-3 border-b border-edge">
@@ -69,14 +69,15 @@ export default function DocStatsModal({ docId, onClose }: Props) {
         ) : stats ? (
           <div className="p-5 space-y-4">
             {/* summary row */}
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-4 gap-2">
               {[
                 { label: "Slides",   value: stats.slide_count },
                 { label: "Elements", value: stats.total_elements },
                 { label: "Words",    value: stats.word_count },
+                { label: "Hidden",   value: stats.hidden_count ?? 0 },
               ].map(({ label, value }) => (
                 <div key={label} className="bg-base/60 rounded-lg p-3 text-center">
-                  <div className="text-2xl font-bold text-slate-200">{value.toLocaleString()}</div>
+                  <div className="text-xl font-bold text-slate-200">{value.toLocaleString()}</div>
                   <div className="text-[10px] text-muted mt-0.5">{label}</div>
                 </div>
               ))}
@@ -88,7 +89,7 @@ export default function DocStatsModal({ docId, onClose }: Props) {
               const minMins = Math.max(1, Math.floor(totalWords / 130))
               const maxMins = Math.max(1, Math.ceil(totalWords / 100))
               return (
-                <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-lg px-4 py-3 flex items-center gap-3">
+                <div className="bg-paper/10 border border-paper/20 rounded-lg px-4 py-3 flex items-center gap-3">
                   <span className="text-2xl">⏱</span>
                   <div>
                     <div className="text-sm font-semibold text-slate-200">{minMins}–{maxMins} min</div>
@@ -99,6 +100,71 @@ export default function DocStatsModal({ docId, onClose }: Props) {
                 </div>
               )
             })()}
+
+            {/* notes coverage */}
+            {stats.slides_with_notes !== undefined && (
+              <div className="bg-base/60 rounded-lg px-4 py-3">
+                <div className="text-[10px] text-muted uppercase tracking-widest mb-2">Notes Coverage</div>
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 bg-white/10 rounded-full h-2">
+                    <div
+                      className={`h-2 rounded-full transition-all ${
+                        (stats.notes_coverage_pct ?? 0) >= 80 ? "bg-emerald-500" :
+                        (stats.notes_coverage_pct ?? 0) >= 40 ? "bg-amber-500" : "bg-red-500"
+                      }`}
+                      style={{ width: `${stats.notes_coverage_pct ?? 0}%` }}
+                    />
+                  </div>
+                  <span className="text-xs font-mono text-slate-300 shrink-0">
+                    {stats.slides_with_notes} / {stats.slide_count} slides ({stats.notes_coverage_pct}%)
+                  </span>
+                </div>
+                {stats.section_count !== undefined && stats.section_count > 0 && (
+                  <div className="mt-2 text-[10px] text-paper/70">
+                    {stats.section_count} section{stats.section_count !== 1 ? "s" : ""}: {(stats.sections ?? []).join(", ")}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ratings distribution */}
+            {stats.rated_count !== undefined && stats.rated_count > 0 && (
+              <div>
+                <div className="text-[10px] text-muted uppercase tracking-widest mb-2">
+                  Ratings ({stats.rated_count} of {stats.slide_count} rated)
+                </div>
+                <div className="space-y-1">
+                  {[5, 4, 3, 2, 1].map((star) => {
+                    const count = (stats.ratings_distribution ?? {})[star] ?? 0
+                    const pct = stats.rated_count! > 0 ? Math.round((count / stats.rated_count!) * 100) : 0
+                    return (
+                      <div key={star} className="flex items-center gap-2">
+                        <span className="text-[10px] text-amber-400 w-10 shrink-0">{"★".repeat(star)}</span>
+                        <div className="flex-1 bg-white/10 rounded-full h-1.5">
+                          <div className="bg-amber-400/60 h-1.5 rounded-full" style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="text-[10px] text-muted font-mono w-6 text-right">{count}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* sections breakdown */}
+            {stats.sections_with_counts && Object.keys(stats.sections_with_counts).length > 0 && (
+              <div>
+                <div className="text-[10px] text-muted uppercase tracking-widest mb-2">Sections</div>
+                <div className="space-y-1">
+                  {Object.entries(stats.sections_with_counts).map(([name, count]) => (
+                    <div key={name} className="flex items-center justify-between py-0.5 border-b border-edge/20 last:border-0">
+                      <span className="text-xs text-paper/80 truncate">§ {name}</span>
+                      <span className="text-[10px] text-muted/60 font-mono shrink-0 ml-2">{count}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* element type breakdown */}
             {Object.keys(stats.type_counts).length > 0 && (

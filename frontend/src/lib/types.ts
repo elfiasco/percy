@@ -16,6 +16,7 @@ export interface DocInfo {
   has_rebuild: boolean
   has_originals: boolean
   has_rebuilt_renders?: boolean
+  modified_at?: number | null
   grade_summary?: GradeSummary
   diagnostic_summary?: DiagnosticSummary
   grades?: Record<number, Grade>

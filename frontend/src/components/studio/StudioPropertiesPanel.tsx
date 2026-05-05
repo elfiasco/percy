@@ -1,8 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import type { StudioElement, ElementStyleData } from "../../lib/studioTypes"
-import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, setAllSlidesBackground, setGradientBackground, replaceImage, fetchThemeColors, fetchDocStats, setSlideBackgroundImage, bulkUpdateStyle, setSlideTransition, fetchSlideTransitions, setElementAnimation, generateAltText } from "../../lib/studioApi"
+import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, setAllSlidesBackground, setGradientBackground, replaceImage, fetchThemeColors, fetchDocStats, setSlideBackgroundImage, bulkUpdateStyle, setSlideTransition, fetchSlideTransitions, setElementAnimation, generateAltText, elementPngUrl } from "../../lib/studioApi"
 import type { DocStats } from "../../lib/studioApi"
 import StudioTextPanel from "./StudioTextPanel"
+import ChartEditorPanel from "./ChartEditorPanel"
+import TableEditorPanel from "./TableEditorPanel"
+import ConnectorEditorPanel from "./ConnectorEditorPanel"
 
 const TYPE_COLOR: Record<string, string> = {
   BridgeShape:     "#6366F1",
@@ -203,6 +206,32 @@ function PositionTab({ element, docId, slideN, onCommit }: PositionTabProps) {
           </button>
         </div>
       </FieldRow>
+      <FieldRow label="Flip">
+        <div className="flex gap-1">
+          <button
+            onClick={() => updateElementPosition(docId, slideN, element.id, { flip_h: !element.flip_h }).then(onCommit)}
+            title="Flip horizontally"
+            className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
+              element.flip_h
+                ? "bg-paper/20 text-paper border-paper/40"
+                : "bg-white/5 text-muted hover:bg-white/10 hover:text-slate-200 border-edge"
+            }`}
+          >
+            ↔ H
+          </button>
+          <button
+            onClick={() => updateElementPosition(docId, slideN, element.id, { flip_v: !element.flip_v }).then(onCommit)}
+            title="Flip vertically"
+            className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
+              element.flip_v
+                ? "bg-paper/20 text-paper border-paper/40"
+                : "bg-white/5 text-muted hover:bg-white/10 hover:text-slate-200 border-edge"
+            }`}
+          >
+            ↕ V
+          </button>
+        </div>
+      </FieldRow>
 
       <SectionHead title="Stack" />
       <div className="flex gap-1 mb-2">
@@ -276,7 +305,7 @@ function PositionTab({ element, docId, slideN, onCommit }: PositionTabProps) {
               }}
               className={`text-[10px] px-1.5 py-0.5 rounded border capitalize transition-colors flex items-center gap-0.5 ${
                 (element.animation ?? "none") === anim
-                  ? "bg-violet-500/30 text-violet-300 border-violet-500/40"
+                  ? "bg-paper/30 text-paper border-paper/40"
                   : "bg-white/5 text-muted border-edge hover:bg-white/10 hover:text-slate-300"
               }`}
               title={`${anim} entrance animation (used in HTML export)`}
@@ -306,6 +335,18 @@ function PositionTab({ element, docId, slideN, onCommit }: PositionTabProps) {
                      text-slate-200 focus:outline-none focus:border-accent"
         />
       </FieldRow>
+
+      <SectionHead title="Export" />
+      <a
+        href={elementPngUrl(docId, slideN, element.id)}
+        download={`element-${element.id.slice(0, 8)}.png`}
+        title="Download this element rendered as a transparent PNG"
+        className="flex items-center gap-1.5 text-xs px-2 py-1.5 rounded border border-edge
+                   bg-white/5 text-muted hover:text-slate-200 hover:bg-white/10 transition-colors
+                   no-underline w-full"
+      >
+        ↓ Download as PNG
+      </a>
 
       <div className="mt-4 text-[10px] text-muted/60 leading-relaxed">
         Drag to move · Handles to resize · Arrow keys to nudge · Shift×10
@@ -546,9 +587,29 @@ function StyleTab({ element, docId, slideN, onCommit }: StyleTabProps) {
         </>
       )}
 
-      {/* Image crop */}
+      {/* Image-specific controls: flip, crop, replace, alt */}
       {showImage && (
         <>
+          <SectionHead title="Flip" />
+          <FieldRow label="Horizontal">
+            <Toggle
+              on={!!element.flip_h}
+              onChange={async (v) => {
+                try { await updateElementPosition(docId, slideN, element.id, { flip_h: v }); onCommit() }
+                catch (e) { console.error("flip_h failed:", e) }
+              }}
+            />
+          </FieldRow>
+          <FieldRow label="Vertical">
+            <Toggle
+              on={!!element.flip_v}
+              onChange={async (v) => {
+                try { await updateElementPosition(docId, slideN, element.id, { flip_v: v }); onCommit() }
+                catch (e) { console.error("flip_v failed:", e) }
+              }}
+            />
+          </FieldRow>
+
           <SectionHead title="Crop (0–100%)" />
           {(["crop_left", "crop_right", "crop_top", "crop_bottom"] as const).map((key) => {
             const label = key.replace("crop_", "").charAt(0).toUpperCase() + key.slice(5)
@@ -633,13 +694,13 @@ function AltTextButton({ docId, slideN, elementId, onGenerated }: {
         onClick={handleGenerate}
         disabled={loading}
         title="Use AI to generate descriptive alt text for this image (updates element name)"
-        className="w-full flex items-center justify-center gap-1.5 text-xs px-2 py-1.5 rounded border border-indigo-500/30
-                   bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20 transition-colors disabled:opacity-40"
+        className="w-full flex items-center justify-center gap-1.5 text-xs px-2 py-1.5 rounded border border-paper/30
+                   bg-paper/10 text-paper hover:bg-paper/20 transition-colors disabled:opacity-40"
       >
         {loading ? "Generating…" : "✨ Generate Alt Text"}
       </button>
       {result && (
-        <p className={`text-[10px] mt-1 ${result.startsWith("Error") ? "text-bad" : "text-indigo-300/70"}`}>
+        <p className={`text-[10px] mt-1 ${result.startsWith("Error") ? "text-bad" : "text-paper/70"}`}>
           {result}
         </p>
       )}
@@ -710,8 +771,9 @@ function SlidePropertiesPanel({ docId, slideN, onCommit }: { docId: string; slid
 
   return (
     <div className="flex-1 flex flex-col p-3">
-      <p className="text-xs text-muted leading-relaxed mb-4">
-        Click an element on the canvas to select it, or configure slide properties below.
+      <p className="text-[11px] text-muted leading-relaxed mb-4">
+        Configure this slide's background, gradient, transition, or theme palette.
+        Click an element on the canvas to edit it directly.
       </p>
 
       <SectionHead title="Slide Background" />
@@ -886,7 +948,7 @@ function SlidePropertiesPanel({ docId, slideN, onCommit }: { docId: string; slid
               title={`${t} transition`}
               className={`text-[10px] px-1.5 py-0.5 rounded border capitalize transition-colors flex items-center gap-1 ${
                 slideTransition === t
-                  ? "bg-indigo-500/30 text-indigo-300 border-indigo-500/40"
+                  ? "bg-paper/30 text-paper border-paper/40"
                   : "bg-white/5 text-muted border-edge hover:bg-white/10 hover:text-slate-300"
               }`}
             >
@@ -915,38 +977,9 @@ function SlidePropertiesPanel({ docId, slideN, onCommit }: { docId: string; slid
         </>
       )}
 
-      {stats && (
-        <>
-          <SectionHead title="Presentation Stats" />
-          <div className="space-y-1 text-[11px]">
-            <div className="flex justify-between">
-              <span className="text-muted">Slides</span>
-              <span className="font-mono text-slate-300">{stats.slide_count}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted">Total elements</span>
-              <span className="font-mono text-slate-300">{stats.total_elements}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted">Word count</span>
-              <span className="font-mono text-slate-300">{stats.word_count.toLocaleString()}</span>
-            </div>
-          </div>
-          {Object.keys(stats.type_counts).length > 0 && (
-            <div className="mt-2 space-y-0.5">
-              {Object.entries(stats.type_counts)
-                .sort(([, a], [, b]) => b - a)
-                .map(([type, count]) => (
-                  <div key={type} className="flex items-center gap-1.5 text-[10px] text-muted">
-                    <span className="w-3 text-center">{TYPE_ICON_MAP[type] ?? "?"}</span>
-                    <span className="flex-1">{type.replace("Bridge", "")}</span>
-                    <span className="font-mono text-slate-400">{count}</span>
-                  </div>
-                ))}
-            </div>
-          )}
-        </>
-      )}
+      {/* Presentation stats moved to a popover off the slide-strip header — */}
+      {/* keeps the inspector focused on what's editable here. */}
+      {stats && null}
     </div>
   )
 }
@@ -962,19 +995,104 @@ interface Props {
   slideHeightIn: number
   docId: string
   onTextCommit: () => void
+  onEditConnect?: (elementId: string) => void
   onSelectElement?: (el: StudioElement) => void
   onDeleteElement?: (id: string) => void
   onToggleLock?: (id: string, locked: boolean) => void
   onToggleHidden?: (id: string, hidden: boolean) => void
+  collapsed?: boolean
+  onToggleCollapsed?: (collapsed: boolean) => void
 }
 
-type Tab = "position" | "style" | "text"
+type Tab = "position" | "style" | "text" | "chart" | "table" | "connector"
 type NoSelTab = "slide" | "elements"
+
+// ── Bridge binding status row (top of inspector) ─────────────────────────────
+
+import { fetchElementConnect, type ConnectScript } from "../../lib/studioApi"
+
+function BindingStatusRow({
+  docId, slideN, element, onEditConnect,
+}: {
+  docId: string
+  slideN: number
+  element: StudioElement
+  onEditConnect?: (elementId: string) => void
+}) {
+  const [connect, setConnect] = useState<ConnectScript | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    fetchElementConnect(docId, slideN, element.id)
+      .then((c) => { if (!cancelled) setConnect(c) })
+      .catch(() => { if (!cancelled) setConnect(null) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+  }, [docId, slideN, element.id])
+
+  const hasScript = !!(connect?.script && connect.script.trim().length > 0)
+  const lastRun   = connect?.updated_at && connect.updated_at > 0
+    ? new Date(connect.updated_at * 1000)
+    : null
+
+  return (
+    <div className="border border-edge/60 rounded-md bg-base/30 px-2 py-1.5 mb-2">
+      <div className="flex items-center justify-between text-[10px] mb-0.5">
+        <div className="flex items-center gap-1.5 uppercase tracking-[0.16em] text-muted/70">
+          <span className={`w-1.5 h-1.5 rounded-full ${hasScript ? "bg-emerald-400" : "bg-slate-600"}`} />
+          Binding
+        </div>
+        <span className="text-[10px] text-muted/60 font-mono">
+          {loading ? "…" : hasScript ? "active" : "none"}
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[10px] text-slate-400 truncate">
+          {hasScript
+            ? lastRun ? `Saved ${lastRun.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}` : "Connect attached"
+            : "No Python connect attached"}
+        </div>
+        <button
+          onClick={() => onEditConnect?.(element.id)}
+          disabled={!onEditConnect}
+          className="text-[10px] text-slate-200 hover:text-white px-1.5 py-0.5 rounded border border-edge hover:bg-white/8 disabled:opacity-40"
+        >
+          {hasScript ? "Edit Connect" : "Add Connect"}
+        </button>
+      </div>
+    </div>
+  )
+}
 
 export default function StudioPropertiesPanel({
   element, elements, multiSelectIds, slideN, slideWidthIn: _slideWidthIn, slideHeightIn: _slideHeightIn, docId, onTextCommit, onSelectElement,
-  onDeleteElement, onToggleLock, onToggleHidden,
+  onDeleteElement, onToggleLock, onToggleHidden, onEditConnect,
+  collapsed = false, onToggleCollapsed,
 }: Props) {
+  // Collapsed rail: just a 36px column with a chevron to expand. Mirrors
+  // the StudioAgent collapsed pattern so the right side feels consistent.
+  if (collapsed) {
+    const hasSel = !!element || (multiSelectIds && multiSelectIds.size > 1)
+    return (
+      <div className="w-9 shrink-0 border-l border-edge bg-surface flex flex-col items-center py-2 gap-2 select-none">
+        <button
+          onClick={() => onToggleCollapsed?.(false)}
+          title="Show properties"
+          className={`w-7 h-7 rounded-md border flex items-center justify-center text-base ${
+            hasSel
+              ? "bg-accent/20 text-accent border-accent/40 hover:bg-accent/30"
+              : "bg-white/5 text-muted border-edge hover:bg-white/10"
+          }`}
+        >
+          ◧
+        </button>
+        <div className="text-[8px] tracking-[0.18em] uppercase text-muted/70 [writing-mode:vertical-rl] rotate-180 mt-1">
+          Properties
+        </div>
+      </div>
+    )
+  }
   const [tab, setTab] = useState<Tab>("position")
   const [noSelTab, setNoSelTab] = useState<NoSelTab>("slide")
   const [elemCtxMenu, setElemCtxMenu] = useState<{ x: number; y: number; el: StudioElement } | null>(null)
@@ -993,11 +1111,19 @@ export default function StudioPropertiesPanel({
     setRenamingId(null)
   }, [renameVal, docId, slideN])
 
-  // reset to position when element changes
-  useEffect(() => { setTab("position") }, [element?.id])
+  // reset tab when element changes — typed editors default to their own tab
+  useEffect(() => {
+    if      (element?.type === "BridgeChart")     setTab("chart")
+    else if (element?.type === "BridgeTable")     setTab("table")
+    else if (element?.type === "BridgeConnector") setTab("connector")
+    else                                          setTab("position")
+  }, [element?.id, element?.type])
 
-  const showTextTab  = element ? TEXT_CAPABLE.has(element.type)  : false
-  const showStyleTab = element ? STYLE_CAPABLE.has(element.type) : false
+  const showTextTab      = element ? TEXT_CAPABLE.has(element.type)         : false
+  const showStyleTab     = element ? STYLE_CAPABLE.has(element.type)        : false
+  const showChartTab     = element ? element.type === "BridgeChart"         : false
+  const showTableTab     = element ? element.type === "BridgeTable"         : false
+  const showConnectorTab = element ? element.type === "BridgeConnector"     : false
 
   const color = element ? (TYPE_COLOR[element.type] ?? "#6366F1") : "#6366F1"
 
@@ -1027,19 +1153,38 @@ export default function StudioPropertiesPanel({
     <div className="w-64 shrink-0 border-l border-edge bg-surface flex flex-col">
       {/* ── header ──────────────────────────────────────────── */}
       <div className="shrink-0 border-b border-edge">
-        <div className="px-3 pt-3">
+        <div className="px-3 pt-3 relative">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="text-[9px] uppercase tracking-[0.18em] text-muted/70">Properties</div>
+            {onToggleCollapsed && (
+              <button
+                onClick={() => onToggleCollapsed(true)}
+                title="Hide properties"
+                className="text-muted hover:text-paper text-base leading-none px-1"
+              >◨</button>
+            )}
+          </div>
           {element ? (
-            <div className="flex items-center gap-2 mb-2">
-              <div className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: color }} />
-              <span className="text-sm font-semibold text-slate-200 truncate">{element.name}</span>
-            </div>
+            <>
+              <div className="flex items-center gap-2 mb-1">
+                <div className="w-2 h-2 rounded-sm shrink-0" style={{ background: color }} />
+                <span className="text-sm font-semibold text-slate-200 truncate">{element.name}</span>
+              </div>
+              <div className="text-[10px] text-muted/80 mb-2 font-mono">{element.type}</div>
+              <BindingStatusRow
+                docId={docId}
+                slideN={slideN}
+                element={element}
+                onEditConnect={onEditConnect}
+              />
+            </>
           ) : multiSelectIds && multiSelectIds.size > 1 ? (
             <div className="flex items-center gap-2 mb-2">
-              <div className="w-2.5 h-2.5 rounded-sm shrink-0 bg-indigo-400" />
-              <span className="text-sm font-semibold text-slate-200">{multiSelectIds.size} selected</span>
+              <div className="w-2 h-2 rounded-sm shrink-0 bg-slate-400" />
+              <span className="text-sm font-semibold text-slate-200">{multiSelectIds.size} elements selected</span>
             </div>
           ) : (
-            <div className="text-xs font-semibold text-slate-300 mb-2">Properties</div>
+            <div className="text-xs text-muted mb-2">No element selected</div>
           )}
         </div>
 
@@ -1061,9 +1206,12 @@ export default function StudioPropertiesPanel({
               </button>
             ))
           ) : (
-            (["position", "style", "text"] as Tab[]).map((t) => {
-              if (t === "text"  && !showTextTab)  return null
-              if (t === "style" && !showStyleTab) return null
+            (["chart", "table", "connector", "position", "style", "text"] as Tab[]).map((t) => {
+              if (t === "text"      && !showTextTab)      return null
+              if (t === "style"     && !showStyleTab)     return null
+              if (t === "chart"     && !showChartTab)     return null
+              if (t === "table"     && !showTableTab)     return null
+              if (t === "connector" && !showConnectorTab) return null
               return (
                 <button
                   key={t}
@@ -1125,8 +1273,8 @@ export default function StudioPropertiesPanel({
           <button
             onClick={handleBulkApply}
             disabled={bulkApplying || !Object.values(bulkApplyFields).some(Boolean)}
-            className="w-full text-xs py-1.5 rounded bg-indigo-500/20 text-indigo-300
-                       border border-indigo-500/30 hover:bg-indigo-500/30 transition-colors
+            className="w-full text-xs py-1.5 rounded bg-paper/20 text-paper
+                       border border-paper/30 hover:bg-paper/30 transition-colors
                        disabled:opacity-40"
           >
             {bulkApplying ? "Applying…" : `Apply to ${multiSelectIds.size} elements`}
@@ -1208,6 +1356,14 @@ export default function StudioPropertiesPanel({
                   >
                     {elemCtxMenu.el.hidden ? "👁 Show" : "🙈 Hide"}
                   </button>
+                  <a
+                    href={elementPngUrl(docId, slideN, elemCtxMenu.el.id)}
+                    download={`element-${elemCtxMenu.el.id.slice(0, 8)}.png`}
+                    onClick={() => setElemCtxMenu(null)}
+                    className="w-full text-left px-3 py-1.5 hover:bg-white/10 text-slate-300 flex items-center gap-1.5 no-underline"
+                  >
+                    ↓ Download as PNG
+                  </a>
                   <div className="border-t border-edge my-1" />
                   <button
                     className="w-full text-left px-3 py-1.5 hover:bg-red-900/30 text-bad"
@@ -1222,6 +1378,33 @@ export default function StudioPropertiesPanel({
         ) : (
           <SlidePropertiesPanel docId={docId} slideN={slideN} onCommit={onTextCommit} />
         )
+      ) : tab === "chart" && element && element.type === "BridgeChart" ? (
+        <div className="flex-1 min-h-0 flex flex-col">
+          <ChartEditorPanel
+            docId={docId}
+            slideN={slideN}
+            elementId={element.id}
+            onCommit={onTextCommit}
+          />
+        </div>
+      ) : tab === "table" && element && element.type === "BridgeTable" ? (
+        <div className="flex-1 min-h-0 flex flex-col">
+          <TableEditorPanel
+            docId={docId}
+            slideN={slideN}
+            elementId={element.id}
+            onCommit={onTextCommit}
+          />
+        </div>
+      ) : tab === "connector" && element && element.type === "BridgeConnector" ? (
+        <div className="flex-1 min-h-0 flex flex-col">
+          <ConnectorEditorPanel
+            docId={docId}
+            slideN={slideN}
+            elementId={element.id}
+            onCommit={onTextCommit}
+          />
+        </div>
       ) : tab === "position" && element ? (
         <div className="flex-1 min-h-0 flex flex-col">
           <PositionTab

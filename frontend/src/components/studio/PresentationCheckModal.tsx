@@ -22,6 +22,13 @@ const TYPE_LABEL: Record<string, string> = {
   no_text:           "No text content",
   too_many_elements: "Too many elements",
   missing_alt_text:  "Missing alt text",
+  notes_too_long:    "Notes too long",
+  small_font:        "Small font",
+  duplicate_title:   "Duplicate title",
+  too_much_text:     "Too much text",
+  empty_slide:       "Empty slide",
+  placeholder_text:  "Placeholder text",
+  no_sections:       "No sections",
 }
 
 export default function PresentationCheckModal({ docId, onClose, onJumpToSlide }: Props) {
@@ -106,7 +113,7 @@ export default function PresentationCheckModal({ docId, onClose, onJumpToSlide }
                 onClick={() => setFilterType(filterType === t ? null : t)}
                 className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
                   filterType === t
-                    ? "text-violet-300 border-violet-400/40 bg-violet-500/10"
+                    ? "text-paper border-paper/40 bg-paper/10"
                     : "text-muted border-edge hover:text-slate-300"
                 }`}
               >

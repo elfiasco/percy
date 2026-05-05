@@ -133,8 +133,8 @@ export default function ColorSwapPanel({ docId, onClose, onReplaced }: Props) {
               <button
                 onClick={handleReplace}
                 disabled={replacing || newColor === pickedOld}
-                className="w-full text-xs py-2 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30
-                           hover:bg-indigo-500/30 transition-colors disabled:opacity-40"
+                className="w-full text-xs py-2 rounded bg-paper/20 text-paper border border-paper/30
+                           hover:bg-paper/30 transition-colors disabled:opacity-40"
               >
                 {replacing ? "Replacing…" : `Replace ${pickedOld} → ${newColor}`}
               </button>

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import type { StudioElement } from "../../lib/studioTypes"
 import type { DocInfo } from "../../lib/types"
-import { exportPptxUrl, exportPdfUrl, exportPngZipUrl, notesExportUrl, notesHtmlExportUrl, exportHtmlUrl } from "../../lib/studioApi"
+import { exportPptxUrl, exportPdfUrl, exportPngZipUrl, notesExportUrl, notesHtmlExportUrl, notesPagesPdfUrl, exportHtmlUrl, exportMarkdownUrl, exportSubsetUrl, exportScriptUrl } from "../../lib/studioApi"
 
 const MULTI_ALIGN_BUTTONS = [
   { title: "Align left edges",          symbol: "⫷L", alignment: "left" },
@@ -87,6 +87,7 @@ const INSERT_SHAPES = [
 interface Props {
   doc: DocInfo
   slideN: number
+  onJumpToSlide?: (n: number) => void
   slideWidthIn: number
   slideHeightIn: number
   selectedElement: StudioElement | null
@@ -133,10 +134,28 @@ interface Props {
   onToggleComments?: () => void
   onImportSlides?: (file: File) => void
   onBulkFillColor?: (color: string) => void
+  onGenerateNotesBulk?: () => void
+  onFontSwap?: () => void
+  onNotesReview?: () => void
+  onTemplateVars?: () => void
+  onAgendaSlide?: () => void
+  onAIScore?: () => void
+  colorBlindMode?: string | null
+  onSetColorBlindMode?: (mode: string | null) => void
+  onSlideNumbers?: () => void
+  onWatermark?: () => void
+  onTransitions?: () => void
+  onOptimizeLayout?: (goal: "balanced" | "emphasis-title" | "compact" | "spacious") => void
+  optimizingLayout?: boolean
+  onCompare?: () => void
+  onGrammarCheck?: () => void
+  onThemeGen?: () => void
+  onVariation?: () => void
+  onTranslate?: () => void
 }
 
 export default function StudioToolbar({
-  doc, slideN, slideWidthIn, slideHeightIn, selectedElement,
+  doc, slideN, onJumpToSlide, slideWidthIn, slideHeightIn, selectedElement,
   onCommitPosition, onCommitZIndex,
   onDelete, onDuplicate, onInsertShape, onInsertImage,
   onRebuild, rebuilding,
@@ -169,12 +188,35 @@ export default function StudioToolbar({
   onToggleComments,
   onImportSlides,
   onBulkFillColor,
+  onGenerateNotesBulk,
+  onFontSwap,
+  onNotesReview,
+  onTemplateVars,
+  onAgendaSlide,
+  onAIScore,
+  colorBlindMode,
+  onSetColorBlindMode,
+  onSlideNumbers,
+  onWatermark,
+  onTransitions,
+  onOptimizeLayout,
+  optimizingLayout,
+  onCompare,
+  onGrammarCheck,
+  onThemeGen,
+  onVariation,
+  onTranslate,
 }: Props) {
   const importSlidesRef = useRef<HTMLInputElement>(null)
+  const [jumpEditing, setJumpEditing] = useState(false)
+  const [jumpVal, setJumpVal] = useState("")
+  const jumpInputRef = useRef<HTMLInputElement>(null)
   const [insertOpen, setInsertOpen] = useState(false)
   const [copyToOpen, setCopyToOpen] = useState(false)
   const [layoutOpen, setLayoutOpen] = useState(false)
   const [generateOpen, setGenerateOpen] = useState(false)
+  const [cbOpen, setCbOpen] = useState(false)
+  const [optimizeOpen, setOptimizeOpen] = useState(false)
   const [generatePrompt, setGeneratePrompt] = useState("")
 
   const LAYOUT_OPTIONS = [
@@ -235,6 +277,15 @@ export default function StudioToolbar({
 
   const disabled = !selectedElement
   const docName  = doc.name.replace(/\.pptx$/i, "")
+  const modifiedAgo = doc.modified_at
+    ? (() => {
+        const secs = Math.floor(Date.now() / 1000 - doc.modified_at!)
+        if (secs < 60) return "just now"
+        if (secs < 3600) return `${Math.floor(secs / 60)}m ago`
+        if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`
+        return `${Math.floor(secs / 86400)}d ago`
+      })()
+    : null
 
   return (
     <div className="h-10 shrink-0 flex items-center gap-0 px-3 border-b border-edge bg-surface select-none overflow-x-auto scrollbar-none">
@@ -245,7 +296,44 @@ export default function StudioToolbar({
         <span className="text-edge">|</span>
         <span className="text-slate-300 truncate max-w-[10rem]" title={doc.name}>{docName}</span>
         <span className="text-muted">·</span>
-        <span className="text-muted whitespace-nowrap">Slide {slideN} / {doc.slide_count}</span>
+        {jumpEditing ? (
+          <input
+            ref={jumpInputRef}
+            type="number"
+            min={1}
+            max={doc.slide_count}
+            value={jumpVal}
+            onChange={(e) => setJumpVal(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                const n = parseInt(jumpVal, 10)
+                if (!isNaN(n) && n >= 1 && n <= doc.slide_count) onJumpToSlide?.(n)
+                setJumpEditing(false)
+              }
+              if (e.key === "Escape") setJumpEditing(false)
+            }}
+            onBlur={() => setJumpEditing(false)}
+            autoFocus
+            className="w-12 text-xs font-mono bg-base border border-accent rounded px-1 py-0 text-slate-200
+                       focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+          />
+        ) : (
+          <button
+            className="text-muted whitespace-nowrap hover:text-slate-200 transition-colors"
+            title="Click to jump to a specific slide"
+            onClick={() => { setJumpVal(String(slideN)); setJumpEditing(true) }}
+          >
+            Slide {slideN} / {doc.slide_count}
+          </button>
+        )}
+        {modifiedAgo && (
+          <>
+            <span className="text-muted">·</span>
+            <span className="text-muted/50 text-[10px] whitespace-nowrap" title={`Modified at ${new Date((doc.modified_at!) * 1000).toLocaleTimeString()}`}>
+              {modifiedAgo}
+            </span>
+          </>
+        )}
       </div>
 
       <div className="w-px h-5 bg-edge mx-3 shrink-0" />
@@ -303,14 +391,14 @@ export default function StudioToolbar({
         <>
           <div className="w-px h-5 bg-edge mx-3 shrink-0" />
           <div className="flex items-center gap-0">
-            <span className="text-[10px] text-indigo-300 mr-1.5">Multi</span>
+            <span className="text-[10px] text-paper mr-1.5">Multi</span>
             {MULTI_ALIGN_BUTTONS.map(({ title, symbol, alignment }) => (
               <button
                 key={alignment}
                 title={title}
                 onClick={() => onAlignElements(alignment)}
                 className="w-5 h-6 flex items-center justify-center text-[9px] text-muted
-                           hover:text-indigo-300 hover:bg-indigo-500/10 rounded transition-colors font-mono"
+                           hover:text-paper hover:bg-paper/10 rounded transition-colors font-mono"
               >
                 {symbol.replace(/^[⫷⫸⇿]/, "")}
               </button>
@@ -319,8 +407,8 @@ export default function StudioToolbar({
               <button
                 title="Group selected elements (Ctrl+G won't conflict — this is a button)"
                 onClick={onGroupElements}
-                className="ml-1 text-[10px] px-1.5 py-0.5 rounded border border-indigo-500/40
-                           text-indigo-300 hover:bg-indigo-500/20 transition-colors"
+                className="ml-1 text-[10px] px-1.5 py-0.5 rounded border border-paper/40
+                           text-paper hover:bg-paper/20 transition-colors"
               >
                 ⊞ Group
               </button>
@@ -540,11 +628,11 @@ export default function StudioToolbar({
             disabled={rerenderingAll}
             title="Re-render all slide PNGs from current Bridge model"
             className="flex items-center gap-1.5 text-xs px-3 py-1 rounded
-                       bg-indigo-500/15 text-indigo-300 hover:bg-indigo-500/25 border border-indigo-500/25
+                       bg-paper/15 text-paper hover:bg-paper/25 border border-paper/25
                        transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {rerenderingAll && (
-              <span className="inline-block w-2.5 h-2.5 border border-indigo-300 border-t-transparent rounded-full animate-spin" />
+              <span className="inline-block w-2.5 h-2.5 border border-paper border-t-transparent rounded-full animate-spin" />
             )}
             ⟳ All
           </button>
@@ -606,6 +694,17 @@ export default function StudioToolbar({
         </a>
 
         <a
+          href={exportSubsetUrl(doc.doc_id, [slideN])}
+          download
+          title={`Export slide ${slideN} as its own PPTX file`}
+          className="flex items-center gap-1 text-xs px-3 py-1 rounded
+                     bg-teal-500/15 text-teal-300 hover:bg-teal-500/25 border border-teal-500/25
+                     transition-colors no-underline"
+        >
+          ↓ Slide {slideN}
+        </a>
+
+        <a
           href={notesExportUrl(doc.doc_id)}
           download
           title="Download all speaker notes as a .txt file"
@@ -625,6 +724,39 @@ export default function StudioToolbar({
                      transition-colors no-underline"
         >
           ↓ Notes (HTML)
+        </a>
+
+        <a
+          href={notesPagesPdfUrl(doc.doc_id)}
+          download
+          title="Download notes pages PDF (slide thumbnail + speaker notes per page)"
+          className="flex items-center gap-1 text-xs px-3 py-1 rounded
+                     bg-slate-500/15 text-slate-300 hover:bg-slate-500/25 border border-slate-500/25
+                     transition-colors no-underline"
+        >
+          ↓ Notes (PDF)
+        </a>
+
+        <a
+          href={exportMarkdownUrl(doc.doc_id)}
+          download
+          title="Export presentation as Markdown (titles + body + notes)"
+          className="flex items-center gap-1 text-xs px-3 py-1 rounded
+                     bg-slate-500/15 text-slate-300 hover:bg-slate-500/25 border border-slate-500/25
+                     transition-colors no-underline"
+        >
+          ↓ Markdown
+        </a>
+
+        <a
+          href={exportScriptUrl(doc.doc_id)}
+          download
+          title="Download speaker script — notes with time estimates per slide"
+          className="flex items-center gap-1 text-xs px-3 py-1 rounded
+                     bg-slate-500/15 text-slate-300 hover:bg-slate-500/25 border border-slate-500/25
+                     transition-colors no-underline"
+        >
+          ↓ Script
         </a>
 
         {onImportSlides && (
@@ -659,6 +791,211 @@ export default function StudioToolbar({
           >
             🎨 Colors
           </button>
+        )}
+
+        {onThemeGen && (
+          <button
+            onClick={onThemeGen}
+            title="AI Theme Generator — generate and apply a harmonious color palette"
+            className="flex items-center gap-1 text-xs px-3 py-1 rounded border transition-colors
+                       bg-white/5 text-muted hover:text-paper border-edge hover:bg-paper/10"
+          >
+            ✦ Theme
+          </button>
+        )}
+
+        {onVariation && (
+          <button
+            onClick={onVariation}
+            title="AI Slide Variations — rewrite current slide text in different tones"
+            className="flex items-center gap-1 text-xs px-3 py-1 rounded border transition-colors
+                       bg-white/5 text-muted hover:text-amber-300 border-edge hover:bg-amber-500/10"
+          >
+            ✦ Variations
+          </button>
+        )}
+
+        {onTranslate && (
+          <button
+            onClick={onTranslate}
+            title="AI Translate — translate slide text to another language"
+            className="flex items-center gap-1 text-xs px-3 py-1 rounded border transition-colors
+                       bg-white/5 text-muted hover:text-sky-300 border-edge hover:bg-sky-500/10"
+          >
+            🌐 Translate
+          </button>
+        )}
+
+        {onFontSwap && (
+          <button
+            onClick={onFontSwap}
+            title="Font Swap — replace fonts across all text in the deck"
+            className="flex items-center gap-1 text-xs px-3 py-1 rounded border transition-colors
+                       bg-white/5 text-muted hover:text-slate-200 border-edge hover:bg-white/10"
+          >
+            🔤 Fonts
+          </button>
+        )}
+
+        {onNotesReview && (
+          <button
+            onClick={onNotesReview}
+            title="Notes Review — view and edit all speaker notes in one place"
+            className="flex items-center gap-1 text-xs px-3 py-1 rounded border transition-colors
+                       bg-white/5 text-muted hover:text-slate-200 border-edge hover:bg-white/10"
+          >
+            📝 Notes
+          </button>
+        )}
+
+        {onTemplateVars && (
+          <button
+            onClick={onTemplateVars}
+            title="Template Variables — fill in {placeholder} variables across the deck"
+            className="flex items-center gap-1 text-xs px-3 py-1 rounded border transition-colors
+                       bg-white/5 text-muted hover:text-amber-300 border-edge hover:bg-amber-500/10"
+          >
+            ⚙ Variables
+          </button>
+        )}
+
+        {onAgendaSlide && (
+          <button
+            onClick={onAgendaSlide}
+            title="Insert Agenda Slide — generate a table of contents from slide titles"
+            className="flex items-center gap-1 text-xs px-3 py-1 rounded border transition-colors
+                       bg-white/5 text-muted hover:text-sky-300 border-edge hover:bg-sky-500/10"
+          >
+            ☰ Agenda
+          </button>
+        )}
+
+        {onAIScore && (
+          <button
+            onClick={onAIScore}
+            title="AI Score — get AI-powered quality feedback on your presentation"
+            className="flex items-center gap-1 text-xs px-3 py-1 rounded border transition-colors
+                       bg-white/5 text-muted hover:text-emerald-300 border-edge hover:bg-emerald-500/10"
+          >
+            ✨ AI Score
+          </button>
+        )}
+
+        {onSlideNumbers && (
+          <button
+            onClick={onSlideNumbers}
+            title="Add Slide Numbers — insert page numbers on all slides"
+            className="flex items-center gap-1 text-xs px-3 py-1 rounded border transition-colors
+                       bg-white/5 text-muted hover:text-slate-200 border-edge hover:bg-white/10"
+          >
+            # Slide #s
+          </button>
+        )}
+
+        {onWatermark && (
+          <button
+            onClick={onWatermark}
+            title="Add Watermark — stamp CONFIDENTIAL / DRAFT / etc. on all slides"
+            className="flex items-center gap-1 text-xs px-3 py-1 rounded border transition-colors
+                       bg-white/5 text-muted hover:text-red-300 border-edge hover:bg-red-500/10"
+          >
+            ⌀ Watermark
+          </button>
+        )}
+
+        {onTransitions && (
+          <button
+            onClick={onTransitions}
+            title="Slide Transitions — set animation effects between slides"
+            className="flex items-center gap-1 text-xs px-3 py-1 rounded border transition-colors
+                       bg-white/5 text-muted hover:text-paper border-edge hover:bg-paper/10"
+          >
+            ↻ Transitions
+          </button>
+        )}
+
+        {onOptimizeLayout && (
+          <div className="relative">
+            <button
+              onClick={() => setOptimizeOpen((o) => !o)}
+              disabled={optimizingLayout}
+              title="AI Layout Optimizer — intelligently reposition elements on this slide"
+              className={`flex items-center gap-1.5 text-xs px-3 py-1 rounded border transition-colors ${
+                optimizeOpen
+                  ? "bg-paper/20 text-paper border-fuchsia-500/30"
+                  : "bg-white/5 text-muted hover:text-paper border-edge hover:bg-paper/10"
+              } disabled:opacity-50`}
+            >
+              {optimizingLayout && <span className="inline-block w-2.5 h-2.5 border border-fuchsia-300 border-t-transparent rounded-full animate-spin" />}
+              ✦ Layout AI ▾
+            </button>
+            {optimizeOpen && (
+              <>
+                <div className="fixed inset-0 z-[9998]" onClick={() => setOptimizeOpen(false)} />
+                <div className="absolute right-0 top-full mt-1 z-[9999] bg-surface border border-edge rounded shadow-xl py-1 min-w-[180px]">
+                  <div className="px-3 py-0.5 text-[10px] text-muted uppercase tracking-wide border-b border-edge mb-1">AI Layout Goal</div>
+                  {[
+                    { id: "balanced" as const,        label: "Balanced",        desc: "Professional, even spacing" },
+                    { id: "emphasis-title" as const,  label: "Emphasize Title", desc: "Large title, compact body" },
+                    { id: "compact" as const,         label: "Compact",         desc: "Minimize whitespace" },
+                    { id: "spacious" as const,        label: "Spacious",        desc: "Generous margins" },
+                  ].map((opt) => (
+                    <button
+                      key={opt.id}
+                      onClick={() => { setOptimizeOpen(false); onOptimizeLayout(opt.id) }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-paper/10 hover:text-paper transition-colors"
+                    >
+                      <div className="text-xs text-slate-300">{opt.label}</div>
+                      <div className="text-[10px] text-muted">{opt.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {onSetColorBlindMode && (
+          <div className="relative">
+            <button
+              onClick={() => setCbOpen((o) => !o)}
+              title="Color blindness simulation — preview how your deck looks to colorblind viewers"
+              className={`flex items-center gap-1 text-xs px-3 py-1 rounded border transition-colors ${
+                colorBlindMode
+                  ? "bg-paper/20 text-paper border-paper/30 hover:bg-paper/30"
+                  : "bg-white/5 text-muted border-edge hover:text-slate-200 hover:bg-white/10"
+              }`}
+            >
+              👁 {colorBlindMode ? colorBlindMode.charAt(0).toUpperCase() + colorBlindMode.slice(1) : "A11y"} ▾
+            </button>
+            {cbOpen && (
+              <>
+                <div className="fixed inset-0 z-[9998]" onClick={() => setCbOpen(false)} />
+                <div className="absolute right-0 top-full mt-1 z-[9999] bg-surface border border-edge rounded shadow-xl py-1 min-w-[180px]">
+                  <div className="px-3 py-0.5 text-[10px] text-muted uppercase tracking-wide border-b border-edge mb-1">Color Blindness Simulation</div>
+                  {[
+                    { id: null,              label: "Normal (no filter)" },
+                    { id: "protanopia",      label: "Protanopia (red-weak)" },
+                    { id: "deuteranopia",    label: "Deuteranopia (green-weak)" },
+                    { id: "tritanopia",      label: "Tritanopia (blue-weak)" },
+                    { id: "achromatopsia",   label: "Achromatopsia (grayscale)" },
+                  ].map((opt) => (
+                    <button
+                      key={opt.id ?? "none"}
+                      onClick={() => { onSetColorBlindMode(opt.id); setCbOpen(false) }}
+                      className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
+                        colorBlindMode === opt.id
+                          ? "text-paper bg-paper/10"
+                          : "text-slate-300 hover:bg-white/10"
+                      }`}
+                    >
+                      {colorBlindMode === opt.id ? "✓ " : "  "}{opt.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
         )}
 
         {onToggleFindReplace && (
@@ -747,7 +1084,7 @@ export default function StudioToolbar({
             onClick={onPresent}
             title="Present slideshow (fullscreen)"
             className="flex items-center gap-1.5 text-xs px-3 py-1 rounded border transition-colors
-                       bg-violet-500/15 text-violet-300 hover:bg-violet-500/25 border-violet-500/25"
+                       bg-paper/15 text-paper hover:bg-paper/25 border-paper/25"
           >
             ▶ Present
           </button>
@@ -758,7 +1095,7 @@ export default function StudioToolbar({
           title={chatOpen ? "Close AI Chat" : "Open AI Chat"}
           className={`flex items-center gap-1.5 text-xs px-3 py-1 rounded border transition-colors ${
             chatOpen
-              ? "bg-purple-500/30 text-purple-300 border-purple-500/40 hover:bg-purple-500/40"
+              ? "bg-paper/30 text-paper border-paper/40 hover:bg-paper/40"
               : "bg-white/5 text-muted hover:text-slate-200 border-edge hover:bg-white/10"
           }`}
         >
@@ -825,9 +1162,20 @@ export default function StudioToolbar({
             onClick={onShowOutlineGen}
             title="AI: Generate slides from outline"
             className="w-7 h-7 flex items-center justify-center rounded border border-edge text-xs text-muted
-                       hover:text-indigo-300 hover:bg-indigo-500/10 hover:border-indigo-500/40 transition-colors"
+                       hover:text-paper hover:bg-paper/10 hover:border-paper/40 transition-colors"
           >
             ✨
+          </button>
+        )}
+
+        {onCompare && (
+          <button
+            onClick={onCompare}
+            title="Before/After Comparer — drag divider to compare original vs. edited"
+            className="w-7 h-7 flex items-center justify-center rounded border border-edge text-xs text-muted
+                       hover:text-slate-200 hover:bg-white/10 transition-colors"
+          >
+            ⇔
           </button>
         )}
 
@@ -850,6 +1198,28 @@ export default function StudioToolbar({
                        hover:text-slate-200 hover:bg-white/10 transition-colors"
           >
             ✓
+          </button>
+        )}
+
+        {onGrammarCheck && (
+          <button
+            onClick={onGrammarCheck}
+            title="Grammar & Clarity Check (AI) — proofread all slide text"
+            className="w-7 h-7 flex items-center justify-center rounded border border-edge text-xs text-muted
+                       hover:text-amber-300 hover:border-amber-500/40 hover:bg-amber-500/10 transition-colors"
+          >
+            Aa
+          </button>
+        )}
+
+        {onGenerateNotesBulk && (
+          <button
+            onClick={onGenerateNotesBulk}
+            title="Generate speaker notes for all slides without notes (AI)"
+            className="w-7 h-7 flex items-center justify-center rounded border border-paper/40 text-xs text-paper/70
+                       hover:text-paper hover:bg-paper/10 transition-colors"
+          >
+            ✨
           </button>
         )}
 

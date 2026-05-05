@@ -11,7 +11,7 @@ import type { TextSearchMatch } from "../../lib/studioApi"
 interface Props {
   docId: string
   onClose: () => void
-  onJumpToSlide: (n: number) => void
+  onJumpToSlide: (n: number, elementId?: string) => void
   onReplaced: () => void
 }
 
@@ -20,6 +20,7 @@ export default function FindReplacePanel({ docId, onClose, onJumpToSlide, onRepl
   const [replace, setReplace]       = useState("")
   const [caseSensitive, setCaseSensitive] = useState(false)
   const [useRegex, setUseRegex]     = useState(false)
+  const [includeNotes, setIncludeNotes] = useState(false)
   const [regexError, setRegexError] = useState<string | null>(null)
   const [matches, setMatches]       = useState<TextSearchMatch[]>([])
   const [searching, setSearching]   = useState(false)
@@ -33,12 +34,12 @@ export default function FindReplacePanel({ docId, onClose, onJumpToSlide, onRepl
     if (!find.trim()) { setMatches([]); return }
     const t = setTimeout(async () => {
       setSearching(true)
-      try { setMatches(await searchText(docId, find)) }
+      try { setMatches(await searchText(docId, find, includeNotes)) }
       catch { setMatches([]) }
       finally { setSearching(false) }
     }, 300)
     return () => clearTimeout(t)
-  }, [docId, find])
+  }, [docId, find, includeNotes])
 
   // validate regex
   useEffect(() => {
@@ -52,7 +53,7 @@ export default function FindReplacePanel({ docId, onClose, onJumpToSlide, onRepl
     setReplacing(true)
     setLastResult(null)
     try {
-      const res = await replaceText(docId, find, replace, caseSensitive, useRegex)
+      const res = await replaceText(docId, find, replace, caseSensitive, useRegex, includeNotes)
       setLastResult(
         res.replaced === 0
           ? "No matches found"
@@ -104,7 +105,7 @@ export default function FindReplacePanel({ docId, onClose, onJumpToSlide, onRepl
         </div>
 
         {/* options */}
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
           <label className="flex items-center gap-2 cursor-pointer select-none">
             <input
               type="checkbox"
@@ -123,6 +124,15 @@ export default function FindReplacePanel({ docId, onClose, onJumpToSlide, onRepl
             />
             <span className="text-xs text-muted font-mono">.*</span>
             <span className="text-xs text-muted">Regex</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={includeNotes}
+              onChange={e => setIncludeNotes(e.target.checked)}
+              className="accent-accent"
+            />
+            <span className="text-xs text-muted">Notes</span>
           </label>
         </div>
         {regexError && (
@@ -156,12 +166,15 @@ export default function FindReplacePanel({ docId, onClose, onJumpToSlide, onRepl
           {matches.map((m, i) => (
             <button
               key={i}
-              onClick={() => onJumpToSlide(m.slide_n)}
+              onClick={() => onJumpToSlide(m.slide_n, m.in_notes ? undefined : m.element_id)}
               className="w-full text-left px-3 py-1.5 hover:bg-white/5 border-b border-edge/50 last:border-b-0"
             >
               <div className="flex items-center gap-2">
                 <span className="text-[10px] text-accent-light shrink-0">Slide {m.slide_n}</span>
-                <span className="text-[10px] text-muted shrink-0">{m.element_type.replace("Bridge", "")}</span>
+                {m.in_notes
+                  ? <span className="text-[10px] text-paper/70 shrink-0">Notes</span>
+                  : <span className="text-[10px] text-muted shrink-0">{m.element_type.replace("Bridge", "")}</span>
+                }
               </div>
               <p className="text-[10px] text-muted truncate mt-0.5">{m.preview}</p>
             </button>

@@ -42,7 +42,8 @@ export default function LayersPanel({
     return base.filter((el) =>
       el.name.toLowerCase().includes(q) ||
       el.label.toLowerCase().includes(q) ||
-      el.type.toLowerCase().includes(q)
+      el.type.toLowerCase().includes(q) ||
+      (el.text_preview ?? "").toLowerCase().includes(q)
     )
   }, [elements, filter])
 
@@ -147,13 +148,20 @@ export default function LayersPanel({
                 {TYPE_ICON[el.type] ?? "□"}
               </span>
 
-              {/* name */}
-              <span
-                className={`text-[11px] truncate flex-1 min-w-0 ${isSelected ? "text-slate-200 font-medium" : "text-slate-400"} ${el.hidden ? "line-through opacity-50" : ""}`}
-                title={el.name}
-              >
-                {el.name !== el.id ? el.name : el.label}
-              </span>
+              {/* name + text preview */}
+              <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+                <span
+                  className={`text-[11px] truncate ${isSelected ? "text-slate-200 font-medium" : "text-slate-400"} ${el.hidden ? "line-through opacity-50" : ""}`}
+                  title={el.text_preview ? `${el.name}\n"${el.text_preview}"` : el.name}
+                >
+                  {el.name !== el.id ? el.name : el.label}
+                </span>
+                {el.text_preview && (
+                  <span className="text-[9px] text-muted/40 truncate" title={el.text_preview}>
+                    {el.text_preview}
+                  </span>
+                )}
+              </div>
 
               {/* visibility toggle */}
               <button

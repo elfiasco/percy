@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react"
-import { addSlide, deleteSlide, duplicateSlide, moveSlide, fetchNotesSummary, importSlides, fetchSlideLabels, setSlideLabel, setSlideTag, setSlideTransition, fetchSlideTransitions, fetchSlideSections, setSlideSection, fetchComments, exportSlideUrl, setSlidesBackground } from "../../lib/studioApi"
+import { addSlide, deleteSlide, duplicateSlide, moveSlide, fetchNotesSummary, importSlides, fetchSlideLabels, setSlideLabel, setSlideTag, setSlideTransition, fetchSlideTransitions, fetchSlideSections, setSlideSection, fetchComments, exportSlideUrl, setSlidesBackground, getTimerBudget, setTimerBudget, setSlideBackgroundImage, fetchSlideRatings, setSlideRating, fetchPresentationCheck, fetchSlidePins, pinSlide, fetchHiddenSlides, setSlideHidden } from "../../lib/studioApi"
 
 const TAG_COLORS = [
   { color: null,      label: "None" },
@@ -18,6 +18,8 @@ interface Props {
   selectedSlide: number
   dirtySlides?: Set<number>
   refreshKey?: number
+  pinnedSlides?: Set<number>
+  onPinChange?: (slideN: number, pinned: boolean) => void
   onSelect: (n: number) => void
   onSlideCountChange: (newCount: number, focusSlide: number) => void
 }
@@ -29,7 +31,7 @@ interface ContextMenu {
 }
 
 export default function StudioSlideStrip({
-  docId, slideCount, selectedSlide, dirtySlides, refreshKey, onSelect, onSlideCountChange,
+  docId, slideCount, selectedSlide, dirtySlides, refreshKey, pinnedSlides: pinnedSlidesProp, onPinChange, onSelect, onSlideCountChange,
 }: Props) {
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null)
   const [busy, setBusy]               = useState(false)
@@ -50,9 +52,20 @@ export default function StudioSlideStrip({
   const [editLabelText, setEditLabelText] = useState("")
   const [slideTransitions, setSlideTransitions] = useState<Record<number, string>>({})
   const [slideSections, setSlideSections]       = useState<Record<number, string>>({})
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
   const [filterTag, setFilterTag]     = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
+  const [slideRatings, setSlideRatings]   = useState<Record<number, number>>({})
+  const [slideIssues, setSlideIssues]     = useState<Record<number, "warning" | "error">>({})
+  const [pinnedSlidesInternal, setPinnedSlidesInternal] = useState<Set<number>>(new Set())
+  const pinnedSlides = pinnedSlidesProp ?? pinnedSlidesInternal
+  const [hiddenSlides, setHiddenSlides]   = useState<Set<number>>(new Set())
+  const [timerBudgetMin, setTimerBudgetMin] = useState<number | null>(null)
+  const [editingTimer, setEditingTimer] = useState(false)
+  const [timerInput, setTimerInput]   = useState("")
   const importInputRef                = useRef<HTMLInputElement>(null)
+  const bgImageInputRef               = useRef<HTMLInputElement>(null)
+  const bgImageTargetRef              = useRef<number>(0)
   const stripRef = useRef<HTMLDivElement>(null)
 
   // Fetch notes summary and slide labels on mount/refresh
@@ -88,6 +101,28 @@ export default function StudioSlideStrip({
           if (!c.resolved) counts[c.slide_n] = (counts[c.slide_n] ?? 0) + 1
         }
         setCommentCounts(counts)
+      })
+      .catch(() => {})
+    getTimerBudget(docId)
+      .then((r) => setTimerBudgetMin(r.total_minutes))
+      .catch(() => {})
+    fetchSlideRatings(docId)
+      .then((r) => setSlideRatings(Object.fromEntries(Object.entries(r.ratings).map(([k, v]) => [Number(k), v]))))
+      .catch(() => {})
+    fetchSlidePins(docId)
+      .then((r) => setPinnedSlidesInternal(new Set(r.pinned)))
+      .catch(() => {})
+    fetchHiddenSlides(docId)
+      .then((r) => setHiddenSlides(new Set(r.hidden)))
+      .catch(() => {})
+    fetchPresentationCheck(docId)
+      .then((r) => {
+        const map: Record<number, "warning" | "error"> = {}
+        for (const issue of r.issues) {
+          if (issue.severity === "error") map[issue.slide_n] = "error"
+          else if (!map[issue.slide_n]) map[issue.slide_n] = "warning"
+        }
+        setSlideIssues(map)
       })
       .catch(() => {})
   }, [docId, stripKey, refreshKey])
@@ -182,21 +217,37 @@ export default function StudioSlideStrip({
 
   const handleMoveUp = useCallback((n: number) => {
     if (n <= 1) return
+    if (pinnedSlides.has(n)) { alert(`Slide ${n} is pinned — unpin it first to reorder.`); return }
     setMultiSelected(new Set())
     run(
       () => moveSlide(docId, n, n - 1) as Promise<{ slide_count: number }>,
       () => n - 1,
     )
-  }, [docId, run])
+  }, [docId, run, pinnedSlides])
 
   const handleMoveDown = useCallback((n: number) => {
     if (n >= slideCount) return
+    if (pinnedSlides.has(n)) { alert(`Slide ${n} is pinned — unpin it first to reorder.`); return }
     setMultiSelected(new Set())
     run(
       () => moveSlide(docId, n, n + 1) as Promise<{ slide_count: number }>,
       () => n + 1,
     )
-  }, [docId, slideCount, run])
+  }, [docId, slideCount, run, pinnedSlides])
+
+  // Ctrl+Up / Ctrl+Down to reorder the active slide
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === "INPUT" || tag === "TEXTAREA") return
+      e.preventDefault()
+      if (e.key === "ArrowUp") handleMoveUp(selectedSlide)
+      else handleMoveDown(selectedSlide)
+    }
+    window.addEventListener("keydown", handler)
+    return () => window.removeEventListener("keydown", handler)
+  }, [selectedSlide, handleMoveUp, handleMoveDown])
 
   const handleSlideClick = useCallback((e: React.MouseEvent, n: number) => {
     if (e.ctrlKey || e.metaKey) {
@@ -269,7 +320,7 @@ export default function StudioSlideStrip({
       <div className="px-2 py-1.5 text-[10px] text-muted uppercase tracking-widest font-semibold border-b border-edge shrink-0 flex items-center justify-between">
         {multiSelected.size > 0 ? (
           <div className="flex items-center gap-1">
-            <span className="text-violet-400">{multiSelected.size} sel.</span>
+            <span className="text-paper">{multiSelected.size} sel.</span>
             <button
               onClick={() => handleDuplicate()}
               disabled={busy}
@@ -343,6 +394,25 @@ export default function StudioSlideStrip({
         className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) { handleImport(f); e.target.value = "" } }}
       />
+      <input
+        ref={bgImageInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={async (e) => {
+          const f = e.target.files?.[0]
+          e.target.value = ""
+          if (!f) return
+          const n = bgImageTargetRef.current
+          setBusy(true)
+          try {
+            await setSlideBackgroundImage(docId, n, f)
+            setStripKey((k) => k + 1)
+            onSlideCountChange(slideCount, selectedSlide)
+          } catch (err) { console.error("bg image upload failed:", err) }
+          finally { setBusy(false) }
+        }}
+      />
 
       {/* tag filter bar */}
       {Object.keys(slideTags).length > 0 && (
@@ -382,6 +452,53 @@ export default function StudioSlideStrip({
         />
       </div>
 
+      {/* timer budget bar */}
+      <div className="px-2 py-1 border-b border-edge/40 shrink-0 flex items-center gap-1">
+        <span className="text-[8px] text-muted/50 shrink-0">⏱</span>
+        {editingTimer ? (
+          <input
+            autoFocus
+            type="number"
+            min="1"
+            max="999"
+            value={timerInput}
+            onChange={(e) => setTimerInput(e.target.value)}
+            onBlur={async () => {
+              setEditingTimer(false)
+              const mins = timerInput.trim() ? parseFloat(timerInput) : null
+              const valid = mins !== null && mins > 0 ? mins : null
+              setTimerBudgetMin(valid)
+              try { await setTimerBudget(docId, valid) } catch { /* ignore */ }
+            }}
+            onKeyDown={(e) => {
+              e.stopPropagation()
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur()
+              if (e.key === "Escape") { setEditingTimer(false); setTimerInput("") }
+            }}
+            placeholder="min"
+            className="w-10 text-[9px] bg-base/60 border border-accent/50 rounded px-1 py-0.5
+                       text-slate-300 focus:outline-none"
+          />
+        ) : (
+          <button
+            onClick={() => { setEditingTimer(true); setTimerInput(timerBudgetMin !== null ? String(timerBudgetMin) : "") }}
+            className="text-[9px] text-muted/50 hover:text-muted transition-colors truncate"
+            title="Set total presentation time budget"
+          >
+            {timerBudgetMin !== null
+              ? `${timerBudgetMin}m → ${Math.round((timerBudgetMin * 60) / slideCount)}s/slide`
+              : "Set time budget…"}
+          </button>
+        )}
+        {timerBudgetMin !== null && !editingTimer && (
+          <button
+            onClick={async () => { setTimerBudgetMin(null); try { await setTimerBudget(docId, null) } catch { /* ignore */ } }}
+            className="text-[8px] text-muted/30 hover:text-bad transition-colors ml-auto shrink-0"
+            title="Clear timer budget"
+          >×</button>
+        )}
+      </div>
+
       {/* slide list */}
       <div key={stripKey} className="flex flex-col gap-1 p-2 overflow-y-auto flex-1 scrollbar-thin">
         {Array.from({ length: slideCount }, (_, i) => i + 1).filter((n) => {
@@ -403,29 +520,42 @@ export default function StudioSlideStrip({
           const isDragging = dragSlide === n
           const isDropTarget = dropTarget === n && dragSlide !== null && dragSlide !== n
           const sectionName = slideSections[n]
+          const prevSection = n > 1 ? slideSections[n - 1] : undefined
+          const isNewSection = sectionName && sectionName !== prevSection
+          const isCollapsed = sectionName ? collapsedSections.has(sectionName) : false
+          const sectionSlideCount = sectionName
+            ? Array.from({ length: slideCount }, (_, i) => i + 1).filter((s) => slideSections[s] === sectionName).length
+            : 0
           return (
             <div key={`wrap-${n}`} className="flex flex-col w-full gap-0">
-              {sectionName && (
-                <div
-                  className="w-full px-1 py-0.5 mt-1 mb-0.5 text-[9px] font-semibold uppercase tracking-widest text-violet-400/80 border-t border-violet-500/30 truncate"
-                  title={`Section: ${sectionName}`}
+              {isNewSection && (
+                <button
+                  className="w-full px-1 py-0.5 mt-1 mb-0.5 text-[9px] font-semibold uppercase tracking-widest text-paper/80 border-t border-paper/30 truncate flex items-center gap-1 hover:text-paper transition-colors text-left"
+                  title={`${isCollapsed ? "Expand" : "Collapse"} section: ${sectionName}`}
+                  onClick={() => setCollapsedSections((prev) => {
+                    const next = new Set(prev)
+                    if (next.has(sectionName)) next.delete(sectionName); else next.add(sectionName)
+                    return next
+                  })}
                 >
-                  § {sectionName}
-                </div>
+                  <span>{isCollapsed ? "▶" : "▼"}</span>
+                  <span>§ {sectionName}</span>
+                  {isCollapsed && <span className="ml-auto text-paper/50 font-mono normal-case tracking-normal">{sectionSlideCount}</span>}
+                </button>
               )}
-            <div
+            {!isCollapsed && <div
               draggable
               onDragStart={(e) => handleDragStart(e, n)}
               onDragOver={(e) => handleDragOver(e, n)}
               onDrop={(e) => handleDrop(e, n)}
               onDragEnd={handleDragEnd}
               className={[
-                "flex flex-col items-center gap-1 rounded p-1 transition-all group w-full cursor-grab active:cursor-grabbing",
-                active      ? "ring-2 ring-accent bg-accent/10"
-                  : isMulti ? "ring-2 ring-violet-400/60 bg-violet-500/10"
-                  : "hover:bg-white/5",
-                isDragging  ? "opacity-40" : "",
-                isDropTarget ? "ring-2 ring-indigo-400 bg-indigo-500/10" : "",
+                "flex flex-row items-start gap-2 rounded p-1 transition-all group w-full cursor-grab active:cursor-grabbing",
+                active      ? "ring-1 ring-champagne bg-champagne/5"
+                  : isMulti ? "ring-1 ring-paper/40 bg-paper/5"
+                  : "hover:bg-paper/5",
+                isDragging  ? "opacity-40" : hiddenSlides.has(n) ? "opacity-40" : "",
+                isDropTarget ? "ring-1 ring-paper bg-paper/10" : "",
               ].join(" ")}
               onClick={(e) => handleSlideClick(e, n)}
               onContextMenu={(e) => handleContextMenu(e, n)}
@@ -433,19 +563,19 @@ export default function StudioSlideStrip({
               onMouseLeave={() => setHoverN(null)}
               key={n}
             >
-              <div className="w-full aspect-video bg-base rounded overflow-hidden relative">
+              <div className={`flex flex-col items-end pt-1 shrink-0 select-none w-7 ${active ? "text-champagne" : "text-muted"}`}>
+                <span className="text-[15px] font-mono tabular-nums leading-none">{n}</span>
+                {dirty && <span className="text-[8px] mt-0.5 tracking-widest uppercase text-ochre">●</span>}
+              </div>
+              <div className="flex-1 min-w-0 flex flex-col gap-1">
+              <div className="w-full aspect-video bg-base border border-edge overflow-hidden relative">
                 <img
                   src={`/api/docs/${docId}/slides/${n}/bridge.png?v=${stripKey}-${refreshKey ?? 0}`}
                   alt={`Slide ${n}`}
                   className="w-full h-full object-cover"
                   draggable={false}
                 />
-                {dirty && (
-                  <span
-                    title="Unsaved changes — click Rebuild to commit"
-                    className="absolute top-0.5 right-0.5 w-2 h-2 rounded-full bg-amber-400 shadow-sm"
-                  />
-                )}
+                {/* dirty indicator now lives in the number column (left of thumb) */}
                 {hasNotes && (() => {
                   const wc = notesWordCounts[n] ?? 0
                   const quality = wc >= 80 ? "text-emerald-400/80" : wc >= 30 ? "text-amber-400/80" : "text-white/50"
@@ -474,12 +604,50 @@ export default function StudioSlideStrip({
                     ▷
                   </span>
                 )}
+                {timerBudgetMin !== null && (() => {
+                  const secsPerSlide = Math.round((timerBudgetMin * 60) / slideCount)
+                  const display = secsPerSlide >= 60 ? `${Math.round(secsPerSlide / 6) / 10}m` : `${secsPerSlide}s`
+                  return (
+                    <span
+                      title={`Timer budget: ~${secsPerSlide}s per slide`}
+                      className="absolute top-0.5 left-6 text-[7px] text-cyan-300/70 bg-black/50 rounded px-0.5 leading-tight font-mono"
+                    >
+                      {display}
+                    </span>
+                  )
+                })()}
                 {commentCounts[n] > 0 && (
                   <span
                     title={`${commentCounts[n]} open comment${commentCounts[n] !== 1 ? "s" : ""}`}
                     className="absolute top-0.5 right-6 text-[7px] font-bold text-white bg-orange-500 rounded-full min-w-[13px] h-[13px] flex items-center justify-center leading-none"
                   >
                     {commentCounts[n]}
+                  </span>
+                )}
+                {slideIssues[n] && (
+                  <span
+                    title={`QA: slide has ${slideIssues[n] === "error" ? "error(s)" : "warning(s)"}`}
+                    className={`absolute bottom-0.5 right-0.5 text-[7px] rounded px-0.5 leading-tight font-bold ${
+                      slideIssues[n] === "error" ? "text-red-400 bg-red-900/60" : "text-amber-400 bg-amber-900/60"
+                    }`}
+                  >
+                    {slideIssues[n] === "error" ? "✕" : "⚠"}
+                  </span>
+                )}
+                {pinnedSlides.has(n) && (
+                  <span
+                    title="Slide is pinned (right-click to unpin)"
+                    className="absolute bottom-0.5 left-0.5 text-[9px] text-sky-300/80"
+                  >
+                    📌
+                  </span>
+                )}
+                {hiddenSlides.has(n) && (
+                  <span
+                    title="Slide is hidden (skipped in presentation mode)"
+                    className="absolute inset-0 flex items-center justify-center bg-black/30 text-[9px] text-white/50 font-semibold tracking-wider uppercase pointer-events-none"
+                  >
+                    Hidden
                   </span>
                 )}
               </div>
@@ -506,7 +674,7 @@ export default function StudioSlideStrip({
                   <span
                     title={`Label: ${slideLabels[n]} — double-click to edit`}
                     onDoubleClick={(e) => { e.stopPropagation(); setEditingLabel(n); setEditLabelText(slideLabels[n] ?? "") }}
-                    className="flex-1 min-w-0 text-[9px] text-indigo-300/70 truncate text-right cursor-text"
+                    className="flex-1 min-w-0 text-[9px] text-paper/70 truncate text-right cursor-text"
                   >
                     {slideLabels[n]}
                   </span>
@@ -520,7 +688,41 @@ export default function StudioSlideStrip({
                   </span>
                 )}
               </div>
-            </div>
+              {/* star rating row — hidden until hover/rated, so the strip stays calm */}
+              <div
+                className={`w-full flex items-center justify-center gap-0.5 transition-opacity ${
+                  (slideRatings[n] ?? 0) > 0 || hoverN === n ? "opacity-100" : "opacity-0"
+                }`}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {[1, 2, 3, 4, 5].map((star) => {
+                  const current = slideRatings[n] ?? 0
+                  const filled = star <= current
+                  return (
+                    <button
+                      key={star}
+                      title={current === star ? "Clear rating" : `Rate ${star} star${star !== 1 ? "s" : ""}`}
+                      onClick={async (e) => {
+                        e.stopPropagation()
+                        const newRating = current === star ? null : star
+                        setSlideRatings((prev) => {
+                          const next = { ...prev }
+                          if (newRating === null) delete next[n]; else next[n] = newRating
+                          return next
+                        })
+                        await setSlideRating(docId, n, newRating).catch(() => {})
+                      }}
+                      className={`text-[9px] transition-colors leading-none ${
+                        filled ? "text-amber-400" : "text-white/15 hover:text-amber-300/50"
+                      }`}
+                    >
+                      ★
+                    </button>
+                  )
+                })}
+              </div>
+              </div>
+            </div>}
             </div>
           )
         })}
@@ -541,7 +743,29 @@ export default function StudioSlideStrip({
               alt={`Slide ${hoverN} preview`}
               className="w-full aspect-video rounded object-cover block"
             />
-            <div className="text-[10px] text-muted text-center mt-1">Slide {hoverN}</div>
+            <div className="flex items-center justify-between px-1 pt-1 pb-0.5">
+              <span className="text-[10px] text-muted">Slide {hoverN}</span>
+              <div className="flex items-center gap-1">
+                {hiddenSlides.has(hoverN) && <span className="text-[8px] text-white/40">hidden</span>}
+                {pinnedSlides.has(hoverN) && <span className="text-[9px]">📌</span>}
+                {slideRatings[hoverN] && <span className="text-[9px] text-amber-400">{"★".repeat(slideRatings[hoverN])}</span>}
+              </div>
+            </div>
+            {(slideSections[hoverN] || notesWordCounts[hoverN] > 0 || slideIssues[hoverN]) && (
+              <div className="flex flex-wrap gap-1 px-1 pb-1">
+                {slideSections[hoverN] && (
+                  <span className="text-[8px] text-paper/70">§ {slideSections[hoverN]}</span>
+                )}
+                {notesWordCounts[hoverN] > 0 && (
+                  <span className="text-[8px] text-emerald-400/60">{notesWordCounts[hoverN]}w notes</span>
+                )}
+                {slideIssues[hoverN] && (
+                  <span className={`text-[8px] font-bold ${slideIssues[hoverN] === "error" ? "text-red-400" : "text-amber-400"}`}>
+                    {slideIssues[hoverN] === "error" ? "✕ error" : "⚠ warning"}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -621,7 +845,7 @@ export default function StudioSlideStrip({
                     }}
                     className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors capitalize ${
                       active
-                        ? "bg-indigo-500/30 text-indigo-300 border-indigo-500/40"
+                        ? "bg-paper/30 text-paper border-paper/40"
                         : "bg-white/5 text-muted border-edge hover:bg-white/10 hover:text-slate-300"
                     }`}
                   >
@@ -647,6 +871,40 @@ export default function StudioSlideStrip({
             Move down
           </CtxItem>
           <div className="border-t border-edge/50 my-1" />
+          <CtxItem onClick={async () => {
+            const n = contextMenu.slideN
+            const isHidden = hiddenSlides.has(n)
+            setHiddenSlides((prev) => {
+              const next = new Set(prev)
+              if (isHidden) next.delete(n); else next.add(n)
+              return next
+            })
+            await setSlideHidden(docId, n, !isHidden).catch(() => {})
+            setContextMenu(null)
+          }}>
+            {hiddenSlides.has(contextMenu.slideN) ? "Show slide" : "Hide slide"}
+          </CtxItem>
+          <CtxItem onClick={async () => {
+            const n = contextMenu.slideN
+            const isPinned = pinnedSlides.has(n)
+            setPinnedSlidesInternal((prev) => {
+              const next = new Set(prev)
+              if (isPinned) next.delete(n); else next.add(n)
+              return next
+            })
+            onPinChange?.(n, !isPinned)
+            await pinSlide(docId, n, !isPinned).catch(() => {})
+            setContextMenu(null)
+          }}>
+            {pinnedSlides.has(contextMenu.slideN) ? "Unpin slide" : "Pin slide"}
+          </CtxItem>
+          <CtxItem onClick={() => {
+            bgImageTargetRef.current = contextMenu.slideN
+            setContextMenu(null)
+            bgImageInputRef.current?.click()
+          }}>
+            Set background image…
+          </CtxItem>
           <CtxItem onClick={() => { window.open(`/api/docs/${docId}/slides/${contextMenu.slideN}/bridge.png`, "_blank"); setContextMenu(null) }}>
             Download PNG
           </CtxItem>

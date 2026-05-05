@@ -129,8 +129,8 @@ export default function GenerateFromOutlineModal({ docId, onClose, onGenerated }
               <button
                 onClick={handleGenerate}
                 disabled={generating || lineCount === 0 || lineCount > 25}
-                className="text-xs px-4 py-1.5 rounded bg-indigo-500/30 text-indigo-300 border border-indigo-500/40
-                           hover:bg-indigo-500/40 transition-colors disabled:opacity-40 disabled:cursor-default"
+                className="text-xs px-4 py-1.5 rounded bg-paper/30 text-paper border border-paper/40
+                           hover:bg-paper/40 transition-colors disabled:opacity-40 disabled:cursor-default"
               >
                 {generating ? `Generating ${lineCount} slides…` : `Generate ${lineCount} slide${lineCount !== 1 ? "s" : ""}`}
               </button>

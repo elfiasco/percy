@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, List
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -64,7 +64,142 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
+
+# ── Auth + persistence (users, orgs, projects) ────────────────────────────────
+from app.backend import auth as _auth_mod, auth_db as _auth_db_mod  # noqa: E402
+from app.backend import workspace_api as _workspace_api  # noqa: E402
+_auth_db_mod.init_db()
+app.add_middleware(_auth_mod.AuthMiddleware)
+app.include_router(_auth_mod.router)
+app.include_router(_workspace_api.router)
+
+
+# ── Audit middleware (records every mutation on /api/docs/* and /api/agent/*) ──
+from app.backend import audit_middleware as _audit_mw  # noqa: E402
+_audit_mw.install(app)
+
+
+@app.get("/api/health", include_in_schema=False)
+def _health():
+    """Liveness check used by App Runner. Always returns 200 — the auth middleware
+    explicitly allows this path."""
+    return {"ok": True, "service": "percy-studio"}
+
+
+# ── Agent API manifest ────────────────────────────────────────────────────────
+# A single source of truth for every editing endpoint, with one-line summaries
+# the embedding-based retrieval agent indexes against. See
+# docs/percy-agent-macro.md and app/backend/agent_manifest.py.
+
+from app.backend import agent_manifest as _agent_manifest  # noqa: E402
+
+
+@app.get("/api/agent/api-manifest")
+def get_agent_api_manifest():
+    """Returns the full editable API surface for the agent to index.
+    Public-ish: any authenticated user can read this."""
+    return _agent_manifest.get_manifest()
+
+
+# ── Typed `create_thin` endpoints (one per Bridge element type) ──────────────
+# Routes live in app/backend/element_creation.py; the builders that materialize
+# the dataclass trees live in src/percy/bridge/builders.py. See
+# docs/agent/elements/MASTER.md for the contract.
+#
+# Mounted near the top of main so the routes are registered before the SPA
+# 404-handler fallback can shadow anything.
+
+from app.backend import element_creation as _element_creation  # noqa: E402
+_element_creation.register_creation_router(app)
+
+
+# ── Agent find_element + element index ───────────────────────────────────────
+# Resolves natural-language element references to (slide_n, element_id) tuples.
+# See docs/agent/find-element.md.
+
+from app.backend import agent_find as _agent_find  # noqa: E402
+_agent_find.register_find_router(app)
+
+
+# ── Live groups + slide-level scripts ────────────────────────────────────────
+# Sandboxed Python scripts that author / edit elements. See
+# docs/percy-agent-blueprint.md §4 (Coder skill) and the live-group spec in
+# the agent build memory.
+
+from app.backend import agent_scripts as _agent_scripts  # noqa: E402
+_agent_scripts.register_scripts_router(app)
+
+
+# ── New agent chat (replaces the legacy tool-use chat() further down) ────────
+# POST /api/agent/chat — see app/backend/agent_chat.py for the full contract.
+
+from app.backend import agent_chat as _agent_chat  # noqa: E402
+_agent_chat.register_chat_router(app)
+
+
+# ── Templates + Materials ────────────────────────────────────────────────────
+# Percy Standard Templates + per-project supplementary materials. See
+# src/percy/agent/templates.py and src/percy/agent/materials.py.
+
+from app.backend import agent_templates as _agent_templates  # noqa: E402
+_agent_templates.register_templates_router(app)
+
+
+# ── Secrets store (per-user + per-org) ────────────────────────────────────
+# Encrypted KV store for credentials scripts can request via scope.secret_keys.
+# See src/percy/agent/secrets_store.py.
+
+from app.backend import agent_secrets as _agent_secrets  # noqa: E402
+_agent_secrets.register_secrets_router(app)
+
+
+# ── Advanced agent capabilities (brand check, diff narrator, deck generator) ──
+from app.backend import agent_advanced as _agent_advanced  # noqa: E402
+_agent_advanced.register_advanced_router(app)
+
+
+# ── SPA static serving (production) ───────────────────────────────────────────
+# When the React build is present at /app/frontend/dist (Docker layout) or
+# ./frontend/dist (local), mount its assets and use a 404-handler hook to fall
+# back to index.html for unknown non-API paths. We use a 404 handler (not a
+# catch-all route) so it doesn't shadow specific routes registered later in
+# this file.
+def _spa_dist_dir() -> Path | None:
+    for cand in (Path("/app/frontend/dist"), Path.cwd() / "frontend" / "dist"):
+        if cand.exists() and (cand / "index.html").exists():
+            return cand
+    return None
+
+
+_SPA_DIR = _spa_dist_dir()
+if _SPA_DIR is not None:
+    log.info("Serving SPA from %s", _SPA_DIR)
+    if (_SPA_DIR / "assets").exists():
+        app.mount("/assets", StaticFiles(directory=str(_SPA_DIR / "assets")), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    def _spa_index():
+        return FileResponse(str(_SPA_DIR / "index.html"))
+
+    # SPA fallback for React Router: any unmatched non-API GET returns index.html.
+    # Implemented as a 404 handler so it cannot shadow real API routes.
+    from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
+
+    @app.exception_handler(404)
+    async def _spa_404_handler(request: Request, exc: StarletteHTTPException):
+        path = request.url.path
+        # API misses keep JSON 404 — never serve HTML to JSON clients.
+        if path.startswith("/api/") or path.startswith("/openapi") or path.startswith("/docs") or path.startswith("/redoc"):
+            return JSONResponse({"detail": exc.detail or "Not found"}, status_code=404)
+        if request.method != "GET":
+            return JSONResponse({"detail": exc.detail or "Not found"}, status_code=404)
+        # Try to serve a real file (e.g. /favicon.ico, /manifest.json) before falling back.
+        candidate = _SPA_DIR / path.lstrip("/")
+        if candidate.is_file():
+            return FileResponse(str(candidate))
+        return FileResponse(str(_SPA_DIR / "index.html"))
 
 # ── request logging middleware ────────────────────────────────────────────────
 @app.middleware("http")
@@ -125,6 +260,8 @@ class ElementPositionUpdate(BaseModel):
     height_in: float | None = None
     z_index: int | None = None
     rotation: float | None = None
+    flip_h: bool | None = None
+    flip_v: bool | None = None
     name: str | None = None
 
 class LoadBundleRequest(BaseModel):
@@ -367,6 +504,7 @@ def _doc_summary(doc_id: str) -> dict[str, Any]:
         "events": hist.get("events", [])[:24],
         "run_count": hist.get("run_count", 0),
         "updated_at": hist.get("updated_at"),
+        "modified_at": d.get("modified_at"),
         "tableau": _tableau_overview(d) if d.get("source_format") == "tableau" else None,
     }
 
@@ -2798,11 +2936,18 @@ def export_pdf(doc_id: str):
     doc = d["doc"]
     bridge_dir = _CACHE_DIR / doc_id / "bridge"
 
+    def _find_png(n: int) -> Path | None:
+        for name in [f"slide-{n:03d}.png", f"slide_{n:04d}.png"]:
+            p = bridge_dir / name
+            if p.exists():
+                return p
+        return None
+
     # Collect PNG paths in slide order
     png_paths: list[Path] = []
     for slide in sorted(doc.slides, key=lambda s: s.slide_number):
-        p = bridge_dir / f"slide_{slide.slide_number:04d}.png"
-        if p.exists():
+        p = _find_png(slide.slide_number)
+        if p:
             png_paths.append(p)
 
     if not png_paths:
@@ -2812,8 +2957,8 @@ def export_pdf(doc_id: str):
             bridge_dir.mkdir(parents=True, exist_ok=True)
             _rbs(doc, bridge_dir)
             for slide in sorted(doc.slides, key=lambda s: s.slide_number):
-                p = bridge_dir / f"slide_{slide.slide_number:04d}.png"
-                if p.exists():
+                p = _find_png(slide.slide_number)
+                if p:
                     png_paths.append(p)
         except Exception as exc:
             raise HTTPException(500, f"Could not render slides: {exc}")
@@ -2855,10 +3000,17 @@ def export_png_zip(doc_id: str):
     doc = d["doc"]
     bridge_dir = _CACHE_DIR / doc_id / "bridge"
 
+    def _find_slide_png(n: int) -> Path | None:
+        for name in [f"slide-{n:03d}.png", f"slide_{n:04d}.png"]:
+            p = bridge_dir / name
+            if p.exists():
+                return p
+        return None
+
     png_paths: list[tuple[int, Path]] = []
     for slide in sorted(doc.slides, key=lambda s: s.slide_number):
-        p = bridge_dir / f"slide_{slide.slide_number:04d}.png"
-        if p.exists():
+        p = _find_slide_png(slide.slide_number)
+        if p:
             png_paths.append((slide.slide_number, p))
 
     if not png_paths:
@@ -2867,8 +3019,8 @@ def export_png_zip(doc_id: str):
             bridge_dir.mkdir(parents=True, exist_ok=True)
             _rbs(doc, bridge_dir)
             for slide in sorted(doc.slides, key=lambda s: s.slide_number):
-                p = bridge_dir / f"slide_{slide.slide_number:04d}.png"
-                if p.exists():
+                p = _find_slide_png(slide.slide_number)
+                if p:
                     png_paths.append((slide.slide_number, p))
         except Exception as exc:
             raise HTTPException(500, f"Could not render slides: {exc}")
@@ -2943,9 +3095,21 @@ def export_html_slideshow(doc_id: str):
         if t and t != "none":
             slide_transitions_map[slide.slide_number] = t
 
+    # Gather notes and sections for each slide
+    notes_map: dict[int, str] = {}
+    sections_map: dict[int, str] = {}
+    for slide in doc.slides:
+        cp = getattr(slide, "custom_properties", None) or {}
+        note = cp.get("notes_text", "").strip()
+        if note:
+            notes_map[slide.slide_number] = note
+        sec = cp.get("section_name", "").strip()
+        if sec:
+            sections_map[slide.slide_number] = sec
+
     # Build HTML
     slides_js = ",\n".join(
-        f'{{n:{n}, title:{json.dumps(t)}, src:"data:image/png;base64,{b64}", transition:{json.dumps(slide_transitions_map.get(n, "fade"))}}}'
+        f'{{n:{n}, title:{json.dumps(t)}, src:"data:image/png;base64,{b64}", transition:{json.dumps(slide_transitions_map.get(n, "fade"))}, notes:{json.dumps(notes_map.get(n, ""))}, section:{json.dumps(sections_map.get(n, ""))}}}'
         for n, t, b64 in slides_data
     )
 
@@ -2975,24 +3139,42 @@ def export_html_slideshow(doc_id: str):
   #dots{{ display:flex; gap:5px; align-items:center }}
   .dot{{ width:6px; height:6px; border-radius:50%; background:rgba(255,255,255,0.25); cursor:pointer; transition:background .15s }}
   .dot.active{{ background:#fff }}
+  #section-badge{{ position:fixed; top:12px; right:16px; font-size:11px; font-weight:600;
+    letter-spacing:.06em; text-transform:uppercase; color:rgba(167,139,250,0.85);
+    background:rgba(0,0,0,0.5); padding:3px 8px; border-radius:999px;
+    backdrop-filter:blur(4px); display:none }}
+  #notes-panel{{ position:fixed; bottom:64px; left:50%; transform:translateX(-50%);
+    width:min(680px,90vw); max-height:35vh; overflow-y:auto;
+    background:rgba(15,15,25,0.92); border:1px solid rgba(255,255,255,0.12);
+    border-radius:10px; padding:14px 18px; font-size:14px; line-height:1.6;
+    color:#d1d5db; backdrop-filter:blur(8px); display:none; white-space:pre-wrap }}
+  #notes-btn{{ font-size:11px; padding:3px 9px; opacity:0.7 }}
+  #notes-btn.active{{ opacity:1; background:rgba(139,92,246,0.35) }}
 </style>
 </head>
 <body>
 <div id="stage"><img id="slide-img" alt=""></div>
 <div id="title"></div>
+<div id="section-badge"></div>
+<div id="notes-panel"></div>
 <div id="controls">
   <button id="prev" onclick="go(cur-1)">&#8249;</button>
   <div id="dots"></div>
   <span id="counter"></span>
   <button id="next" onclick="go(cur+1)">&#8250;</button>
+  <button id="notes-btn" onclick="toggleNotes()" title="Toggle notes (N)">&#128203;</button>
 </div>
 <script>
 const slides = [{slides_js}];
 let cur = 0;
+let notesVisible = false;
 const img = document.getElementById('slide-img');
 const ctr = document.getElementById('counter');
 const ttl = document.getElementById('title');
 const dotsEl = document.getElementById('dots');
+const notesPanel = document.getElementById('notes-panel');
+const notesBtn = document.getElementById('notes-btn');
+const sectionBadge = document.getElementById('section-badge');
 
 if (slides.length <= 30) {{
   slides.forEach((s,i) => {{
@@ -3002,6 +3184,22 @@ if (slides.length <= 30) {{
   }});
 }}
 
+function toggleNotes() {{
+  notesVisible = !notesVisible;
+  notesPanel.style.display = notesVisible && slides[cur].notes ? 'block' : 'none';
+  notesBtn.classList.toggle('active', notesVisible);
+}}
+
+function updateSectionBadge(n) {{
+  const sec = slides[n].section;
+  if (sec) {{
+    sectionBadge.textContent = '§ ' + sec;
+    sectionBadge.style.display = 'block';
+  }} else {{
+    sectionBadge.style.display = 'none';
+  }}
+}}
+
 let transitioning = false;
 function go(n) {{
   const target = Math.max(0, Math.min(slides.length-1, n));
@@ -3009,7 +3207,6 @@ function go(n) {{
   const dir = target > cur ? 1 : -1;
   const t = slides[target].transition || 'fade';
   transitioning = true;
-  // exit animation
   if (t === 'fade') {{ img.style.opacity = '0'; }}
   else if (t === 'slide') {{ img.style.transform = `translateX(${{dir * -8}}%)`; img.style.opacity = '0'; }}
   else if (t === 'zoom') {{ img.style.transform = 'scale(0.93)'; img.style.opacity = '0'; }}
@@ -3022,7 +3219,11 @@ function go(n) {{
     document.getElementById('prev').disabled = cur === 0;
     document.getElementById('next').disabled = cur === slides.length-1;
     document.querySelectorAll('.dot').forEach((d,i) => d.classList.toggle('active', i===cur));
-    // enter: reset style first (no transition), then animate in
+    notesPanel.textContent = slides[cur].notes || '';
+    if (notesVisible) {{
+      notesPanel.style.display = slides[cur].notes ? 'block' : 'none';
+    }}
+    updateSectionBadge(cur);
     img.style.transition = 'none';
     if (t === 'slide') {{ img.style.transform = `translateX(${{dir * 8}}%)`; }}
     else {{ img.style.transform = 'none'; }}
@@ -3043,9 +3244,21 @@ document.addEventListener('keydown', e => {{
   if (e.key==='ArrowLeft'||e.key==='PageUp')  {{ e.preventDefault(); go(cur-1); }}
   if (e.key==='Home') go(0);
   if (e.key==='End')  go(slides.length-1);
+  if (e.key==='n'||e.key==='N') toggleNotes();
 }});
 
-go(0);
+// init first slide without transition
+img.src = slides[0].src;
+ctr.textContent = '1 / ' + slides.length;
+ttl.textContent = slides[0].title;
+notesPanel.textContent = slides[0].notes || '';
+updateSectionBadge(0);
+document.getElementById('prev').disabled = true;
+if (slides.length > 1 && slides.length <= 30) {{
+  document.querySelectorAll('.dot')[0].classList.add('active');
+}}
+document.getElementById('next').disabled = slides.length <= 1;
+requestAnimationFrame(() => {{ img.style.opacity = '1'; }});
 </script>
 </body>
 </html>"""
@@ -3171,6 +3384,8 @@ def _serialize_element(el: Any, index: int, slide_w: float, slide_h: float) -> d
     el_id    = _element_id(el, index)
     name     = (getattr(ident, "shape_name", None) if ident else None) or el_id
     rotation = float(getattr(xf, "rotation", 0.0) or 0.0)
+    flip_h   = bool(getattr(xf, "flip_h", False) or False)
+    flip_v   = bool(getattr(xf, "flip_v", False) or False)
     z_index  = int(getattr(st, "z_index", 1) or 1)
     el_type  = el.element_type
 
@@ -3180,25 +3395,34 @@ def _serialize_element(el: Any, index: int, slide_w: float, slide_h: float) -> d
     height_pct= (pos.height / slide_h * 100) if slide_h else 0.0
 
     custom = getattr(el, "custom_properties", {}) or {}
+    # Text preview for quick display in UI (strip to 80 chars)
+    try:
+        raw_text = _element_plain_text(el).strip()
+        text_preview: str | None = (raw_text[:80] + "…") if len(raw_text) > 80 else (raw_text or None)
+    except Exception:
+        text_preview = None
     return {
-        "id":          el_id,
-        "index":       index,
-        "type":        el_type,
-        "label":       _ELEMENT_TYPE_LABELS.get(el_type, el_type),
-        "name":        name,
-        "left_in":     round(pos.left,   5),
-        "top_in":      round(pos.top,    5),
-        "width_in":    round(pos.width,  5),
-        "height_in":   round(pos.height, 5),
-        "left_pct":    round(left_pct,   5),
-        "top_pct":     round(top_pct,    5),
-        "width_pct":   round(width_pct,  5),
-        "height_pct":  round(height_pct, 5),
-        "rotation":    rotation,
-        "z_index":     z_index,
-        "locked":      bool(custom.get("studio_locked", False)),
-        "hidden":      bool(custom.get("studio_hidden", False)),
-        "animation":   custom.get("studio_animation", "none"),
+        "id":           el_id,
+        "index":        index,
+        "type":         el_type,
+        "label":        _ELEMENT_TYPE_LABELS.get(el_type, el_type),
+        "name":         name,
+        "text_preview": text_preview,
+        "left_in":      round(pos.left,   5),
+        "top_in":       round(pos.top,    5),
+        "width_in":     round(pos.width,  5),
+        "height_in":    round(pos.height, 5),
+        "left_pct":     round(left_pct,   5),
+        "top_pct":      round(top_pct,    5),
+        "width_pct":    round(width_pct,  5),
+        "height_pct":   round(height_pct, 5),
+        "rotation":     rotation,
+        "flip_h":       flip_h,
+        "flip_v":       flip_v,
+        "z_index":      z_index,
+        "locked":       bool(custom.get("studio_locked", False)),
+        "hidden":       bool(custom.get("studio_hidden", False)),
+        "animation":    custom.get("studio_animation", "none"),
     }
 
 
@@ -3270,6 +3494,72 @@ def duplicate_slide(doc_id: str, n: int):
     return {"slide_count": len(doc.slides), "new_slide_n": new_n}
 
 
+class BulkSlideRequest(BaseModel):
+    slide_numbers: List[int]
+
+
+@app.post("/api/docs/{doc_id}/slides/bulk-delete")
+def bulk_delete_slides(doc_id: str, req: BulkSlideRequest):
+    """Delete multiple slides at once by their slide numbers (sorted descending)."""
+    import copy as _copy
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    doc = d["doc"]
+    to_delete = sorted(set(req.slide_numbers), reverse=True)
+    for n in to_delete:
+        slide = next((s for s in doc.slides if s.slide_number == n), None)
+        if slide:
+            doc.slides.remove(slide)
+    for i, s in enumerate(doc.slides):
+        s.slide_number = i + 1
+    if not doc.slides:
+        raise HTTPException(400, "Cannot delete all slides")
+    return {"slide_count": len(doc.slides)}
+
+
+@app.post("/api/docs/{doc_id}/slides/bulk-duplicate")
+def bulk_duplicate_slides(doc_id: str, req: BulkSlideRequest):
+    """Duplicate multiple slides, inserting copies after each original (in order)."""
+    import copy as _copy
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    doc = d["doc"]
+    new_slides = []
+    offset = 0
+    for n in sorted(set(req.slide_numbers)):
+        actual_n = n + offset
+        src = next((s for s in doc.slides if s.slide_number == actual_n), None)
+        if src is None:
+            continue
+        dup = _copy.deepcopy(src)
+        idx = doc.slides.index(src)
+        doc.slides.insert(idx + 1, dup)
+        offset += 1
+        for i, s in enumerate(doc.slides):
+            s.slide_number = i + 1
+        new_slides.append(dup.slide_number)
+    return {"slide_count": len(doc.slides), "new_slide_numbers": new_slides}
+
+
+class ReorderSlidesRequest(BaseModel):
+    order: List[int]  # new order as list of current slide numbers
+
+
+@app.post("/api/docs/{doc_id}/slides/reorder")
+def reorder_slides(doc_id: str, req: ReorderSlidesRequest):
+    """Reorder slides to the given order. order is a list of current slide numbers in new position order."""
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    doc = d["doc"]
+    by_n = {s.slide_number: s for s in doc.slides}
+    if set(req.order) != set(by_n.keys()):
+        raise HTTPException(400, "order must contain exactly all current slide numbers")
+    doc.slides = [by_n[n] for n in req.order]
+    for i, s in enumerate(doc.slides):
+        s.slide_number = i + 1
+    return {"slide_count": len(doc.slides)}
+
+
 @app.patch("/api/docs/{doc_id}/slides/{n}/move")
 def move_slide(doc_id: str, n: int, to_n: int):
     """Move slide *n* to position *to_n* (1-based)."""
@@ -3302,6 +3592,85 @@ def set_slide_background(doc_id: str, n: int, color: str | None = None):
     slide.background_gradient_stops = []
     log.info("studio: set slide %d background to %s in %s", n, color, doc_id)
     return {"background_color": slide.background_color}
+
+
+@app.get("/api/docs/{doc_id}/slide-hidden")
+def get_hidden_slides(doc_id: str):
+    """Return all slides that are currently hidden (will be skipped in presentation mode)."""
+    d = _require(doc_id)
+    hidden = [s.slide_number for s in d["doc"].slides if (s.custom_properties or {}).get("hidden")]
+    return {"hidden": hidden}
+
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/hidden")
+def set_slide_hidden(doc_id: str, n: int, hidden: bool = True):
+    """Hide or show a slide in presentation mode."""
+    d = _require(doc_id)
+    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+    if slide.custom_properties is None:
+        slide.custom_properties = {}
+    if hidden:
+        slide.custom_properties["hidden"] = True
+    else:
+        slide.custom_properties.pop("hidden", None)
+    return {"slide_n": n, "hidden": hidden}
+
+
+@app.get("/api/docs/{doc_id}/slide-pins")
+def get_slide_pins(doc_id: str):
+    """Return all slides that are currently pinned."""
+    d = _require(doc_id)
+    pinned = [s.slide_number for s in d["doc"].slides if (s.custom_properties or {}).get("pinned")]
+    return {"pinned": pinned}
+
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/pin")
+def pin_slide(doc_id: str, n: int, pinned: bool = True):
+    """Pin or unpin a slide to protect it from accidental deletion or reorder."""
+    d = _require(doc_id)
+    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+    if slide.custom_properties is None:
+        slide.custom_properties = {}
+    if pinned:
+        slide.custom_properties["pinned"] = True
+    else:
+        slide.custom_properties.pop("pinned", None)
+    return {"slide_n": n, "pinned": pinned}
+
+
+@app.get("/api/docs/{doc_id}/slide-ratings")
+def get_slide_ratings(doc_id: str):
+    """Return star ratings (1-5) for all slides that have one set."""
+    d = _require(doc_id)
+    ratings: dict[int, int] = {}
+    for slide in d["doc"].slides:
+        cp = slide.custom_properties or {}
+        r = cp.get("slide_rating")
+        if r is not None:
+            ratings[slide.slide_number] = int(r)
+    return {"ratings": ratings}
+
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/rating")
+def set_slide_rating(doc_id: str, n: int, rating: int | None = None):
+    """Set or clear a 1-5 star rating for a slide."""
+    if rating is not None and not (1 <= rating <= 5):
+        raise HTTPException(400, "rating must be 1-5 or null")
+    d = _require(doc_id)
+    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+    if slide.custom_properties is None:
+        slide.custom_properties = {}
+    if rating is None:
+        slide.custom_properties.pop("slide_rating", None)
+    else:
+        slide.custom_properties["slide_rating"] = rating
+    return {"slide_n": n, "rating": rating}
 
 
 class GradientStopSpec(BaseModel):
@@ -3415,6 +3784,30 @@ def set_slides_background(doc_id: str, req: BulkSlidesBackgroundRequest):
             slide.background_gradient_stops = []
             updated += 1
     return {"background_color": req.color, "slides_updated": updated}
+
+
+@app.get("/api/docs/{doc_id}/timer-budget")
+def get_timer_budget(doc_id: str):
+    """Return the presentation timer budget (total minutes target)."""
+    d = _require(doc_id)
+    cp = getattr(d["doc"], "custom_properties", None) or {}
+    return {"total_minutes": cp.get("timer_budget_minutes", None)}
+
+
+@app.patch("/api/docs/{doc_id}/timer-budget")
+def set_timer_budget(doc_id: str, total_minutes: float | None = None):
+    """Set or clear the presentation timer budget (total minutes)."""
+    d = _require(doc_id)
+    doc = d["doc"]
+    if not hasattr(doc, "custom_properties") or doc.custom_properties is None:
+        doc.custom_properties = {}
+    if total_minutes is None:
+        doc.custom_properties.pop("timer_budget_minutes", None)
+    else:
+        if total_minutes <= 0:
+            raise HTTPException(400, "total_minutes must be positive")
+        doc.custom_properties["timer_budget_minutes"] = total_minutes
+    return {"total_minutes": total_minutes}
 
 
 @app.patch("/api/docs/{doc_id}/background-all")
@@ -3559,6 +3952,696 @@ def set_slide_section(doc_id: str, n: int, req: SlideSectionUpdate):
     return {"slide_n": n, "section_name": req.section_name.strip()}
 
 
+@app.post("/api/docs/{doc_id}/slides/{n}/merge-elements")
+def merge_elements(doc_id: str, n: int, element_ids: list[str] = None, separator: str = "\n"):
+    """Merge multiple text elements into the first one, then delete the rest."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    if not element_ids or len(element_ids) < 2:
+        raise HTTPException(400, "Provide at least 2 element_ids to merge")
+
+    _snapshot_doc(doc_id)
+
+    # Find elements in order
+    id_to_el: dict[str, Any] = {}
+    id_to_idx: dict[str, int] = {}
+    for i, el in enumerate(slide.elements):
+        eid = _element_id(el, i)
+        if eid in element_ids:
+            id_to_el[eid] = el
+            id_to_idx[eid] = i
+
+    if len(id_to_el) < 2:
+        raise HTTPException(400, "Could not find the specified elements")
+
+    # Collect texts in order of element_ids
+    texts: list[str] = []
+    for eid in element_ids:
+        if eid in id_to_el:
+            texts.append(_element_plain_text(id_to_el[eid]).strip())
+
+    merged_text = separator.join(t for t in texts if t)
+
+    # Apply merged text to the first element
+    primary_el = id_to_el[element_ids[0]]
+    try:
+        _apply_plain_text_to_element(primary_el, merged_text)
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to apply merged text: {exc}")
+
+    # Remove all other elements
+    removed_ids = set(element_ids[1:])
+    slide.elements = [
+        el for i, el in enumerate(slide.elements)
+        if _element_id(el, i) not in removed_ids
+    ]
+
+    # Re-render
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    try:
+        from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+        _rbs(doc, bridge_dir, slide_numbers=[n])
+    except Exception as exc:
+        log.warning("merge-elements: re-render failed (non-fatal): %s", exc)
+
+    log.info("studio: merged %d elements on slide %d in %s", len(element_ids), n, doc_id)
+    return {"merged_text": merged_text, "removed_count": len(element_ids) - 1, "slide_n": n}
+
+
+@app.get("/api/docs/{doc_id}/readability")
+def readability_scores(doc_id: str):
+    """Compute Flesch Reading Ease score per slide (0=hard, 100=easy) + overall."""
+    import re as _re
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    def _syllables(word: str) -> int:
+        w = word.lower().rstrip("esz")
+        count = max(1, len(_re.findall(r"[aeiouy]+", w)))
+        # subtract silent e at end
+        if w.endswith("e") and count > 1:
+            count -= 1
+        return count
+
+    def _flesch(text: str) -> float | None:
+        words = _re.findall(r"[a-zA-Z']+", text)
+        if len(words) < 5:
+            return None
+        sentences = max(1, len(_re.split(r"[.!?]+", text)))
+        syllable_count = sum(_syllables(w) for w in words)
+        score = 206.835 - 1.015 * (len(words) / sentences) - 84.6 * (syllable_count / len(words))
+        return round(max(0, min(100, score)), 1)
+
+    def _grade_label(score: float | None) -> str:
+        if score is None: return "n/a"
+        if score >= 80:   return "very easy"
+        if score >= 60:   return "easy"
+        if score >= 40:   return "moderate"
+        if score >= 20:   return "difficult"
+        return "very difficult"
+
+    slides: list[dict] = []
+    all_text_parts: list[str] = []
+
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        full_text = " ".join(
+            _element_plain_text(e).strip() for e in slide.elements
+        )
+        all_text_parts.append(full_text)
+        score = _flesch(full_text)
+        slides.append({
+            "slide_n":     slide.slide_number,
+            "score":       score,
+            "label":       _grade_label(score),
+            "word_count":  len(_re.findall(r"[a-zA-Z']+", full_text)),
+        })
+
+    overall = _flesch(" ".join(all_text_parts))
+    return {
+        "slides":          slides,
+        "overall_score":   overall,
+        "overall_label":   _grade_label(overall),
+    }
+
+
+@app.post("/api/docs/{doc_id}/optimize-images")
+def optimize_images(doc_id: str, max_width_px: int = 1280, quality: int = 82):
+    """Compress and resize all BridgeImage elements to reduce file size.
+
+    Images wider than max_width_px are downscaled; all JPEG/PNG images are
+    re-encoded at the given JPEG quality (1-95). Skips images already small.
+    """
+    import io as _io
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    _snapshot_doc(doc_id)
+
+    optimized: list[dict] = []
+    total_before = 0
+    total_after  = 0
+
+    for slide in doc.slides:
+        for el in slide.elements:
+            if getattr(el, "element_type", "") != "BridgeImage":
+                continue
+            img_data = getattr(el, "image_data", None)
+            if not img_data:
+                continue
+            raw: bytes = getattr(img_data, "image_bytes", b"") or b""
+            if not raw:
+                continue
+
+            try:
+                buf_in = _io.BytesIO(raw)
+                img    = Image.open(buf_in).convert("RGB")
+                before = len(raw)
+                total_before += before
+
+                # Downscale if wider than max_width_px
+                w, h = img.size
+                if w > max_width_px:
+                    new_h = int(h * max_width_px / w)
+                    img = img.resize((max_width_px, new_h), Image.LANCZOS)
+
+                buf_out = _io.BytesIO()
+                img.save(buf_out, format="JPEG", quality=quality, optimize=True)
+                new_bytes = buf_out.getvalue()
+                after = len(new_bytes)
+                total_after += after
+
+                # Only replace if we actually saved ≥5% space
+                if after < before * 0.95:
+                    img_data.image_bytes  = new_bytes
+                    img_data.image_format = "JPEG"
+                    eid = (
+                        getattr(getattr(el, "identification", None), "shape_name", None)
+                        or str(getattr(getattr(el, "identification", None), "shape_id", ""))
+                    )
+                    optimized.append({
+                        "slide_n":    slide.slide_number,
+                        "element_id": eid,
+                        "before_kb":  round(before / 1024, 1),
+                        "after_kb":   round(after / 1024, 1),
+                        "savings_pct": round((1 - after / before) * 100, 1),
+                    })
+                else:
+                    total_after = total_after - after + before  # keep original count
+
+            except Exception as exc:
+                log.warning("optimize-images: skipped element on slide %d: %s", slide.slide_number, exc)
+
+    saved_kb   = round((total_before - total_after) / 1024, 1)
+    saved_pct  = round((1 - total_after / max(1, total_before)) * 100, 1)
+
+    log.info(
+        "studio: optimize-images %d images optimized, saved %.1f KB (%.1f%%) in %s",
+        len(optimized), saved_kb, saved_pct, doc_id,
+    )
+    return {
+        "optimized": optimized,
+        "total_optimized": len(optimized),
+        "saved_kb": saved_kb,
+        "saved_pct": saved_pct,
+        "total_before_kb": round(total_before / 1024, 1),
+        "total_after_kb":  round(total_after  / 1024, 1),
+    }
+
+
+@app.get("/api/docs/{doc_id}/content-density")
+def content_density(doc_id: str):
+    """Return per-slide content metrics: word count, element count, text density score."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    results: list[dict] = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        el_count   = len(slide.elements)
+        text_count = 0
+        word_count = 0
+        img_count  = 0
+        char_count = 0
+
+        for el in slide.elements:
+            el_type = getattr(el, "element_type", "")
+            if el_type == "BridgeImage":
+                img_count += 1
+            text = _element_plain_text(el).strip()
+            if text:
+                text_count += 1
+                words = len(text.split())
+                word_count += words
+                char_count += len(text)
+
+        # Density score: 0-100
+        # Ideal: ~20-60 words, 3-8 elements
+        word_score    = max(0, 100 - abs(word_count - 40) * 2)
+        element_score = max(0, 100 - abs(el_count - 5) * 8)
+        density_score = int((word_score * 0.6 + element_score * 0.4))
+
+        label = "ideal"
+        if word_count < 5 and el_count < 2:
+            label = "sparse"
+        elif word_count > 150 or el_count > 15:
+            label = "crowded"
+        elif word_count > 80 or el_count > 10:
+            label = "dense"
+
+        results.append({
+            "slide_n":      slide.slide_number,
+            "word_count":   word_count,
+            "char_count":   char_count,
+            "el_count":     el_count,
+            "text_count":   text_count,
+            "img_count":    img_count,
+            "density_score": density_score,
+            "label":        label,
+        })
+
+    deck_words  = sum(r["word_count"] for r in results)
+    avg_words   = deck_words / max(1, len(results))
+    crowded     = [r["slide_n"] for r in results if r["label"] == "crowded"]
+    sparse      = [r["slide_n"] for r in results if r["label"] == "sparse"]
+
+    return {
+        "slides":     results,
+        "deck_total_words": deck_words,
+        "avg_words_per_slide": round(avg_words, 1),
+        "crowded_slides": crowded,
+        "sparse_slides":  sparse,
+    }
+
+
+@app.post("/api/docs/{doc_id}/brand-check")
+def brand_check(
+    doc_id: str,
+    allowed_fonts: list[str] | None = None,
+    allowed_colors: list[str] | None = None,
+):
+    """Check that all elements conform to specified brand fonts and colors.
+
+    allowed_fonts: list of font family names (case-insensitive substring match)
+    allowed_colors: list of hex colors with tolerance matching
+    """
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    violations: list[dict] = []
+
+    def _hex_close(a: str, b: str, tol: int = 25) -> bool:
+        """Return True if two hex colors are within tolerance on each channel."""
+        try:
+            def _parse(h: str) -> tuple[int, int, int]:
+                h = h.lstrip("#")
+                if len(h) == 3:
+                    h = "".join(c * 2 for c in h)
+                return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            ra, ga, ba = _parse(a)
+            rb, gb, bb = _parse(b)
+            return abs(ra - rb) <= tol and abs(ga - gb) <= tol and abs(ba - bb) <= tol
+        except Exception:
+            return False
+
+    def _color_allowed(color: str) -> bool:
+        if not color or not allowed_colors:
+            return True
+        return any(_hex_close(color, c) for c in allowed_colors)
+
+    def _font_allowed(font: str) -> bool:
+        if not font or not allowed_fonts:
+            return True
+        fl = font.lower()
+        return any(af.lower() in fl or fl in af.lower() for af in allowed_fonts)
+
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        for i, el in enumerate(slide.elements):
+            eid = (
+                getattr(getattr(el, "identification", None), "shape_name", None)
+                or str(getattr(getattr(el, "identification", None), "shape_id", ""))
+            )
+
+            # Check fill color
+            fill = getattr(el, "fill", None)
+            if fill and getattr(fill, "fill_type", "") == "solid":
+                c = getattr(getattr(fill, "color", None), "value", None)
+                if c and not _color_allowed(c):
+                    violations.append({
+                        "slide_n": slide.slide_number,
+                        "element_id": eid,
+                        "type": "off-brand-fill",
+                        "detail": f"Fill color {c} not in brand palette",
+                        "value": c,
+                    })
+
+            # Check text runs
+            tc = getattr(el, "text_content", None)
+            if tc and getattr(tc, "has_text", False):
+                for para in getattr(tc, "paragraphs", []) or []:
+                    for run in getattr(para, "runs", []) or []:
+                        font = getattr(run, "font_name", None)
+                        color = getattr(run, "font_color", None)
+                        if font and not _font_allowed(font):
+                            violations.append({
+                                "slide_n": slide.slide_number,
+                                "element_id": eid,
+                                "type": "off-brand-font",
+                                "detail": f"Font '{font}' not in allowed fonts",
+                                "value": font,
+                            })
+                        if color and not _color_allowed(color):
+                            violations.append({
+                                "slide_n": slide.slide_number,
+                                "element_id": eid,
+                                "type": "off-brand-text-color",
+                                "detail": f"Text color {color} not in brand palette",
+                                "value": color,
+                            })
+
+    # Deduplicate (element × type)
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for v in violations:
+        key = f"{v['slide_n']}:{v['element_id']}:{v['type']}:{v['value']}"
+        if key not in seen:
+            seen.add(key)
+            unique.append(v)
+
+    unique.sort(key=lambda x: (x["slide_n"], x["type"]))
+    log.info("studio: brand-check %d violations in %s", len(unique), doc_id)
+    return {
+        "violations": unique[:100],
+        "total": len(unique),
+        "checked_slides": len(doc.slides),
+    }
+
+
+@app.get("/api/docs/{doc_id}/similar-slides")
+def find_similar_slides(doc_id: str, threshold: float = 0.55):
+    """Find pairs of slides with similar text content (potential duplicates)."""
+    import math as _math
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    def _tokenize(text: str) -> set[str]:
+        """Lowercase word tokens, strip punctuation."""
+        import re as _re
+        tokens = _re.findall(r"[a-z0-9]+", text.lower())
+        return set(tokens) - {"the", "a", "an", "is", "in", "to", "and", "or", "of", "for",
+                               "it", "be", "as", "at", "by", "on", "with", "this", "that"}
+
+    # Build per-slide token sets
+    slide_tokens: list[tuple[int, set[str]]] = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        full_text = " ".join(
+            _element_plain_text(e).strip() for e in slide.elements
+        )
+        tokens = _tokenize(full_text)
+        if tokens:
+            slide_tokens.append((slide.slide_number, tokens))
+
+    # Compute Jaccard similarity for all pairs
+    similar: list[dict] = []
+    n = len(slide_tokens)
+    for i in range(n):
+        for j in range(i + 1, n):
+            n1, t1 = slide_tokens[i]
+            n2, t2 = slide_tokens[j]
+            union = t1 | t2
+            if not union:
+                continue
+            jaccard = len(t1 & t2) / len(union)
+            if jaccard >= threshold:
+                similar.append({
+                    "slide_a": n1,
+                    "slide_b": n2,
+                    "similarity": round(jaccard, 3),
+                    "shared_words": sorted(list(t1 & t2))[:15],
+                })
+
+    similar.sort(key=lambda x: x["similarity"], reverse=True)
+    return {"pairs": similar[:30], "total_slides": len(slide_tokens)}
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/fit-text")
+def fit_text_to_elements(doc_id: str, n: int):
+    """Auto-fit text font sizes so content doesn't overflow element bounds.
+
+    Heuristic: estimate characters-per-line from width, lines from height,
+    then reduce font size until estimated line-count fits.
+    """
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    _snapshot_doc(doc_id)
+
+    fitted: list[dict] = []
+
+    for el in slide.elements:
+        # Only process BridgeShape / text elements with a text_content
+        tc = getattr(el, "text_content", None)
+        if not tc or not getattr(tc, "has_text", False):
+            continue
+        paragraphs = getattr(tc, "paragraphs", None) or []
+        if not paragraphs:
+            continue
+
+        pos = getattr(el, "position", None)
+        if not pos:
+            continue
+        w_in = getattr(pos, "width", None)
+        h_in = getattr(pos, "height", None)
+        if not (w_in and h_in and w_in > 0.2 and h_in > 0.1):
+            continue
+
+        # Find current font size from first run (default 18pt if missing)
+        current_size: float = 18.0
+        for para in paragraphs:
+            for run in getattr(para, "runs", []):
+                fs = getattr(run, "font_size", None)
+                if fs and fs > 0:
+                    current_size = float(fs)
+                    break
+            else:
+                continue
+            break
+
+        # Count total lines (words + manual line-breaks)
+        full_text = _element_plain_text(el)
+        if not full_text.strip():
+            continue
+
+        # Estimate capacity: ~9 chars per inch per point of font size at 72dpi
+        chars_per_inch_per_pt = 0.12
+        chars_per_line = max(10, w_in * (72 / current_size) * chars_per_inch_per_pt * 6)
+        # Estimate how many lines the text needs
+        total_chars = sum(len(line) for line in full_text.split("\n"))
+        manual_lines = len(full_text.split("\n"))
+        wrapped_lines = max(manual_lines, int(total_chars / max(1, chars_per_line)) + manual_lines)
+
+        # Capacity: height_in × 72 / (font_size × line_height_factor)
+        line_height_factor = 1.4
+        capacity_lines = h_in * 72 / (current_size * line_height_factor)
+
+        if wrapped_lines <= capacity_lines:
+            continue  # already fits
+
+        # Binary-search the smallest font size that fits (minimum 6pt)
+        lo, hi = 6.0, current_size
+        best: float = lo
+        for _ in range(16):
+            mid = (lo + hi) / 2
+            cpl = max(10, w_in * (72 / mid) * chars_per_inch_per_pt * 6)
+            wl  = max(manual_lines, int(total_chars / max(1, cpl)) + manual_lines)
+            cap = h_in * 72 / (mid * line_height_factor)
+            if wl <= cap:
+                best = mid
+                lo = mid
+            else:
+                hi = mid
+
+        new_size = max(6.0, round(best, 1))
+        if abs(new_size - current_size) < 0.5:
+            continue  # negligible change
+
+        # Apply to all runs
+        for para in paragraphs:
+            for run in getattr(para, "runs", []):
+                run.font_size = new_size
+
+        eid = (
+            getattr(getattr(el, "identification", None), "shape_name", None)
+            or str(getattr(getattr(el, "identification", None), "shape_id", ""))
+        )
+        fitted.append({"element_id": eid, "old_size": current_size, "new_size": new_size})
+
+    # Re-render slide if anything changed
+    if fitted:
+        bridge_dir = _CACHE_DIR / doc_id / "bridge"
+        try:
+            from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+            _rbs(doc, bridge_dir, slide_numbers=[n])
+        except Exception as exc:
+            log.warning("fit-text: re-render failed (non-fatal): %s", exc)
+
+    log.info("studio: fit-text adjusted %d elements on slide %d in %s", len(fitted), n, doc_id)
+    return {"fitted": fitted, "slide_n": n}
+
+
+@app.post("/api/docs/{doc_id}/suggest-reorder")
+def suggest_slide_reorder(doc_id: str):
+    """Use AI to suggest an optimal slide order for better narrative flow."""
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slide_info: list[dict] = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        texts = [_element_plain_text(e).strip() for e in slide.elements]
+        texts = [t for t in texts if t]
+        preview = " | ".join(texts[:2])[:120] if texts else ""
+        slide_info.append({
+            "slide_n": slide.slide_number,
+            "preview": preview or f"Slide {slide.slide_number}",
+        })
+
+    if len(slide_info) < 3:
+        return {"suggested_order": [s["slide_n"] for s in slide_info], "rationale": "Deck too short to reorder", "changes": 0}
+
+    info_json = json.dumps(slide_info, ensure_ascii=False)
+
+    prompt = (
+        f"You are a presentation coach. Analyze these {len(slide_info)} slides and suggest the optimal order "
+        f"for a clear, compelling narrative.\n\n"
+        f"Current slides:\n{info_json}\n\n"
+        f"Rules:\n"
+        f"- Keep slide 1 as slide 1 (title/intro should stay first)\n"
+        f"- Return ALL slide numbers (no additions/removals)\n"
+        f"- Focus on logical story progression\n\n"
+        f"Output ONLY valid JSON:\n"
+        f'{{"suggested_order":[1,3,2,5,4],"rationale":"2-3 sentence explanation of the key changes",'
+        f'"key_moves":[{{"from":3,"to":2,"reason":"Move problem before solution"}}]}}'
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=700,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = resp.content[0].text.strip()
+
+    try:
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        data = json.loads(m.group()) if m else {}
+        suggested_order: list[int] = data.get("suggested_order", [])
+        rationale: str = data.get("rationale", "")
+        key_moves: list[dict] = data.get("key_moves", [])
+    except Exception:
+        suggested_order = []
+        rationale = ""
+        key_moves = []
+
+    # Validate: must contain all slide numbers exactly once
+    expected = {s["slide_n"] for s in slide_info}
+    actual   = set(suggested_order)
+    if actual != expected:
+        # Fall back to current order
+        suggested_order = [s["slide_n"] for s in slide_info]
+        rationale = "Could not parse a valid reorder suggestion."
+        key_moves = []
+
+    original_order = [s["slide_n"] for s in slide_info]
+    changes = sum(1 for a, b in zip(original_order, suggested_order) if a != b)
+
+    log.info("studio: suggest-reorder: %d changes suggested in %s", changes, doc_id)
+    return {
+        "suggested_order": suggested_order,
+        "original_order":  original_order,
+        "rationale":       rationale,
+        "key_moves":       key_moves,
+        "changes":         changes,
+    }
+
+
+@app.post("/api/docs/{doc_id}/auto-sections")
+def auto_sections(doc_id: str):
+    """Use AI to detect logical sections from slide titles and auto-assign them."""
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    # Collect slide titles (first short text per slide)
+    slide_info: list[dict] = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        title = ""
+        for el in slide.elements:
+            t = _element_plain_text(el).strip()
+            if t and len(t) <= 120:
+                title = t[:120]
+                break
+        slide_info.append({"slide_n": slide.slide_number, "title": title or f"Slide {slide.slide_number}"})
+
+    info_json = json.dumps(slide_info, ensure_ascii=False)
+
+    prompt = (
+        f"Analyze these {len(slide_info)} presentation slides and group them into logical sections.\n\n"
+        f"Slides:\n{info_json}\n\n"
+        f"Rules:\n"
+        f"- Assign 3-8 sections total (fewer for short decks, more for long ones)\n"
+        f"- Each section starts at a specific slide; all subsequent slides belong to it until the next section starts\n"
+        f"- Section names should be 2-5 words, title-cased\n"
+        f"- First slide is usually an intro/title section\n\n"
+        f"Output ONLY valid JSON:\n"
+        f'{{"sections":[{{"slide_n":1,"name":"Introduction"}},{{"slide_n":4,"name":"Market Analysis"}}]}}'
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=600,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = resp.content[0].text.strip()
+
+    try:
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        data = json.loads(m.group()) if m else {}
+        sections: list[dict] = data.get("sections", [])
+    except Exception:
+        sections = []
+
+    # Apply sections to slides
+    # Each section entry means "from slide_n onwards, use this name"
+    sections_sorted = sorted(sections, key=lambda x: x.get("slide_n", 0))
+
+    # Build mapping: slide_number → section_name
+    slide_to_section: dict[int, str] = {}
+    for i, sec in enumerate(sections_sorted):
+        start_n = sec.get("slide_n", 0)
+        name    = sec.get("name", "").strip()
+        end_n   = sections_sorted[i + 1]["slide_n"] if i + 1 < len(sections_sorted) else 999999
+        for sn in range(start_n, end_n):
+            slide_to_section[sn] = name
+
+    # Apply: only set section_name on the *first* slide of each section (creates a divider there)
+    applied: dict[str, str] = {}
+    for sec in sections_sorted:
+        slide_n = sec.get("slide_n", 0)
+        name    = sec.get("name", "").strip()
+        if not name:
+            continue
+        slide = next((s for s in doc.slides if s.slide_number == slide_n), None)
+        if not slide:
+            continue
+        if not hasattr(slide, "custom_properties") or slide.custom_properties is None:
+            slide.custom_properties = {}
+        slide.custom_properties["section_name"] = name
+        applied[str(slide_n)] = name
+
+    log.info("studio: auto-sections assigned %d sections in %s", len(applied), doc_id)
+    return {"sections": applied, "total_slides": len(slide_info)}
+
+
 @app.get("/api/docs/{doc_id}/slide-sections")
 def get_slide_sections(doc_id: str):
     """Return section names keyed by slide number."""
@@ -3584,6 +4667,36 @@ def get_slide_transitions(doc_id: str):
         if t and t != "none":
             result[str(slide.slide_number)] = {"transition": t, "duration_ms": dur}
     return {"transitions": result}
+
+
+class BulkTransitionRequest(BaseModel):
+    transition: str = "none"
+    duration_ms: int = 500
+    slide_numbers: list[int] | None = None  # None means all slides
+
+
+@app.post("/api/docs/{doc_id}/transitions-bulk")
+def set_transitions_bulk(doc_id: str, req: BulkTransitionRequest):
+    """Set the same transition on all slides (or a specified subset)."""
+    if req.transition not in VALID_TRANSITIONS:
+        raise HTTPException(400, f"Unknown transition {req.transition!r}. Valid: {sorted(VALID_TRANSITIONS)}")
+    d   = _require(doc_id)
+    doc = d["doc"]
+    target = set(req.slide_numbers) if req.slide_numbers else None
+    updated = 0
+    for slide in doc.slides:
+        if target is not None and slide.slide_number not in target:
+            continue
+        if not hasattr(slide, "custom_properties") or slide.custom_properties is None:
+            slide.custom_properties = {}
+        if req.transition == "none":
+            slide.custom_properties.pop("transition", None)
+            slide.custom_properties.pop("transition_duration_ms", None)
+        else:
+            slide.custom_properties["transition"] = req.transition
+            slide.custom_properties["transition_duration_ms"] = req.duration_ms
+        updated += 1
+    return {"updated": updated, "transition": req.transition, "duration_ms": req.duration_ms}
 
 
 @app.get("/api/docs/{doc_id}/slides/{n}/export-slide")
@@ -3623,6 +4736,54 @@ def export_single_slide(doc_id: str, n: int):
     )
 
 
+@app.get("/api/docs/{doc_id}/export-subset")
+def export_subset_slides(doc_id: str, slides: str):
+    """Export a comma-separated list of slide numbers as a PPTX subset.
+
+    ?slides=1,3,5,7  →  exports only those slides in order.
+    """
+    import traceback as _tb
+    import copy as _copy
+    d = _require(doc_id)
+    if d.get("source_format") != "pptx":
+        raise HTTPException(400, "Subset export is only supported for PPTX documents")
+    try:
+        slide_numbers = sorted(set(int(s.strip()) for s in slides.split(",")))
+    except ValueError:
+        raise HTTPException(400, "slides must be a comma-separated list of integers")
+
+    all_ns = {s.slide_number for s in d["doc"].slides}
+    missing = [n for n in slide_numbers if n not in all_ns]
+    if missing:
+        raise HTTPException(404, f"Slides not found: {missing}")
+
+    _REBUILD_DIR.mkdir(parents=True, exist_ok=True)
+    stem     = Path(d["name"]).stem
+    slide_str = "_".join(str(n) for n in slide_numbers[:5])
+    if len(slide_numbers) > 5:
+        slide_str += f"_and{len(slide_numbers) - 5}more"
+    out_path = _REBUILD_DIR / f"{stem}_{doc_id}_subset_{slide_str}.pptx"
+
+    try:
+        subset_doc = _copy.deepcopy(d["doc"])
+        subset_doc.slides = [s for s in subset_doc.slides if s.slide_number in set(slide_numbers)]
+        subset_doc.slides.sort(key=lambda s: slide_numbers.index(s.slide_number))
+        for i, s in enumerate(subset_doc.slides):
+            s.slide_number = i + 1
+        _rebuild_pptx(subset_doc, out_path)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, detail=f"Subset export failed: {exc}\n{_tb.format_exc()}")
+
+    return FileResponse(
+        str(out_path),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=f"{stem}_subset.pptx",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.get("/api/docs/{doc_id}/notes-export")
 def export_all_notes(doc_id: str):
     """Export all slides' speaker notes as a plain-text download."""
@@ -3643,6 +4804,120 @@ def export_all_notes(doc_id: str):
     return PlainTextResponse(
         content=content,
         headers={"Content-Disposition": f'attachment; filename="{stem}_notes.txt"'},
+    )
+
+
+@app.get("/api/docs/{doc_id}/export-script")
+def export_speaker_script(doc_id: str, wpm: int = 120):
+    """Export a formatted speaker script with slide titles, notes, and reading-time estimates.
+
+    ?wpm=120  (optional, words per minute for time estimate)
+    """
+    from fastapi.responses import PlainTextResponse
+    d = _require(doc_id)
+    doc = d["doc"]
+    stem = Path(d.get("name", "script")).stem
+    lines: list[str] = [
+        f"SPEAKER SCRIPT — {stem.upper()}",
+        "=" * 60,
+        f"Generated: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        f"Words per minute: {wpm}",
+        "=" * 60,
+        "",
+    ]
+    total_words = 0
+    total_secs = 0
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        cp = slide.custom_properties or {}
+        section = cp.get("section_name", "").strip()
+        notes   = cp.get("notes_text", "").strip()
+        hidden  = cp.get("hidden", False)
+        # Gather title text
+        title = ""
+        for el in slide.elements:
+            ident = getattr(el, "identification", None)
+            name  = (getattr(ident, "shape_name", "") or "").lower()
+            plain = _element_plain_text(el).strip()
+            if plain and "title" in name:
+                title = plain
+                break
+        words = len(notes.split()) if notes else 0
+        secs  = int(words / max(wpm, 1) * 60) if words else 0
+        total_words += words
+        total_secs  += secs
+        header = f"SLIDE {slide.slide_number}"
+        if section:
+            header += f"  [§ {section}]"
+        if hidden:
+            header += "  [HIDDEN]"
+        lines.append(header)
+        if title:
+            lines.append(f"  Title: {title}")
+        if words:
+            m, s = divmod(secs, 60)
+            lines.append(f"  Est. time: {m}:{s:02d} ({words} words)")
+        lines.append("-" * 40)
+        if notes:
+            lines.append(notes)
+        else:
+            lines.append("(no notes)")
+        lines.append("")
+    m, s = divmod(total_secs, 60)
+    h = m // 60; m = m % 60
+    summary = f"TOTAL: {h}h {m:02d}m {s:02d}s | {total_words} words" if h else f"TOTAL: {m:02d}m {s:02d}s | {total_words} words"
+    lines.insert(4, summary)
+    return PlainTextResponse(
+        content="\n".join(lines),
+        headers={"Content-Disposition": f'attachment; filename="{stem}_script.txt"'},
+    )
+
+
+@app.get("/api/docs/{doc_id}/export-markdown")
+def export_markdown(doc_id: str):
+    """Export the entire presentation as a Markdown document (titles, body text, notes)."""
+    from fastapi.responses import PlainTextResponse
+    d = _require(doc_id)
+    doc = d["doc"]
+    lines: list[str] = [f"# {Path(d.get('name', 'Presentation')).stem}", ""]
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        cp = slide.custom_properties or {}
+        section = cp.get("section_name", "").strip()
+        notes   = cp.get("notes_text", "").strip()
+        hidden  = cp.get("hidden", False)
+        # Collect all text from slide elements
+        all_texts: list[str] = []
+        title_text: str | None = None
+        for el in slide.elements:
+            ident = getattr(el, "identification", None)
+            name  = (getattr(ident, "shape_name", "") or "").lower()
+            plain = _element_plain_text(el).strip()
+            if not plain:
+                continue
+            if "title" in name and title_text is None:
+                title_text = plain
+            else:
+                all_texts.append(plain)
+        if section:
+            lines.append(f"---")
+            lines.append(f"*Section: {section}*")
+            lines.append("")
+        hidden_tag = " *(hidden)*" if hidden else ""
+        heading = title_text or f"Slide {slide.slide_number}"
+        lines.append(f"## {slide.slide_number}. {heading}{hidden_tag}")
+        lines.append("")
+        for text in all_texts:
+            lines.append(text)
+            lines.append("")
+        if notes:
+            lines.append("> **Notes:**")
+            for line in notes.splitlines():
+                lines.append(f"> {line}" if line.strip() else ">")
+            lines.append("")
+    stem = Path(d.get("name", "presentation")).stem
+    content = "\n".join(lines)
+    return PlainTextResponse(
+        content=content,
+        headers={"Content-Disposition": f'attachment; filename="{stem}.md"'},
     )
 
 
@@ -3709,6 +4984,109 @@ def export_notes_html(doc_id: str):
     return HTMLResponse(
         content=html,
         headers={"Content-Disposition": f'attachment; filename="{stem}_notes.html"'},
+    )
+
+
+@app.get("/api/docs/{doc_id}/notes-pages-pdf")
+def export_notes_pages_pdf(doc_id: str):
+    """Export a 'notes pages' PDF: each page = slide thumbnail (left) + speaker notes (right)."""
+    import io as _io
+    import textwrap as _textwrap
+    try:
+        from PIL import Image as _PIL, ImageDraw as _Draw, ImageFont as _Font
+    except ImportError:
+        raise HTTPException(500, "Pillow not available")
+
+    d = _require(doc_id)
+    doc = d["doc"]
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    stem = Path(d.get("name", "notes")).stem
+
+    # Page dimensions in pixels (A4 landscape at 96dpi ≈ 1122 × 794)
+    PW, PH = 1122, 794
+    MARGIN = 30
+    SLIDE_W = int((PW - MARGIN * 3) * 0.55)
+    NOTES_X = MARGIN * 2 + SLIDE_W
+    NOTES_W = PW - NOTES_X - MARGIN
+
+    def _get_png(n: int) -> Path | None:
+        for name in [f"slide-{n:03d}.png", f"slide_{n:04d}.png"]:
+            p = bridge_dir / name
+            if p.exists():
+                return p
+        return None
+
+    pdf_pages: list[_PIL.Image] = []
+
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        cp = getattr(slide, "custom_properties", None) or {}
+        note = cp.get("notes_text", "").strip()
+        png_path = _get_png(n)
+
+        page = _PIL.new("RGB", (PW, PH), (245, 245, 248))
+        draw = _Draw.Draw(page)
+
+        # Slide thumbnail (left side)
+        if png_path and png_path.exists():
+            try:
+                slide_img = _PIL.open(str(png_path)).convert("RGB")
+                slide_h = int(SLIDE_W * slide_img.height / slide_img.width)
+                if slide_h > PH - MARGIN * 2:
+                    slide_h = PH - MARGIN * 2
+                    slide_w = int(slide_h * slide_img.width / slide_img.height)
+                else:
+                    slide_w = SLIDE_W
+                slide_img = slide_img.resize((slide_w, slide_h), _PIL.LANCZOS)
+                thumb_y = MARGIN + (PH - MARGIN * 2 - slide_h) // 2
+                page.paste(slide_img, (MARGIN, thumb_y))
+                draw.rectangle([MARGIN - 1, thumb_y - 1, MARGIN + slide_w, thumb_y + slide_h], outline=(200, 200, 210), width=1)
+            except Exception:
+                pass
+        else:
+            draw.rectangle([MARGIN, MARGIN, MARGIN + SLIDE_W, PH - MARGIN], fill=(220, 220, 230), outline=(180, 180, 190))
+            draw.text((MARGIN + SLIDE_W // 2, PH // 2), f"Slide {n}", fill=(150, 150, 160), anchor="mm")
+
+        # Notes text (right side)
+        draw.text((NOTES_X, MARGIN), f"Slide {n}", fill=(100, 100, 120), font=None)
+        if note:
+            # Wrap text to fit column width (~80 chars at typical font)
+            lines: list[str] = []
+            for para in note.split("\n"):
+                if para.strip():
+                    lines.extend(_textwrap.wrap(para, width=42))
+                else:
+                    lines.append("")
+            y_text = MARGIN + 22
+            for line in lines:
+                if y_text > PH - MARGIN:
+                    break
+                draw.text((NOTES_X, y_text), line, fill=(50, 50, 60))
+                y_text += 18
+        else:
+            draw.text((NOTES_X, MARGIN + 22), "(no speaker notes)", fill=(180, 180, 190), font=None)
+
+        # Slide number footer
+        draw.text((PW // 2, PH - MARGIN // 2), str(n), fill=(180, 180, 190), anchor="mm")
+
+        pdf_pages.append(page)
+
+    if not pdf_pages:
+        raise HTTPException(404, "No slides found — render the deck in Studio first")
+
+    buf = _io.BytesIO()
+    pdf_pages[0].save(
+        buf, format="PDF", save_all=True,
+        append_images=pdf_pages[1:],
+        resolution=96,
+    )
+    buf.seek(0)
+
+    from fastapi.responses import Response as _Resp
+    return _Resp(
+        content=buf.read(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{stem}_notes_pages.pdf"'},
     )
 
 
@@ -3836,6 +5214,12 @@ def update_element_position(doc_id: str, n: int, element_id: str, req: ElementPo
     if req.rotation  is not None:
         xf = getattr(el, "transforms", None)
         if xf is not None: xf.rotation = req.rotation % 360
+    if req.flip_h is not None:
+        xf = getattr(el, "transforms", None)
+        if xf is not None: xf.flip_h = req.flip_h
+    if req.flip_v is not None:
+        xf = getattr(el, "transforms", None)
+        if xf is not None: xf.flip_v = req.flip_v
     if req.name is not None:
         ident = getattr(el, "identification", None)
         if ident is not None: ident.shape_name = req.name.strip() or ident.shape_name
@@ -4218,6 +5602,50 @@ def copy_element_to_slide(doc_id: str, n: int, element_id: str, target_n: int, o
     return _serialize_element(dup, new_index, w, h)
 
 
+class BroadcastElementRequest(BaseModel):
+    skip_slides: list[int] = []   # slide numbers to skip (defaults to only the source slide)
+    exact_position: bool = True   # True = same position; False = offset like normal copy
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/broadcast")
+def broadcast_element(doc_id: str, n: int, element_id: str, req: BroadcastElementRequest):
+    """Copy an element to every other slide at the exact same position (broadcast / push-to-all)."""
+    import copy as _copy
+    _snapshot_doc(doc_id)
+    d   = _require(doc_id)
+    doc = d["doc"]
+    src_slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if src_slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+    src = None
+    for i, e in enumerate(src_slide.elements):
+        if _element_id(e, i) == element_id:
+            src = e
+            break
+    if src is None:
+        raise HTTPException(404, f"Element {element_id!r} not found on slide {n}")
+
+    skip = set(req.skip_slides) | {n}
+    pushed = 0
+    for tgt in doc.slides:
+        if tgt.slide_number in skip:
+            continue
+        dup = _copy.deepcopy(src)
+        if not req.exact_position:
+            dup.position.left += 0.25
+            dup.position.top  += 0.25
+        # give new unique shape_id on target
+        ident = getattr(dup, "identification", None)
+        if ident is not None:
+            existing_ids = {getattr(getattr(e, "identification", None), "shape_id", None) for e in tgt.elements}
+            ident.shape_id = max((x for x in existing_ids if x is not None), default=0) + 1
+        tgt.elements.append(dup)
+        pushed += 1
+
+    log.info("studio: broadcast element %s from slide %d to %d other slides in %s", element_id, n, pushed, doc_id)
+    return {"pushed_to": pushed, "source_slide": n, "element_id": element_id}
+
+
 class NewElementRequest(BaseModel):
     shape_type: str = "rect"   # geometry preset: "rect" | "roundRect" | "ellipse" | "triangle" etc.
     left_in: float = 1.0
@@ -4480,6 +5908,7 @@ def _snapshot_doc(doc_id: str) -> None:
     if len(stack) > _MAX_UNDO:
         stack.pop(0)
     d["_redo_stack"] = []
+    d["modified_at"] = time.time()
 
 
 @app.get("/api/docs/{doc_id}/undo-state")
@@ -4526,6 +5955,1321 @@ def redo_action(doc_id: str):
     d["doc"] = _pickle.loads(redo_stack.pop())
     log.info("redo: %s — %d undo / %d redo remain", doc_id, len(stack), len(redo_stack))
     return {"ok": True, "undo_depth": len(stack), "redo_depth": len(redo_stack)}
+
+
+# ── Named snapshots ───────────────────────────────────────────────────────────
+
+_MAX_NAMED_SNAPSHOTS = 20
+
+
+class NamedSnapshotRequest(BaseModel):
+    name: str
+
+
+@app.post("/api/docs/{doc_id}/snapshots")
+def create_snapshot(doc_id: str, req: NamedSnapshotRequest):
+    """Save a named checkpoint of the current document state."""
+    import pickle as _pickle
+    d = _require(doc_id)
+    if d.get("doc") is None:
+        raise HTTPException(400, "No document loaded")
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(400, "Snapshot name required")
+    snap_list: list = d.setdefault("_named_snapshots", [])
+    try:
+        blob = _pickle.dumps(d["doc"])
+    except Exception as exc:
+        raise HTTPException(500, f"Could not serialize document: {exc}")
+    snap_list.append({
+        "id": f"snap_{int(time.time() * 1000)}",
+        "name": name,
+        "created_at": time.time(),
+        "slide_count": len(d["doc"].slides),
+        "blob": blob,
+    })
+    if len(snap_list) > _MAX_NAMED_SNAPSHOTS:
+        snap_list.pop(0)
+    log.info("snapshot created: %s '%s'", doc_id, name)
+    return {"ok": True, "id": snap_list[-1]["id"], "total": len(snap_list)}
+
+
+@app.get("/api/docs/{doc_id}/snapshots")
+def list_snapshots(doc_id: str):
+    """List all named snapshots for this document."""
+    d = _require(doc_id)
+    snap_list: list = d.get("_named_snapshots", [])
+    return {
+        "snapshots": [
+            {"id": s["id"], "name": s["name"], "created_at": s["created_at"], "slide_count": s["slide_count"]}
+            for s in snap_list
+        ]
+    }
+
+
+@app.post("/api/docs/{doc_id}/snapshots/{snap_id}/restore")
+def restore_snapshot(doc_id: str, snap_id: str):
+    """Restore the document to a named snapshot (current state pushed to undo stack)."""
+    import pickle as _pickle
+    d = _require(doc_id)
+    snap_list: list = d.get("_named_snapshots", [])
+    snap = next((s for s in snap_list if s["id"] == snap_id), None)
+    if snap is None:
+        raise HTTPException(404, "Snapshot not found")
+    _snapshot_doc(doc_id)
+    try:
+        d["doc"] = _pickle.loads(snap["blob"])
+    except Exception as exc:
+        raise HTTPException(500, f"Could not restore snapshot: {exc}")
+    d["modified_at"] = time.time()
+    log.info("snapshot restored: %s '%s'", doc_id, snap["name"])
+    return {"ok": True, "name": snap["name"], "slide_count": len(d["doc"].slides)}
+
+
+@app.delete("/api/docs/{doc_id}/snapshots/{snap_id}")
+def delete_snapshot(doc_id: str, snap_id: str):
+    """Delete a named snapshot."""
+    d = _require(doc_id)
+    snap_list: list = d.get("_named_snapshots", [])
+    before = len(snap_list)
+    d["_named_snapshots"] = [s for s in snap_list if s["id"] != snap_id]
+    if len(d["_named_snapshots"]) == before:
+        raise HTTPException(404, "Snapshot not found")
+    return {"ok": True}
+
+
+# ── Voiceover / narration script ──────────────────────────────────────────────
+
+class VoiceoverRequest(BaseModel):
+    style: str = "professional"          # professional | conversational | formal | energetic
+    words_per_minute: int = 130
+    include_notes: bool = True
+
+
+@app.post("/api/docs/{doc_id}/voiceover-script")
+def generate_voiceover_script(doc_id: str, req: VoiceoverRequest):
+    """Use AI to generate a narration/voiceover script for all slides."""
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    style_desc = {
+        "professional":    "clear, professional business narration",
+        "conversational":  "warm, conversational and approachable tone",
+        "formal":          "formal and authoritative, suited for executive presentations",
+        "energetic":       "energetic, enthusiastic and engaging",
+    }.get(req.style, "professional business narration")
+
+    # Build slide summaries
+    slide_items = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        texts = [_element_plain_text(e).strip() for e in slide.elements]
+        texts = [t for t in texts if t]
+        notes_text = ""
+        if req.include_notes:
+            notes_text = (slide.notes or "").strip()
+        item = {
+            "n": slide.slide_number,
+            "content": " | ".join(texts[:6])[:300] if texts else "(no text)",
+            "notes": notes_text[:200] if notes_text else "",
+        }
+        slide_items.append(item)
+
+    slide_digest = ""
+    for item in slide_items:
+        slide_digest += f"\n[Slide {item['n']}]\n"
+        slide_digest += f"Content: {item['content']}\n"
+        if item["notes"]:
+            slide_digest += f"Speaker notes: {item['notes']}\n"
+
+    prompt = (
+        f"You are a professional presentation coach writing a voiceover script.\n\n"
+        f"Style: {style_desc}\n"
+        f"Target speaking pace: ~{req.words_per_minute} words per minute\n\n"
+        f"Here is the presentation content:\n{slide_digest}\n\n"
+        f"Write a complete narration script. For each slide, output:\n"
+        f"=== Slide N ===\n"
+        f"[Estimated time: Xs]\n"
+        f"The actual spoken narration (3-6 sentences, natural speech)\n\n"
+        f"At the end, output a === Summary === section with total estimated time and key talking points.\n"
+        f"Keep each slide to approximately {int(60 / (req.words_per_minute / 100))} spoken seconds.\n"
+        f"Write ONLY the script — no meta-commentary."
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=4096,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    script = resp.content[0].text.strip()
+
+    # Compute rough word count estimate
+    word_count = len(script.split())
+    est_minutes = round(word_count / req.words_per_minute, 1)
+
+    return {
+        "script": script,
+        "slide_count": len(slide_items),
+        "word_count": word_count,
+        "estimated_minutes": est_minutes,
+        "style": req.style,
+    }
+
+
+# ── AI Image Alt-Text Generator ───────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/generate-alt-text")
+def generate_alt_text(doc_id: str):
+    """Use Claude vision to generate accessibility alt-text for all BridgeImage elements."""
+    import anthropic as _anthropic
+    import base64 as _b64
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    results = []
+    updated = 0
+    skipped = 0
+
+    client = _anthropic.Anthropic(api_key=api_key)
+
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        for el in slide.elements:
+            if getattr(el, "element_type", "") != "BridgeImage":
+                continue
+            img_data = getattr(el, "image_data", None)
+            if not img_data:
+                skipped += 1
+                continue
+            raw: bytes = getattr(img_data, "image_bytes", b"") or b""
+            if not raw:
+                skipped += 1
+                continue
+
+            fmt = getattr(img_data, "image_format", "png") or "png"
+            media_type = "image/jpeg" if fmt.lower() in ("jpg", "jpeg") else "image/png"
+
+            # Use vision to describe the image
+            try:
+                b64_data = _b64.standard_b64encode(raw).decode("utf-8")
+                resp = client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=150,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {"type": "base64", "media_type": media_type, "data": b64_data},
+                            },
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Describe this presentation image in 1-2 concise sentences for use as alt text. "
+                                    "Focus on what the image shows and its likely purpose in a business presentation. "
+                                    "Keep it under 100 words. Do not start with 'The image shows' or 'This is'."
+                                ),
+                            },
+                        ],
+                    }],
+                )
+                alt = resp.content[0].text.strip()
+            except Exception as exc:
+                log.warning("alt-text generation failed for %s: %s", el.identification.shape_name if hasattr(el, "identification") else "?", exc)
+                alt = f"Image on slide {slide.slide_number}"
+
+            # Apply alt text to accessibility attribute
+            if hasattr(el, "accessibility") and el.accessibility is not None:
+                el.accessibility.alt_text = alt
+            elif hasattr(el, "accessibility"):
+                pass  # can't set
+
+            updated += 1
+            results.append({
+                "slide_n": slide.slide_number,
+                "element_id": el.identification.shape_name if hasattr(el, "identification") else "",
+                "alt_text": alt,
+            })
+
+    log.info("alt-text: updated %d images, skipped %d in %s", updated, skipped, doc_id)
+    return {"updated": updated, "skipped": skipped, "results": results}
+
+
+# ── Slide Text Diff ───────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slides/{n}/diff")
+def diff_slides(doc_id: str, n: int, compare_n: int):
+    """
+    Compare the text content of slide n with compare_n.
+    Returns a word-level diff showing additions, deletions, and unchanged text.
+    """
+    import difflib
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    def get_slide_text(slide_number: int) -> list[str]:
+        slide = next((s for s in doc.slides if s.slide_number == slide_number), None)
+        if not slide:
+            return []
+        texts = []
+        for el in sorted(slide.elements, key=lambda e: getattr(e, "position", None) and (getattr(e.position, "top", 0), getattr(e.position, "left", 0)) or (0, 0)):
+            t = _element_plain_text(el).strip()
+            if t:
+                texts.append(t)
+        return texts
+
+    texts_a = get_slide_text(n)
+    texts_b = get_slide_text(compare_n)
+
+    words_a = " ".join(texts_a).split()
+    words_b = " ".join(texts_b).split()
+
+    # Use SequenceMatcher for word-level diff
+    matcher = difflib.SequenceMatcher(None, words_a, words_b)
+    diff_ops = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            diff_ops.append({"type": "equal",   "text": " ".join(words_a[i1:i2])})
+        elif tag == "replace":
+            diff_ops.append({"type": "removed", "text": " ".join(words_a[i1:i2])})
+            diff_ops.append({"type": "added",   "text": " ".join(words_b[j1:j2])})
+        elif tag == "delete":
+            diff_ops.append({"type": "removed", "text": " ".join(words_a[i1:i2])})
+        elif tag == "insert":
+            diff_ops.append({"type": "added",   "text": " ".join(words_b[j1:j2])})
+
+    added_words   = sum(len(op["text"].split()) for op in diff_ops if op["type"] == "added")
+    removed_words = sum(len(op["text"].split()) for op in diff_ops if op["type"] == "removed")
+    similarity = round(matcher.ratio() * 100, 1)
+
+    return {
+        "slide_a": n,
+        "slide_b": compare_n,
+        "diff": diff_ops,
+        "added_words": added_words,
+        "removed_words": removed_words,
+        "similarity_pct": similarity,
+        "word_count_a": len(words_a),
+        "word_count_b": len(words_b),
+    }
+
+
+# ── AI Deck Summarizer ────────────────────────────────────────────────────────
+
+class DeckSummaryRequest(BaseModel):
+    audience: str = "executive"   # executive | technical | general
+    format: str = "structured"    # structured | narrative | bullets
+
+
+@app.post("/api/docs/{doc_id}/deck-summary")
+def deck_summary(doc_id: str, req: DeckSummaryRequest):
+    """Generate an AI executive/analytical summary of the entire deck's content."""
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    # Collect all slide text
+    slide_texts = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        texts = [_element_plain_text(e).strip() for e in slide.elements if _element_plain_text(e).strip()]
+        if texts:
+            slide_texts.append(f"Slide {slide.slide_number}: " + " | ".join(texts[:5])[:250])
+
+    if not slide_texts:
+        raise HTTPException(400, "Deck has no text content to summarize")
+
+    content_str = "\n".join(slide_texts)
+
+    audience_desc = {
+        "executive": "C-suite executive (focus on business impact, decisions, ROI, and strategic implications)",
+        "technical":  "technical audience (focus on methods, data, implementation details, and technical trade-offs)",
+        "general":    "general audience (clear language, minimal jargon, practical takeaways)",
+    }.get(req.audience, "executive")
+
+    if req.format == "structured":
+        format_instruction = (
+            "Respond in this exact JSON structure:\n"
+            '{"title":"...", "core_message":"1-2 sentences", "key_points":["...","...","..."], '
+            '"action_items":["...","..."], "open_questions":["..."], "sentiment":"positive|neutral|negative"}'
+        )
+    elif req.format == "narrative":
+        format_instruction = "Write a 3-4 paragraph narrative summary. No JSON. Just prose."
+    else:
+        format_instruction = "Write a concise bullet-point summary with sections: Overview, Key Points, Action Items. No JSON."
+
+    prompt = (
+        f"You are summarizing a presentation for a {audience_desc}.\n\n"
+        f"Presentation content (by slide):\n{content_str}\n\n"
+        f"{format_instruction}"
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=800,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = resp.content[0].text.strip()
+
+    if req.format == "structured":
+        try:
+            m = re.search(r"\{.*\}", raw, re.DOTALL)
+            data = json.loads(m.group()) if m else {}
+        except Exception:
+            data = {}
+        return {
+            "format": "structured",
+            "audience": req.audience,
+            "slide_count": len(slide_texts),
+            "data": data,
+            "raw": raw,
+        }
+    else:
+        return {
+            "format": req.format,
+            "audience": req.audience,
+            "slide_count": len(slide_texts),
+            "data": None,
+            "raw": raw,
+        }
+
+
+# ── AI Action Item Extractor ──────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/extract-action-items")
+def extract_action_items(doc_id: str):
+    """Extract action items, owners, and deadlines from slide text using AI."""
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    # Collect all text with slide numbers
+    slide_texts = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        texts = [_element_plain_text(e).strip() for e in slide.elements if _element_plain_text(e).strip()]
+        if texts:
+            slide_texts.append({"n": slide.slide_number, "text": " | ".join(texts[:8])[:300]})
+
+    if not slide_texts:
+        raise HTTPException(400, "Deck has no text content")
+
+    content_str = "\n".join(f"[Slide {s['n']}] {s['text']}" for s in slide_texts)
+
+    prompt = (
+        f"Extract all action items, tasks, commitments, and follow-ups from this presentation.\n\n"
+        f"Content:\n{content_str}\n\n"
+        f"Return ONLY valid JSON array, each item has:\n"
+        f'{{"slide_n": number, "action": "what needs to be done", "owner": "person/team or null", '
+        f'"deadline": "date/timeframe or null", "priority": "high|medium|low"}}\n\n'
+        f"If no clear action items exist, return an empty array [].\n"
+        f"Focus on explicit tasks, decisions requiring follow-up, and commitments made."
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=600,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = resp.content[0].text.strip()
+
+    try:
+        m = re.search(r"\[.*\]", raw, re.DOTALL)
+        items = json.loads(m.group()) if m else []
+        if not isinstance(items, list):
+            items = []
+    except Exception:
+        items = []
+
+    return {
+        "items": items,
+        "total": len(items),
+        "slide_count": len(slide_texts),
+        "high_priority": sum(1 for i in items if i.get("priority") == "high"),
+    }
+
+
+# ── Keyword / Topic Extraction ────────────────────────────────────────────────
+
+_STOPWORDS = frozenset({
+    "the","a","an","and","or","but","in","on","at","to","for","of","with","by","from","as",
+    "is","are","was","were","be","been","being","have","has","had","do","does","did","will",
+    "would","could","should","may","might","shall","can","not","no","this","that","these",
+    "those","it","its","we","our","they","their","you","your","i","my","he","his","she","her",
+    "all","any","each","every","some","more","most","also","than","then","there","here","when",
+    "which","who","what","how","why","where","about","up","out","if","into","over","after",
+    "new","use","used","using","get","go","make","one","two","three","four","five","per",
+    "slide","presentation","deck","page","s","t","ve","re","ll","d","m",
+})
+
+
+@app.get("/api/docs/{doc_id}/keywords")
+def extract_keywords(doc_id: str, top_n: int = 30):
+    """Extract top keywords and topics from deck text using TF-IDF-style scoring."""
+    import math
+    import re as _re
+    import collections
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides_words: list[list[str]] = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        raw_text = " ".join(
+            _element_plain_text(e).strip() for e in slide.elements
+            if _element_plain_text(e).strip()
+        )
+        words = [w.lower() for w in _re.findall(r"[a-zA-Z]{3,}", raw_text) if w.lower() not in _STOPWORDS]
+        slides_words.append(words)
+
+    if not any(slides_words):
+        return {"keywords": [], "slide_count": len(slides_words), "total_words": 0}
+
+    # TF across whole deck
+    all_words = [w for slide in slides_words for w in slide]
+    total_words = len(all_words)
+    tf: dict[str, int] = dict(collections.Counter(all_words))
+
+    # IDF: number of slides each word appears in
+    num_slides = len(slides_words)
+    df: dict[str, int] = {}
+    for words in slides_words:
+        for w in set(words):
+            df[w] = df.get(w, 0) + 1
+
+    # TF-IDF score
+    tfidf: dict[str, float] = {}
+    for word, freq in tf.items():
+        if freq < 2:
+            continue
+        idf = math.log((num_slides + 1) / (df.get(word, 1) + 1)) + 1
+        tfidf[word] = (freq / total_words) * idf * 1000  # scale for readability
+
+    top_keywords = sorted(tfidf.items(), key=lambda x: -x[1])[:top_n]
+
+    # Per-slide counts for the top keywords
+    keyword_slides: dict[str, list[int]] = {}
+    for word, _ in top_keywords:
+        keyword_slides[word] = [
+            i + 1 for i, words in enumerate(slides_words) if word in words
+        ]
+
+    return {
+        "keywords": [
+            {
+                "word": word,
+                "score": round(score, 2),
+                "count": tf[word],
+                "slide_count": df.get(word, 0),
+                "slides": keyword_slides[word],
+            }
+            for word, score in top_keywords
+        ],
+        "slide_count": num_slides,
+        "total_words": total_words,
+    }
+
+
+# ── Deck-wide font / color swap ───────────────────────────────────────────────
+
+class DeckFontSwapRequest(BaseModel):
+    from_font: str
+    to_font: str
+    match_case: bool = False
+
+
+class DeckColorSwapRequest(BaseModel):
+    from_color: str   # hex e.g. "#FF0000"
+    to_color: str     # hex e.g. "#CC0000"
+    tolerance: int = 10  # ±per-channel tolerance for matching
+
+
+@app.post("/api/docs/{doc_id}/swap-font")
+def deck_swap_font(doc_id: str, req: DeckFontSwapRequest):
+    """Replace all occurrences of a font name across the entire deck."""
+    _snapshot_doc(doc_id)
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    from_font  = req.from_font.strip()
+    to_font    = req.to_font.strip()
+    if not from_font or not to_font:
+        raise HTTPException(400, "Both from_font and to_font are required")
+
+    changed = 0
+
+    def _match_font(name: str | None) -> bool:
+        if not name:
+            return False
+        if req.match_case:
+            return name == from_font
+        return name.lower() == from_font.lower()
+
+    for slide in doc.slides:
+        for el in slide.elements:
+            tf = getattr(el, "text_frame", None) or getattr(el, "text_content", None)
+            if tf is None:
+                continue
+            paras = getattr(tf, "paragraphs", None) or getattr(el, "text_content", None) and getattr(el.text_content, "paragraphs", [])
+            if not paras:
+                continue
+            for para in paras:
+                for run in getattr(para, "runs", []):
+                    if _match_font(run.font_name):
+                        run.font_name = to_font
+                        changed += 1
+
+    affected_slides: list[int] = []
+    for slide in doc.slides:
+        for el in slide.elements:
+            tf = getattr(el, "text_frame", None) or getattr(el, "text_content", None)
+            if tf is None:
+                continue
+            paras = getattr(tf, "paragraphs", None) or getattr(el.text_content, "paragraphs", []) if hasattr(el, "text_content") else []
+            for para in paras:
+                if any(getattr(r, "font_name", None) == to_font for r in getattr(para, "runs", [])):
+                    if slide.slide_number not in affected_slides:
+                        affected_slides.append(slide.slide_number)
+
+    log.info("deck-swap-font: %s → %s, changed %d runs in %s", from_font, to_font, changed, doc_id)
+    return {"changed": changed, "from_font": from_font, "to_font": to_font, "affected_slides": affected_slides}
+
+
+@app.post("/api/docs/{doc_id}/swap-color")
+def deck_swap_color(doc_id: str, req: DeckColorSwapRequest):
+    """Replace a fill/text color across the entire deck (with optional tolerance)."""
+    import re as _re
+    _snapshot_doc(doc_id)
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    def _parse_hex(h: str) -> tuple[int, int, int] | None:
+        h = h.lstrip("#")
+        if len(h) == 6:
+            try:
+                return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            except ValueError:
+                pass
+        return None
+
+    from_rgb = _parse_hex(req.from_color)
+    to_hex   = req.to_color.upper().lstrip("#")
+    if not from_rgb:
+        raise HTTPException(400, "Invalid from_color hex")
+    if _parse_hex(req.to_color) is None:
+        raise HTTPException(400, "Invalid to_color hex")
+
+    def _color_matches(hex_val: str | None) -> bool:
+        if not hex_val:
+            return False
+        rgb = _parse_hex(hex_val)
+        if not rgb:
+            return False
+        r, g, b = rgb
+        fr, fg, fb = from_rgb  # type: ignore[misc]
+        return (abs(r - fr) <= req.tolerance and
+                abs(g - fg) <= req.tolerance and
+                abs(b - fb) <= req.tolerance)
+
+    def _fix_color(obj: Any, attr: str) -> bool:
+        c = getattr(obj, attr, None)
+        if c is None:
+            return False
+        val = getattr(c, "value", None) if hasattr(c, "value") else (c if isinstance(c, str) else None)
+        if val and _color_matches(val.lstrip("#")):
+            if hasattr(c, "value"):
+                c.value = "#" + to_hex
+            elif isinstance(c, str):
+                setattr(obj, attr, "#" + to_hex)
+            return True
+        return False
+
+    changed = 0
+    for slide in doc.slides:
+        for el in slide.elements:
+            # fill color
+            fill = getattr(el, "fill", None)
+            if fill:
+                if _fix_color(fill, "color"):
+                    changed += 1
+            # text run colors
+            for tc in [getattr(el, "text_content", None), getattr(el, "text_frame", None)]:
+                if tc is None:
+                    continue
+                for para in getattr(tc, "paragraphs", []):
+                    for run in getattr(para, "runs", []):
+                        if _fix_color(run, "font_color"):
+                            changed += 1
+
+    log.info("deck-swap-color: %s → %s, changed %d in %s", req.from_color, req.to_color, changed, doc_id)
+    return {"changed": changed, "from_color": req.from_color, "to_color": req.to_color}
+
+
+# ── Presentation Stats Export ─────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/stats-export")
+def export_stats(doc_id: str, fmt: str = "json"):
+    """
+    Export a full analytics report for the deck: per-slide word counts, element breakdown,
+    readability approximation, and metadata.
+    Returns JSON by default or CSV if fmt=csv.
+    """
+    import io as _io
+    import csv as _csv
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    rows = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        texts = [_element_plain_text(e).strip() for e in slide.elements]
+        texts = [t for t in texts if t]
+        all_text = " ".join(texts)
+        words = all_text.split()
+        word_count = len(words)
+
+        el_types: dict[str, int] = {}
+        for el in slide.elements:
+            t = getattr(el, "element_type", "Unknown")
+            el_types[t] = el_types.get(t, 0) + 1
+
+        # Rough Flesch score
+        sents = max(1, len([c for c in all_text if c in ".!?"])) if all_text else 1
+        if word_count > 0 and sents > 0:
+            avg_words_per_sent = word_count / sents
+            avg_sylls = sum(max(1, len([ch for ch in w.lower() if ch in "aeiou"])) for w in words) / max(1, word_count)
+            flesch = max(0, min(100, 206.835 - 1.015 * avg_words_per_sent - 84.6 * avg_sylls))
+        else:
+            flesch = None
+
+        has_notes = bool((slide.notes or "").strip()) if hasattr(slide, "notes") else False
+        notes_words = len((slide.notes or "").split()) if hasattr(slide, "notes") and slide.notes else 0
+
+        rows.append({
+            "slide_n": slide.slide_number,
+            "word_count": word_count,
+            "element_count": len(slide.elements),
+            "text_elements": el_types.get("BridgeText", 0) + el_types.get("BridgeShape", 0),
+            "image_elements": el_types.get("BridgeImage", 0),
+            "has_notes": has_notes,
+            "notes_word_count": notes_words,
+            "flesch_score": round(flesch, 1) if flesch is not None else None,
+            "element_breakdown": ", ".join(f"{k}:{v}" for k, v in el_types.items()),
+        })
+
+    if fmt == "csv":
+        buf = _io.StringIO()
+        if rows:
+            writer = _csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+        from starlette.responses import Response  # type: ignore[attr-defined]
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="percy-stats-{doc_id[:8]}.csv"'},
+        )
+
+    total_words    = sum(r["word_count"] for r in rows)
+    slides_w_notes = sum(1 for r in rows if r["has_notes"])
+    avg_flesch     = round(sum(r["flesch_score"] for r in rows if r["flesch_score"] is not None) / max(1, len([r for r in rows if r["flesch_score"] is not None])), 1) if rows else None
+
+    return {
+        "doc_id": doc_id,
+        "slide_count": len(rows),
+        "total_words": total_words,
+        "slides_with_notes": slides_w_notes,
+        "avg_flesch_score": avg_flesch,
+        "slides": rows,
+    }
+
+
+# ── AI Question Generator ─────────────────────────────────────────────────────
+
+class QuestionGenRequest(BaseModel):
+    question_type: str = "discussion"   # discussion | quiz | comprehension | critical
+    count: int = 5
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/generate-questions")
+def generate_questions(doc_id: str, n: int, req: QuestionGenRequest):
+    """Generate discussion or quiz questions based on a slide's content using AI."""
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if not slide:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    texts = [_element_plain_text(e).strip() for e in slide.elements if _element_plain_text(e).strip()]
+    if not texts:
+        raise HTTPException(400, "Slide has no text content")
+
+    slide_text = " | ".join(texts[:6])[:500]
+    count = max(1, min(10, req.count))
+
+    type_desc = {
+        "discussion":    "open-ended discussion questions that encourage reflection and debate",
+        "quiz":          "multiple-choice quiz questions with 4 options (A, B, C, D) and the correct answer",
+        "comprehension": "comprehension check questions that test understanding of the key concepts",
+        "critical":      "critical thinking questions that challenge assumptions or explore implications",
+    }.get(req.question_type, "discussion questions")
+
+    if req.question_type == "quiz":
+        output_format = (
+            f'Return a JSON array of {count} objects: '
+            '{"question": "...", "options": {"A":"...","B":"...","C":"...","D":"..."}, "answer": "A"}'
+        )
+    else:
+        output_format = f'Return a JSON array of {count} question strings.'
+
+    prompt = (
+        f"Based on this presentation slide content, generate {count} {type_desc}.\n\n"
+        f"Slide content: {slide_text}\n\n"
+        f"{output_format}\n"
+        f"Keep questions specific to the content above. Output ONLY the JSON array."
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=600,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = resp.content[0].text.strip()
+
+    try:
+        m = re.search(r"\[.*\]", raw, re.DOTALL)
+        questions = json.loads(m.group()) if m else []
+    except Exception:
+        questions = []
+
+    return {
+        "questions": questions,
+        "question_type": req.question_type,
+        "slide_n": n,
+        "count": len(questions),
+    }
+
+
+# ── AI Presentation Coach ─────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/presentation-coach")
+def presentation_coach(doc_id: str):
+    """
+    AI coach reviews the whole deck for structure, flow, and delivery issues.
+    Returns coaching tips categorized by issue type.
+    """
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slide_summaries = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        texts = [_element_plain_text(e).strip() for e in slide.elements if _element_plain_text(e).strip()]
+        word_count = len(" ".join(texts).split())
+        el_count   = len(slide.elements)
+        slide_summaries.append({
+            "n": slide.slide_number,
+            "text": " | ".join(texts[:5])[:200] if texts else "(no text)",
+            "word_count": word_count,
+            "element_count": el_count,
+        })
+
+    digest = "\n".join(
+        f"Slide {s['n']}: {s['word_count']} words, {s['element_count']} elements — {s['text']}"
+        for s in slide_summaries
+    )
+
+    prompt = (
+        "You are a professional presentation coach reviewing this deck.\n\n"
+        f"Deck overview ({len(slide_summaries)} slides):\n{digest}\n\n"
+        "Identify coaching tips and structural issues. Return ONLY a JSON array of issues:\n"
+        '[{"category":"structure|clarity|engagement|pacing|content","severity":"high|medium|low",'
+        '"slide_n":null_or_number,"tip":"specific actionable advice (1-2 sentences)"}]\n\n'
+        "Categories:\n"
+        "- structure: weak intro/outro, poor flow, missing sections\n"
+        "- clarity: confusing order, missing context, unclear purpose\n"
+        "- engagement: too much text, no visuals, monotonous format\n"
+        "- pacing: too many/few slides, uneven content density\n"
+        "- content: missing key slides, abrupt endings, no call-to-action\n\n"
+        "Return 5-10 tips. Focus on the most impactful improvements."
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=800,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = resp.content[0].text.strip()
+
+    try:
+        m = re.search(r"\[.*\]", raw, re.DOTALL)
+        tips = json.loads(m.group()) if m else []
+        if not isinstance(tips, list):
+            tips = []
+    except Exception:
+        tips = []
+
+    category_counts: dict[str, int] = {}
+    for tip in tips:
+        cat = tip.get("category", "other")
+        category_counts[cat] = category_counts.get(cat, 0) + 1
+
+    return {
+        "tips": tips,
+        "total": len(tips),
+        "slide_count": len(slide_summaries),
+        "high_priority": sum(1 for t in tips if t.get("severity") == "high"),
+        "category_counts": category_counts,
+    }
+
+
+# ── Layout Issues Detector ─────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/layout-issues")
+def detect_layout_issues(doc_id: str, fix: bool = False):
+    """
+    Scan all slides for common layout problems:
+    - Elements outside slide bounds
+    - Overlapping text elements
+    - Zero-size elements
+    - Elements with negative positions
+    Optionally auto-fix by clamping positions to slide bounds.
+    """
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slide_w = 13.333
+    slide_h = 7.5
+
+    issues = []
+    fixed = 0
+
+    if fix:
+        _snapshot_doc(doc_id)
+
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        els = slide.elements
+        for i, el in enumerate(els):
+            pos = getattr(el, "position", None)
+            if pos is None:
+                continue
+            l = float(getattr(pos, "left", 0) or 0)
+            t = float(getattr(pos, "top", 0) or 0)
+            w = float(getattr(pos, "width", 0) or 0)
+            h = float(getattr(pos, "height", 0) or 0)
+            el_id = _element_id(el, i)
+            name  = getattr(getattr(el, "identification", None), "shape_name", el_id) or el_id
+
+            # Check: zero/negative size
+            if w <= 0 or h <= 0:
+                issues.append({
+                    "slide_n": slide.slide_number,
+                    "element_id": el_id,
+                    "name": name,
+                    "issue": "zero-size",
+                    "detail": f"Width={w:.2f}\" Height={h:.2f}\"",
+                })
+
+            # Check: out of bounds
+            elif l < -0.1 or t < -0.1 or (l + w) > slide_w + 0.1 or (t + h) > slide_h + 0.1:
+                issues.append({
+                    "slide_n": slide.slide_number,
+                    "element_id": el_id,
+                    "name": name,
+                    "issue": "out-of-bounds",
+                    "detail": f"Pos=({l:.2f},{t:.2f}) Size=({w:.2f}×{h:.2f})",
+                })
+                if fix:
+                    new_l = max(0.0, min(l, slide_w - max(0.1, w)))
+                    new_t = max(0.0, min(t, slide_h - max(0.1, h)))
+                    new_w = min(w, slide_w)
+                    new_h = min(h, slide_h)
+                    pos.left  = round(new_l, 4)
+                    pos.top   = round(new_t, 4)
+                    pos.width  = round(new_w, 4)
+                    pos.height = round(new_h, 4)
+                    fixed += 1
+
+        # Check: overlapping elements (text elements only)
+        text_els = [
+            (idx, e) for idx, e in enumerate(els)
+            if getattr(e, "element_type", "") in ("BridgeText", "BridgeShape")
+            and getattr(getattr(e, "position", None), "width", 0) > 0
+        ]
+        for a in range(len(text_els)):
+            for b in range(a + 1, len(text_els)):
+                ia, ea = text_els[a]
+                ib, eb = text_els[b]
+                pa = getattr(ea, "position", None)
+                pb = getattr(eb, "position", None)
+                if pa is None or pb is None:
+                    continue
+                la, ta = float(pa.left or 0), float(pa.top or 0)
+                wa, ha = float(pa.width or 0), float(pa.height or 0)
+                lb, tb = float(pb.left or 0), float(pb.top or 0)
+                wb, hb = float(pb.width or 0), float(pb.height or 0)
+                # Overlap check
+                if la < lb + wb and la + wa > lb and ta < tb + hb and ta + ha > tb:
+                    overlap_w = min(la + wa, lb + wb) - max(la, lb)
+                    overlap_h = min(ta + ha, tb + hb) - max(ta, tb)
+                    overlap_area = overlap_w * overlap_h
+                    min_area = min(wa * ha, wb * hb)
+                    if overlap_area / max(0.01, min_area) > 0.25:
+                        ea_id = _element_id(ea, ia)
+                        eb_id = _element_id(eb, ib)
+                        ea_name = getattr(getattr(ea, "identification", None), "shape_name", ea_id) or ea_id
+                        eb_name = getattr(getattr(eb, "identification", None), "shape_name", eb_id) or eb_id
+                        issues.append({
+                            "slide_n": slide.slide_number,
+                            "element_id": ea_id,
+                            "name": f"{ea_name} ↔ {eb_name}",
+                            "issue": "overlap",
+                            "detail": f"{overlap_area:.2f} sq-in overlap ({int(overlap_area / max(0.01, min_area) * 100)}% of smaller)",
+                        })
+
+    return {
+        "issues": issues,
+        "total": len(issues),
+        "fixed": fixed,
+        "slide_count": len(doc.slides),
+        "by_type": {
+            "out-of-bounds": sum(1 for i in issues if i["issue"] == "out-of-bounds"),
+            "overlap":       sum(1 for i in issues if i["issue"] == "overlap"),
+            "zero-size":     sum(1 for i in issues if i["issue"] == "zero-size"),
+        },
+    }
+
+
+# ── AI Title Optimizer ────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/optimize-titles")
+def optimize_titles(doc_id: str):
+    """
+    For each slide, identify the probable title element (largest/topmost text)
+    and suggest a more impactful, concise rewrite.
+    """
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    # Collect slide titles heuristically: first non-empty text element (topmost)
+    slide_titles = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        candidates = []
+        for el in slide.elements:
+            t = _element_plain_text(el).strip()
+            if not t:
+                continue
+            top = getattr(getattr(el, "position", None), "top", 999)
+            font_size = 0
+            tf = getattr(el, "text_content", None) or getattr(el, "text_frame", None)
+            if tf:
+                for para in getattr(tf, "paragraphs", [])[:1]:
+                    for run in getattr(para, "runs", [])[:1]:
+                        font_size = run.font_size or 0
+            candidates.append((top, -font_size, t[:120]))
+        candidates.sort()
+        if candidates:
+            slide_titles.append({"n": slide.slide_number, "title": candidates[0][2]})
+
+    if not slide_titles:
+        raise HTTPException(400, "No title candidates found")
+
+    titles_str = "\n".join(f"Slide {s['n']}: {s['title']}" for s in slide_titles)
+
+    prompt = (
+        "Review these slide titles from a presentation. For each title, suggest a more impactful, "
+        "punchy rewrite that is shorter (ideally ≤8 words) and action-oriented.\n\n"
+        f"{titles_str}\n\n"
+        "Return ONLY a JSON array:\n"
+        '[{"slide_n":1,"original":"...","suggested":"...","reason":"brief explanation 1 sentence"}]\n'
+        "Only suggest rewrites where there is genuine improvement. "
+        "If a title is already good, still include it but mark it with reason 'Already strong'."
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=600,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = resp.content[0].text.strip()
+
+    try:
+        m = re.search(r"\[.*\]", raw, re.DOTALL)
+        suggestions = json.loads(m.group()) if m else []
+    except Exception:
+        suggestions = []
+
+    improved = [s for s in suggestions if s.get("reason", "") != "Already strong"]
+
+    return {
+        "suggestions": suggestions,
+        "improved_count": len(improved),
+        "slide_count": len(slide_titles),
+    }
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/apply-title")
+def apply_title(doc_id: str, n: int, new_title: str = ""):
+    """Apply a new title string to the topmost text element on a slide."""
+    if not new_title.strip():
+        raise HTTPException(400, "new_title required")
+
+    _snapshot_doc(doc_id)
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if not slide:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    # Find topmost text element
+    best_el = None
+    best_top = 999.0
+    for el in slide.elements:
+        t = _element_plain_text(el).strip()
+        if not t:
+            continue
+        top = getattr(getattr(el, "position", None), "top", 999.0)
+        if top < best_top:
+            best_top = top
+            best_el = el
+
+    if best_el is None:
+        raise HTTPException(404, "No text element found on slide")
+
+    _apply_plain_text_to_element(best_el, new_title.strip())
+    log.info("apply-title: slide %d of %s → %r", n, doc_id, new_title[:50])
+    return {"ok": True, "slide_n": n, "title": new_title.strip()}
+
+
+# ── AI Text Polisher (per-slide) ──────────────────────────────────────────────
+
+class PolishRequest(BaseModel):
+    tone: str = "professional"   # professional | executive | casual | technical
+    apply: bool = False
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/polish-text")
+def polish_slide_text(doc_id: str, n: int, req: PolishRequest):
+    """
+    AI polishes all text on a slide for clarity and professionalism.
+    Returns suggested replacements per element; if apply=True, applies them directly.
+    """
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if not slide:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    # Collect text elements
+    text_elements = []
+    for i, el in enumerate(slide.elements):
+        t = _element_plain_text(el).strip()
+        if t:
+            text_elements.append({"id": _element_id(el, i), "text": t[:400], "el": el})
+
+    if not text_elements:
+        raise HTTPException(400, "No text on this slide")
+
+    tone_desc = {
+        "professional": "clear, professional business writing — concise, active voice, no jargon",
+        "executive":    "executive-level communication — direct, high-impact, minimal words",
+        "casual":       "friendly and approachable — conversational but still clear",
+        "technical":    "precise technical writing — accurate, well-structured, terminology preserved",
+    }.get(req.tone, "professional business writing")
+
+    items_str = "\n".join(f'"{i["id"]}": {i["text"]!r}' for i in text_elements)
+
+    prompt = (
+        f"Polish these presentation text snippets for {tone_desc}.\n"
+        f"Rules: keep the meaning, don't add content, keep it brief.\n\n"
+        f"Texts:\n{items_str}\n\n"
+        f"Return ONLY a JSON object mapping id → polished text:\n"
+        f'{{"{text_elements[0]["id"]}": "polished version...", ...}}\n'
+        f"Only return ids that genuinely need improvement. Skip already-good text."
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=600,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = resp.content[0].text.strip()
+
+    try:
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        rewrites: dict = json.loads(m.group()) if m else {}
+    except Exception:
+        rewrites = {}
+
+    # Build result list
+    results = []
+    for item in text_elements:
+        if item["id"] in rewrites:
+            results.append({
+                "element_id": item["id"],
+                "original": item["text"],
+                "polished": rewrites[item["id"]],
+            })
+
+    if req.apply and results:
+        _snapshot_doc(doc_id)
+        for item in text_elements:
+            if item["id"] in rewrites:
+                _apply_plain_text_to_element(item["el"], rewrites[item["id"]])
+
+    return {
+        "polished": results,
+        "changed": len(results),
+        "applied": req.apply,
+        "slide_n": n,
+    }
+
+
+# ── Audience Adapter ──────────────────────────────────────────────────────────
+
+class AudienceAdaptRequest(BaseModel):
+    audience_description: str  # e.g. "C-suite executives who care about ROI"
+    slides: list[int] | None = None  # None = all slides; list = specific slides
+    apply: bool = False
+    max_slides: int = 20  # safety cap
+
+
+@app.post("/api/docs/{doc_id}/adapt-for-audience")
+def adapt_for_audience(doc_id: str, req: AudienceAdaptRequest):
+    """
+    Rewrite slide text to be appropriate for a specific audience.
+    Returns per-element rewrites; optionally applies them.
+    """
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    if not req.audience_description.strip():
+        raise HTTPException(400, "audience_description required")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    target_slides = set(req.slides) if req.slides else None
+    results_by_slide = []
+    total_changed = 0
+
+    if req.apply:
+        _snapshot_doc(doc_id)
+
+    slides = sorted(doc.slides, key=lambda s: s.slide_number)
+    if target_slides:
+        slides = [s for s in slides if s.slide_number in target_slides]
+    slides = slides[:req.max_slides]
+
+    client = _anthropic.Anthropic(api_key=api_key)
+
+    for slide in slides:
+        text_elements = []
+        for i, el in enumerate(slide.elements):
+            t = _element_plain_text(el).strip()
+            if t:
+                text_elements.append({"id": _element_id(el, i), "text": t[:300], "el": el})
+
+        if not text_elements:
+            continue
+
+        items_str = "\n".join(f'"{i["id"]}": {i["text"]!r}' for i in text_elements)
+        prompt = (
+            f"Adapt these presentation text snippets for this audience: {req.audience_description}\n\n"
+            f"Rules:\n"
+            f"- Keep the core message, adjust vocabulary and depth\n"
+            f"- Match the complexity and terminology to the audience\n"
+            f"- Keep it concise (presentation bullets, not essays)\n\n"
+            f"Texts to adapt:\n{items_str}\n\n"
+            f"Return ONLY a JSON object mapping id → adapted text.\n"
+            f"Skip elements that are already appropriate for the audience."
+        )
+
+        try:
+            resp = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=500,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = resp.content[0].text.strip()
+            m = re.search(r"\{.*\}", raw, re.DOTALL)
+            rewrites: dict = json.loads(m.group()) if m else {}
+        except Exception:
+            rewrites = {}
+
+        slide_results = []
+        for item in text_elements:
+            if item["id"] in rewrites:
+                slide_results.append({
+                    "element_id": item["id"],
+                    "original": item["text"],
+                    "adapted": rewrites[item["id"]],
+                })
+                if req.apply:
+                    _apply_plain_text_to_element(item["el"], rewrites[item["id"]])
+
+        if slide_results:
+            results_by_slide.append({"slide_n": slide.slide_number, "elements": slide_results})
+            total_changed += len(slide_results)
+
+    return {
+        "slides": results_by_slide,
+        "total_changed": total_changed,
+        "applied": req.apply,
+        "audience": req.audience_description,
+        "slides_processed": len(slides),
+    }
 
 
 # ── Text content helpers ──────────────────────────────────────────────────────
@@ -4890,6 +7634,7 @@ class ReplaceTextRequest(BaseModel):
     replace: str
     case_sensitive: bool = False
     use_regex: bool = False
+    include_notes: bool = False
 
 
 @app.get("/api/docs/{doc_id}/theme-colors")
@@ -4902,7 +7647,7 @@ def get_theme_colors(doc_id: str):
 
 
 @app.get("/api/docs/{doc_id}/search-text")
-def search_text(doc_id: str, q: str):
+def search_text(doc_id: str, q: str, include_notes: bool = False):
     """Search all slides for text matching q. Returns list of matches with slide/element context."""
     d = _require(doc_id)
     if not q.strip():
@@ -4918,18 +7663,37 @@ def search_text(doc_id: str, q: str):
                     "element_id": _element_id(el, i),
                     "element_type": getattr(el, "element_type", ""),
                     "preview":    plain[:120],
+                    "in_notes":   False,
+                })
+        if include_notes:
+            cp = slide.custom_properties or {}
+            notes_text = cp.get("notes_text", "")
+            if notes_text and cmp in notes_text.lower():
+                matches.append({
+                    "slide_n":    slide.slide_number,
+                    "element_id": f"notes:{slide.slide_number}",
+                    "element_type": "Notes",
+                    "preview":    notes_text[:120],
+                    "in_notes":   True,
                 })
     return matches
 
 
 @app.get("/api/docs/{doc_id}/stats")
 def get_doc_stats(doc_id: str):
-    """Return presentation-level statistics: slide count, element counts, word count."""
+    """Return presentation-level statistics: slide count, element counts, word count, ratings, visibility."""
     d = _require(doc_id)
     doc = d["doc"]
     type_counts: dict[str, int] = {}
     word_count = 0
     notes_word_count = 0
+    slides_with_notes = 0
+    sections: set[str] = set()
+    sections_with_counts: dict[str, int] = {}
+    ratings_dist: dict[int, int] = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+    hidden_count = 0
+    pinned_count = 0
+    tagged_count = 0
     for slide in doc.slides:
         for el in slide.elements:
             et = getattr(el, "element_type", "Unknown")
@@ -4937,15 +7701,42 @@ def get_doc_stats(doc_id: str):
             plain = _element_plain_text(el)
             if plain.strip():
                 word_count += len(plain.split())
-        notes_text = (slide.custom_properties or {}).get("notes_text", "")
+        cp = slide.custom_properties or {}
+        notes_text = cp.get("notes_text", "")
         if notes_text.strip():
             notes_word_count += len(notes_text.split())
+            slides_with_notes += 1
+        sec = cp.get("section_name", "").strip()
+        if sec:
+            sections.add(sec)
+            sections_with_counts[sec] = sections_with_counts.get(sec, 0) + 1
+        rating = cp.get("slide_rating")
+        if rating and 1 <= int(rating) <= 5:
+            ratings_dist[int(rating)] = ratings_dist.get(int(rating), 0) + 1
+        if cp.get("hidden"):
+            hidden_count += 1
+        if cp.get("pinned"):
+            pinned_count += 1
+        if cp.get("tag_color"):
+            tagged_count += 1
+    doc_cp = getattr(doc, "custom_properties", None) or {}
     return {
-        "slide_count":       len(doc.slides),
-        "total_elements":    sum(type_counts.values()),
-        "type_counts":       type_counts,
-        "word_count":        word_count,
-        "notes_word_count":  notes_word_count,
+        "slide_count":           len(doc.slides),
+        "total_elements":        sum(type_counts.values()),
+        "type_counts":           type_counts,
+        "word_count":            word_count,
+        "notes_word_count":      notes_word_count,
+        "slides_with_notes":     slides_with_notes,
+        "notes_coverage_pct":    round(slides_with_notes / max(len(doc.slides), 1) * 100),
+        "section_count":         len(sections),
+        "sections":              sorted(sections),
+        "sections_with_counts":  sections_with_counts,
+        "timer_budget_minutes":  doc_cp.get("timer_budget_minutes"),
+        "ratings_distribution":  ratings_dist,
+        "rated_count":           sum(ratings_dist.values()),
+        "hidden_count":          hidden_count,
+        "pinned_count":          pinned_count,
+        "tagged_count":          tagged_count,
     }
 
 
@@ -5013,9 +7804,946 @@ def get_color_palette(doc_id: str):
     return {"colors": sorted(colors)}
 
 
+def _collect_fonts_from_element(el: Any, fonts: set[str]) -> None:
+    """Collect all unique font names from text runs in a single element."""
+    et = getattr(el, "element_type", "")
+    if et in ("BridgeText", "BridgeShape", "BridgeFreeform"):
+        for p in _get_paras(el, et):
+            for run in getattr(p, "runs", []):
+                fn = getattr(run, "font_name", None)
+                if fn:
+                    fonts.add(fn)
+    if et == "BridgeTable":
+        for row in getattr(el, "cell_formats", []):
+            for cell in row:
+                for p in getattr(cell, "paragraphs", []):
+                    for run in getattr(p, "runs", []):
+                        fn = getattr(run, "font_name", None)
+                        if fn:
+                            fonts.add(fn)
+    if et == "BridgeGroup":
+        for child in getattr(el, "elements", []):
+            _collect_fonts_from_element(child, fonts)
+
+
+def _replace_font_in_element(el: Any, old_font: str, new_font: str) -> int:
+    """Replace font_name in all runs of an element. Returns replacement count."""
+    count = 0
+    et = getattr(el, "element_type", "")
+    if et in ("BridgeText", "BridgeShape", "BridgeFreeform"):
+        for p in _get_paras(el, et):
+            for run in getattr(p, "runs", []):
+                fn = getattr(run, "font_name", None)
+                if fn and fn.lower() == old_font.lower():
+                    run.font_name = new_font
+                    count += 1
+    if et == "BridgeTable":
+        for row in getattr(el, "cell_formats", []):
+            for cell in row:
+                for p in getattr(cell, "paragraphs", []):
+                    for run in getattr(p, "runs", []):
+                        fn = getattr(run, "font_name", None)
+                        if fn and fn.lower() == old_font.lower():
+                            run.font_name = new_font
+                            count += 1
+    if et == "BridgeGroup":
+        for child in getattr(el, "elements", []):
+            count += _replace_font_in_element(child, old_font, new_font)
+    return count
+
+
+@app.get("/api/docs/{doc_id}/font-palette")
+def get_font_palette(doc_id: str):
+    """Return all unique font names used across all text in the deck."""
+    d = _require(doc_id)
+    fonts: set[str] = set()
+    for slide in d["doc"].slides:
+        for el in slide.elements:
+            _collect_fonts_from_element(el, fonts)
+    return {"fonts": sorted(fonts)}
+
+
+class ReplaceFontRequest(BaseModel):
+    old_font: str
+    new_font: str
+
+
+@app.post("/api/docs/{doc_id}/replace-font")
+def replace_font(doc_id: str, req: ReplaceFontRequest):
+    """Replace all occurrences of old_font with new_font across all text runs in the deck."""
+    if not req.old_font or not req.new_font:
+        raise HTTPException(400, "old_font and new_font are required")
+    d = _require(doc_id)
+    _snapshot_doc(doc_id)
+    total = 0
+    affected_slides: list[int] = []
+    for slide in d["doc"].slides:
+        count = sum(_replace_font_in_element(el, req.old_font, req.new_font) for el in slide.elements)
+        if count > 0:
+            total += count
+            affected_slides.append(slide.slide_number)
+    log.info("replace-font: doc=%s  %s → %s  replaced=%d  slides=%s",
+             doc_id, req.old_font, req.new_font, total, affected_slides)
+    return {"replaced": total, "affected_slides": affected_slides}
+
+
+@app.get("/api/docs/{doc_id}/template-variables")
+def get_template_variables(doc_id: str, include_notes: bool = True):
+    """Scan the deck for {variable_name} placeholder patterns and return the unique variable names with context."""
+    import re as _re
+    d = _require(doc_id)
+    pattern = _re.compile(r"\{([A-Za-z0-9_.\- ]+)\}")
+    vars_map: dict[str, list[dict]] = {}  # var_name → list of {slide_n, element_id, preview}
+    for slide in d["doc"].slides:
+        for i, el in enumerate(slide.elements):
+            text = _element_plain_text(el)
+            for m in pattern.finditer(text):
+                name = m.group(1).strip()
+                if name not in vars_map:
+                    vars_map[name] = []
+                vars_map[name].append({
+                    "slide_n":    slide.slide_number,
+                    "element_id": _element_id(el, i),
+                    "context":    text[:80],
+                })
+        if include_notes:
+            cp = slide.custom_properties or {}
+            notes = cp.get("notes_text", "")
+            if notes:
+                for m in pattern.finditer(notes):
+                    name = m.group(1).strip()
+                    if name not in vars_map:
+                        vars_map[name] = []
+                    vars_map[name].append({
+                        "slide_n":    slide.slide_number,
+                        "element_id": f"notes:{slide.slide_number}",
+                        "context":    notes[:80],
+                        "in_notes":   True,
+                    })
+    return {"variables": [{"name": k, "count": len(v), "occurrences": v} for k, v in sorted(vars_map.items())]}
+
+
+class InsertAgendaRequest(BaseModel):
+    title: str = "Agenda"
+    after_n: int = 0          # 0 = insert at beginning (before slide 1)
+    slide_numbers: list[int] | None = None  # None = include all slides
+
+
+@app.post("/api/docs/{doc_id}/insert-agenda-slide")
+def insert_agenda_slide(doc_id: str, req: InsertAgendaRequest):
+    """Insert a formatted agenda/table-of-contents slide built from the deck's titles."""
+    from percy.bridge.elements import (
+        BridgeSlide, BridgeShape, Position, Transform, Stacking, Identification, Accessibility,
+        ShapeIdentification, ShapeFill, ShapeLine, ShapeShadow,
+        ShapeTextContent, ShapeTextFrame, ShapeBorders, TextParagraph, TextRun, ColorSpec,
+    )
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    doc = d["doc"]
+    w, h = _get_slide_dims(doc, doc.slides[0]) if doc.slides else (13.333, 7.5)
+
+    # Collect slide titles from outline
+    def _first_text(el_: Any) -> str | None:
+        tc = getattr(el_, "text_content", None)
+        if tc is None: return None
+        for para in (getattr(tc, "paragraphs", None) or []):
+            for run in (getattr(para, "runs", None) or []):
+                t = getattr(run, "text", None)
+                if t and t.strip():
+                    return t.strip()
+        return None
+
+    items: list[tuple[int, str]] = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        if req.slide_numbers is not None and slide.slide_number not in req.slide_numbers:
+            continue
+        title_text = None
+        for el in slide.elements:
+            ident = getattr(el, "identification", None)
+            name = (getattr(ident, "shape_name", "") or "").lower()
+            if "title" in name and title_text is None:
+                title_text = _first_text(el)
+            elif title_text is None:
+                title_text = _first_text(el)
+        if title_text and title_text.strip():
+            items.append((slide.slide_number, title_text.strip()))
+
+    # Build slide
+    new_slide = BridgeSlide(slide_number=0, elements=[], width=w, height=h)
+
+    # Background rect
+    bg = BridgeShape(
+        position=Position(left=0.0, top=0.0, width=w, height=h),
+        transforms=Transform(), stacking=Stacking(z_index=1),
+        identification=Identification(shape_id=1, shape_name="Background"),
+        accessibility=Accessibility(alt_text=""),
+        shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+        fill=ShapeFill(fill_type="solid", color=ColorSpec(value="#1E293B")),
+        line=ShapeLine(visible=False), shadow=ShapeShadow(),
+        text_content=ShapeTextContent(), text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+    )
+    new_slide.elements.append(bg)
+
+    # Accent bar
+    bar = BridgeShape(
+        position=Position(left=0.0, top=0.0, width=0.15, height=h),
+        transforms=Transform(), stacking=Stacking(z_index=2),
+        identification=Identification(shape_id=2, shape_name="AccentBar"),
+        accessibility=Accessibility(alt_text=""),
+        shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+        fill=ShapeFill(fill_type="solid", color=ColorSpec(value="#3B82F6")),
+        line=ShapeLine(visible=False), shadow=ShapeShadow(),
+        text_content=ShapeTextContent(), text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+    )
+    new_slide.elements.append(bar)
+
+    # Title
+    title_el = BridgeShape(
+        position=Position(left=0.55, top=0.5, width=w - 0.9, height=1.0),
+        transforms=Transform(), stacking=Stacking(z_index=3),
+        identification=Identification(shape_id=3, shape_name="Title"),
+        accessibility=Accessibility(alt_text="Title"),
+        shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+        fill=ShapeFill(fill_type="none"),
+        line=ShapeLine(visible=False), shadow=ShapeShadow(),
+        text_content=ShapeTextContent(
+            has_text=True,
+            paragraphs=[TextParagraph(runs=[TextRun(
+                text=req.title,
+                font_size=32.0, font_bold=True,
+                font_color=ColorSpec(value="#FFFFFF"),
+            )])],
+        ),
+        text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+    )
+    new_slide.elements.append(title_el)
+
+    # Items — split into two columns if >6 items
+    MAX_COL = 8
+    left_items  = items[:MAX_COL]
+    right_items = items[MAX_COL:MAX_COL * 2]
+
+    def _make_col(col_items: list[tuple[int, str]], left_in: float, width_in: float, z: int) -> BridgeShape:
+        lines = [f"{n}.  {t}" for n, t in col_items]
+        return BridgeShape(
+            position=Position(left=left_in, top=1.7, width=width_in, height=h - 2.1),
+            transforms=Transform(), stacking=Stacking(z_index=z),
+            identification=Identification(shape_id=z, shape_name="Items"),
+            accessibility=Accessibility(alt_text="Agenda items"),
+            shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+            fill=ShapeFill(fill_type="none"),
+            line=ShapeLine(visible=False), shadow=ShapeShadow(),
+            text_content=ShapeTextContent(
+                has_text=True,
+                paragraphs=[
+                    TextParagraph(runs=[TextRun(
+                        text=line, font_size=16.0, font_bold=False,
+                        font_color=ColorSpec(value="#CBD5E1"),
+                    )])
+                    for line in lines
+                ],
+            ),
+            text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+        )
+
+    if right_items:
+        col_w = (w - 1.1) / 2 - 0.1
+        new_slide.elements.append(_make_col(left_items,  0.55,          col_w, 4))
+        new_slide.elements.append(_make_col(right_items, 0.55 + col_w + 0.2, col_w, 5))
+    else:
+        new_slide.elements.append(_make_col(left_items, 0.55, w - 0.9, 4))
+
+    # Insert the slide
+    if req.after_n <= 0:
+        doc.slides.insert(0, new_slide)
+        new_pos = 1
+    else:
+        idx = next((i for i, s in enumerate(doc.slides) if s.slide_number == req.after_n), len(doc.slides) - 1)
+        doc.slides.insert(idx + 1, new_slide)
+        new_pos = idx + 2
+
+    for i, s in enumerate(doc.slides):
+        s.slide_number = i + 1
+    d["slide_count"] = len(doc.slides)
+    log.info("studio: inserted agenda slide at position %d in %s", new_pos, doc_id)
+    return {"slide_count": len(doc.slides), "new_slide_n": new_pos, "item_count": len(items)}
+
+
+class AddSlideNumbersRequest(BaseModel):
+    position: str = "bottom-right"   # "bottom-right" | "bottom-center" | "bottom-left"
+    style: str = "plain"             # "plain" (1) | "total" (1/10) | "slide" (Slide 1)
+    font_size: float = 11.0
+    color: str = "#888888"
+    skip_first: bool = False         # skip slide 1 (typical title slide)
+    start_number: int = 1
+
+
+@app.post("/api/docs/{doc_id}/add-slide-numbers")
+def add_slide_numbers(doc_id: str, req: AddSlideNumbersRequest):
+    """Add a slide number text element to every slide at the specified position."""
+    from percy.bridge.elements import (
+        BridgeShape, Position, Transform, Stacking, Identification, Accessibility,
+        ShapeIdentification, ShapeFill, ShapeLine, ShapeShadow,
+        ShapeTextContent, ShapeTextFrame, ShapeBorders, TextParagraph, TextRun, ColorSpec,
+    )
+    _snapshot_doc(doc_id)
+    d   = _require(doc_id)
+    doc = d["doc"]
+    total = len(doc.slides)
+    w, h = _get_slide_dims(doc, doc.slides[0]) if doc.slides else (13.333, 7.5)
+
+    # Position mapping
+    BOX_W, BOX_H = 1.2, 0.35
+    MARGIN = 0.2
+    if "right" in req.position:
+        left = w - BOX_W - MARGIN
+    elif "center" in req.position:
+        left = (w - BOX_W) / 2
+    else:
+        left = MARGIN
+    top = h - BOX_H - MARGIN
+
+    added = 0
+    for slide in doc.slides:
+        if req.skip_first and slide.slide_number == 1:
+            continue
+        display_n = slide.slide_number - (1 if req.skip_first else 0) + req.start_number - 1
+        if req.style == "total":
+            text = f"{display_n} / {total}"
+        elif req.style == "slide":
+            text = f"Slide {display_n}"
+        else:
+            text = str(display_n)
+
+        existing_ids = {getattr(getattr(e, "identification", None), "shape_id", None) for e in slide.elements}
+        max_id = max((x for x in existing_ids if x is not None), default=0) + 1
+        max_z  = max((getattr(e.stacking, "z_index", 1) for e in slide.elements), default=0) + 1
+
+        el = BridgeShape(
+            position=Position(left=left, top=top, width=BOX_W, height=BOX_H),
+            transforms=Transform(), stacking=Stacking(z_index=max_z),
+            identification=Identification(shape_id=max_id, shape_name=f"SlideNumber_{slide.slide_number}"),
+            accessibility=Accessibility(alt_text=f"Slide number {display_n}"),
+            shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+            fill=ShapeFill(fill_type="none"),
+            line=ShapeLine(visible=False), shadow=ShapeShadow(),
+            text_content=ShapeTextContent(
+                has_text=True,
+                paragraphs=[TextParagraph(runs=[TextRun(
+                    text=text,
+                    font_size=req.font_size,
+                    font_color=ColorSpec(value=req.color),
+                )])],
+            ),
+            text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+        )
+        slide.elements.append(el)
+        added += 1
+
+    log.info("studio: added slide numbers to %d slides in %s", added, doc_id)
+    return {"added": added, "slide_count": total, "position": req.position, "style": req.style}
+
+
+class AddWatermarkRequest(BaseModel):
+    text: str = "CONFIDENTIAL"
+    color: str = "#CC0000"
+    opacity: float = 0.15          # 0.0–1.0
+    font_size: float = 48.0
+    angle: float = -35.0           # degrees; negative = tilts up-left
+    position: str = "center"       # "center" | "tiled"
+
+
+@app.post("/api/docs/{doc_id}/add-watermark")
+def add_watermark(doc_id: str, req: AddWatermarkRequest):
+    """Add a diagonal text watermark element to every slide."""
+    from percy.bridge.elements import (
+        BridgeShape, Position, Transform, Stacking, Identification, Accessibility,
+        ShapeIdentification, ShapeFill, ShapeLine, ShapeShadow,
+        ShapeTextContent, ShapeTextFrame, ShapeBorders, TextParagraph, TextRun, ColorSpec,
+    )
+    _snapshot_doc(doc_id)
+    d   = _require(doc_id)
+    doc = d["doc"]
+    w, h = _get_slide_dims(doc, doc.slides[0]) if doc.slides else (13.333, 7.5)
+
+    # Compute watermark color with opacity baked in as a lighter shade
+    # Since Bridge doesn't support true alpha on text, we lighten the color
+    import re as _re
+    def _lighten_hex(hex_color: str, opacity: float) -> str:
+        hex_color = hex_color.lstrip("#")
+        if len(hex_color) == 3:
+            hex_color = "".join(c * 2 for c in hex_color)
+        r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+        # blend toward white
+        r2 = int(r + (255 - r) * (1 - opacity))
+        g2 = int(g + (255 - g) * (1 - opacity))
+        b2 = int(b + (255 - b) * (1 - opacity))
+        return f"#{r2:02X}{g2:02X}{b2:02X}"
+
+    actual_color = _lighten_hex(req.color, req.opacity)
+
+    added = 0
+    for slide in doc.slides:
+        existing_ids = {getattr(getattr(e, "identification", None), "shape_id", None) for e in slide.elements}
+        new_id = max((x for x in existing_ids if x is not None), default=0) + 1
+        # Put watermark at z-index below all existing elements (z=1) or just above (z=max+1)
+        max_z  = max((getattr(e.stacking, "z_index", 1) for e in slide.elements), default=0) + 1
+
+        # Center watermark spanning most of slide
+        box_w = min(w * 0.85, 11.0)
+        box_h = min(h * 0.4, 3.0)
+        left  = (w - box_w) / 2
+        top   = (h - box_h) / 2
+
+        el = BridgeShape(
+            position=Position(left=left, top=top, width=box_w, height=box_h),
+            transforms=Transform(rotation_degrees=req.angle),
+            stacking=Stacking(z_index=max_z),
+            identification=Identification(shape_id=new_id, shape_name="Watermark"),
+            accessibility=Accessibility(alt_text="Watermark"),
+            shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+            fill=ShapeFill(fill_type="none"),
+            line=ShapeLine(visible=False), shadow=ShapeShadow(),
+            text_content=ShapeTextContent(
+                has_text=True,
+                paragraphs=[TextParagraph(runs=[TextRun(
+                    text=req.text,
+                    font_size=req.font_size,
+                    font_bold=True,
+                    font_color=ColorSpec(value=actual_color),
+                )])],
+            ),
+            text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+        )
+        slide.elements.append(el)
+        added += 1
+
+    log.info("studio: added watermark '%s' to %d slides in %s", req.text, added, doc_id)
+    return {"added": added, "text": req.text, "color": actual_color}
+
+
+class BulkDeleteByNameRequest(BaseModel):
+    name_contains: str         # case-insensitive substring to match against shape_name
+
+
+class RewriteElementTextRequest(BaseModel):
+    instruction: str    # e.g. "make it shorter", "formal tone", "add bullet points"
+    apply: bool = True  # when True, apply the rewritten text back to the element
+
+
+def _apply_plain_text_to_element(el: Any, new_text: str) -> None:
+    """Replace all text in a BridgeText/BridgeShape/BridgeFreeform element with new_text.
+
+    Splits on newlines to create one paragraph per line, preserving the first run's
+    character formatting for every new run so colour/font/size survive the rewrite.
+    """
+    from percy.bridge.elements import TextParagraph, TextRun  # type: ignore[attr-defined]
+
+    et = getattr(el, "element_type", "")
+    if et not in ("BridgeText", "BridgeShape", "BridgeFreeform"):
+        return
+
+    old_paras = _get_paras(el, et)
+    # Grab the first run of the first paragraph as a style template
+    template_run: Any = None
+    for op in old_paras:
+        for r in getattr(op, "runs", []):
+            if not getattr(r, "is_line_break", False):
+                template_run = r
+                break
+        if template_run:
+            break
+
+    lines = new_text.split("\n") if "\n" in new_text else [new_text]
+    new_paras: list[Any] = []
+    for line_idx, line in enumerate(lines):
+        para = old_paras[line_idx] if line_idx < len(old_paras) else TextParagraph()
+        run = TextRun()
+        # copy formatting from template
+        if template_run is not None:
+            for attr in ("font_name", "font_size", "font_bold", "font_italic",
+                         "font_underline", "font_color", "strikethrough", "font_caps"):
+                val = getattr(template_run, attr, None)
+                if val is not None:
+                    try:
+                        setattr(run, attr, val)
+                    except Exception:
+                        pass
+        run.text = line
+        run.is_line_break = False
+        para.runs = [run]
+        new_paras.append(para)
+
+    if et in ("BridgeText", "BridgeFreeform"):
+        el.paragraphs = new_paras
+    elif et == "BridgeShape":
+        tc = getattr(el, "text_content", None)
+        if tc:
+            tc.paragraphs = new_paras
+            tc.has_text = bool(new_text.strip())
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/rewrite-text")
+def rewrite_element_text(doc_id: str, n: int, element_id: str, req: RewriteElementTextRequest):
+    """Use AI to rewrite the text of a specific element based on a user instruction."""
+    import anthropic as _anthropic
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    el = None
+    for i, e in enumerate(slide.elements):
+        if _element_id(e, i) == element_id:
+            el = e
+            break
+    if el is None:
+        raise HTTPException(404, f"Element {element_id!r} not found")
+
+    original_text = _element_plain_text(el).strip()
+    if not original_text:
+        raise HTTPException(400, "Element has no text content to rewrite")
+
+    prompt = (
+        f"Rewrite the following text from a presentation slide.\n"
+        f"Instruction: {req.instruction}\n\n"
+        f"Original text:\n{original_text}\n\n"
+        f"Output ONLY the rewritten text. Preserve line breaks if the original has multiple lines. "
+        f"Do not add any preamble, explanation, or quotes."
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=400,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    new_text = resp.content[0].text.strip()
+
+    if req.apply:
+        _snapshot_doc(doc_id)
+        _apply_plain_text_to_element(el, new_text)
+        # Re-render the slide so the PNG reflects the change
+        bridge_dir = _CACHE_DIR / doc_id / "bridge"
+        try:
+            from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+            _rbs(doc, bridge_dir, slide_numbers=[n])
+        except Exception as exc:
+            log.warning("rewrite-text: re-render failed (non-fatal): %s", exc)
+
+    log.info("studio: AI rewrote element %s on slide %d of %s (applied=%s)", element_id, n, doc_id, req.apply)
+    return {"original": original_text, "rewritten": new_text, "applied": req.apply}
+
+
+class OptimizeLayoutRequest(BaseModel):
+    goal: str = "balanced"  # "balanced" | "emphasis-title" | "compact" | "spacious"
+    apply: bool = True
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/optimize-layout")
+def optimize_slide_layout(doc_id: str, n: int, req: OptimizeLayoutRequest):
+    """Use AI to suggest and optionally apply improved element positioning on a slide.
+
+    Returns a list of per-element position adjustments as {element_id, left_in, top_in, width_in, height_in}.
+    When apply=True, positions are committed to the model and the slide is re-rendered.
+    """
+    import anthropic as _anthropic
+    import json as _json
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d     = _require(doc_id)
+    doc   = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    # Build element descriptors for the prompt
+    descs: list[dict] = []
+    id_map: dict[str, Any] = {}
+    for i, el in enumerate(slide.elements):
+        el_id   = _element_id(el, i)
+        el_type = getattr(el, "element_type", "unknown")
+        text    = _element_plain_text(el).strip()[:120]
+        w_in    = getattr(el, "width_in",  None) or getattr(el, "_width_emu", 0) / 914400
+        h_in    = getattr(el, "height_in", None) or getattr(el, "_height_emu", 0) / 914400
+        l_in    = getattr(el, "left_in",   None) or getattr(el, "_left_emu", 0) / 914400
+        t_in    = getattr(el, "top_in",    None) or getattr(el, "_top_emu", 0) / 914400
+        descs.append({
+            "id": el_id,
+            "type": el_type.replace("Bridge", ""),
+            "text": text or "(no text)",
+            "left_in": round(l_in, 3),
+            "top_in":  round(t_in, 3),
+            "width_in": round(w_in, 3),
+            "height_in": round(h_in, 3),
+        })
+        id_map[el_id] = el
+
+    slide_w = doc.slides[0].width_in  if hasattr(doc.slides[0], "width_in")  else 13.333
+    slide_h = doc.slides[0].height_in if hasattr(doc.slides[0], "height_in") else 7.5
+
+    GOAL_INSTRUCTIONS = {
+        "balanced":       "Create a visually balanced, professional layout with good white space.",
+        "emphasis-title": "Make the title large and dominant; body elements smaller and below.",
+        "compact":        "Pack elements efficiently while keeping clear spacing, minimize blank areas.",
+        "spacious":       "Use generous margins and large spacing between elements for a clean look.",
+    }
+    goal_text = GOAL_INSTRUCTIONS.get(req.goal, GOAL_INSTRUCTIONS["balanced"])
+
+    prompt = (
+        f"You are a professional slide designer. A slide is {slide_w:.2f}\" wide × {slide_h:.2f}\" tall.\n"
+        f"Layout goal: {goal_text}\n\n"
+        f"Current elements (JSON):\n{_json.dumps(descs, indent=2)}\n\n"
+        f"Return ONLY valid JSON — an array of objects, each with keys: "
+        f"id, left_in, top_in, width_in, height_in (floats).\n"
+        f"Rules:\n"
+        f"- Keep all elements within the slide bounds (0≤left_in, 0≤top_in, left+width≤{slide_w:.2f}, top+height≤{slide_h:.2f})\n"
+        f"- Maintain reasonable minimum sizes (width≥0.5, height≥0.25)\n"
+        f"- Include ALL {len(descs)} element IDs in your response\n"
+        f"- Round to 2 decimal places\n"
+        f"Output ONLY the JSON array, no markdown, no explanation."
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp   = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=600,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = resp.content[0].text.strip()
+
+    # Parse the JSON response
+    try:
+        # Strip optional markdown fences
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        suggestions: list[dict] = _json.loads(raw.strip())
+    except Exception:
+        raise HTTPException(502, f"AI returned unparseable layout JSON: {raw[:200]}")
+
+    if not isinstance(suggestions, list):
+        raise HTTPException(502, "AI layout response is not a list")
+
+    changes: list[dict] = []
+    if req.apply:
+        _snapshot_doc(doc_id)
+        for sugg in suggestions:
+            el_id = sugg.get("id")
+            el = id_map.get(el_id)
+            if el is None:
+                continue
+            try:
+                l = float(sugg["left_in"])
+                t = float(sugg["top_in"])
+                w = float(sugg["width_in"])
+                h = float(sugg["height_in"])
+                # Clamp to slide bounds
+                l = max(0.0, min(l, slide_w - 0.5))
+                t = max(0.0, min(t, slide_h - 0.25))
+                w = max(0.5, min(w, slide_w - l))
+                h = max(0.25, min(h, slide_h - t))
+                el.left_in = l; el.top_in = t; el.width_in = w; el.height_in = h
+                # Sync EMU fields if they exist
+                for attr, val_in in (("_left_emu", l), ("_top_emu", t), ("_width_emu", w), ("_height_emu", h)):
+                    if hasattr(el, attr):
+                        setattr(el, attr, int(val_in * 914400))
+                changes.append({"id": el_id, "left_in": l, "top_in": t, "width_in": w, "height_in": h})
+            except (KeyError, TypeError, ValueError):
+                pass
+
+        bridge_dir = _CACHE_DIR / doc_id / "bridge"
+        try:
+            from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+            _rbs(doc, bridge_dir, slide_numbers=[n])
+        except Exception as exc:
+            log.warning("optimize-layout: re-render failed (non-fatal): %s", exc)
+    else:
+        # Just return the suggestions without applying
+        for sugg in suggestions:
+            if sugg.get("id") in id_map:
+                changes.append(sugg)
+
+    log.info("studio: AI optimized layout on slide %d of %s (%d elements, goal=%s, applied=%s)",
+             n, doc_id, len(changes), req.goal, req.apply)
+    return {"changes": changes, "applied": req.apply, "goal": req.goal, "element_count": len(changes)}
+
+
+@app.post("/api/docs/{doc_id}/grammar-check")
+def grammar_check(doc_id: str):
+    """Use AI to find grammar, spelling, and clarity issues in the deck's text content.
+
+    Returns a list of issues, each with: slide_n, element_id, element_name,
+    original_text, issue_type (grammar/spelling/clarity/style), message, suggestion.
+    """
+    import anthropic as _anthropic
+    import json as _json
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    # Collect all text across slides
+    entries: list[dict] = []
+    for slide in doc.slides:
+        for i, el in enumerate(slide.elements):
+            el_id   = _element_id(el, i)
+            el_name = (getattr(getattr(el, "identification", None), "shape_name", None) or f"Element {i+1}")
+            text    = _element_plain_text(el).strip()
+            if text and len(text.split()) >= 2:
+                entries.append({
+                    "slide_n":    slide.slide_number,
+                    "element_id": el_id,
+                    "name":       el_name,
+                    "text":       text[:300],
+                })
+
+    if not entries:
+        return {"issues": [], "checked": 0}
+
+    # Limit to first 60 entries to keep prompt size reasonable
+    entries = entries[:60]
+    checked = len(entries)
+
+    payload_text = "\n".join(
+        f"[slide={e['slide_n']} element_id={e['element_id']} name={e['name']!r}] {e['text']}"
+        for e in entries
+    )
+
+    prompt = (
+        "You are a professional editor reviewing slide text for a business presentation.\n"
+        "Check the following text snippets for grammar errors, spelling mistakes, clarity issues, "
+        "and awkward phrasing. Focus on real problems, not stylistic preferences.\n\n"
+        "Return a JSON array. Each issue object must have exactly these keys:\n"
+        "  slide_n (int), element_id (string), element_name (string), "
+        "  original_text (the specific problematic phrase, max 80 chars), "
+        "  issue_type (one of: 'spelling', 'grammar', 'clarity', 'style'), "
+        "  message (short description of the problem, max 80 chars), "
+        "  suggestion (corrected text or suggested improvement, max 100 chars)\n\n"
+        "Only report real issues. If text is fine, don't include it. Limit to 20 issues max.\n\n"
+        f"Text to check:\n{payload_text}\n\n"
+        "Output ONLY the JSON array, no markdown fences, no explanation."
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp   = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=1500,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = resp.content[0].text.strip()
+
+    try:
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        issues: list[dict] = _json.loads(raw.strip())
+        if not isinstance(issues, list):
+            issues = []
+    except Exception:
+        issues = []
+
+    log.info("studio: grammar check on %s: %d issues in %d entries", doc_id, len(issues), checked)
+    return {"issues": issues, "checked": checked}
+
+
+class GenerateThemeRequest(BaseModel):
+    seed_color: str | None = None   # hex e.g. "#4472C4", or None to auto-generate
+    style: str = "professional"     # "professional" | "vibrant" | "pastel" | "dark" | "monochrome"
+
+
+@app.post("/api/docs/{doc_id}/generate-theme")
+def generate_theme_palette(doc_id: str, req: GenerateThemeRequest):
+    """Use AI to generate a harmonious color palette for the presentation.
+
+    Returns { colors: {primary, secondary, accent, background, text, muted}, name, description }.
+    Does NOT apply the colors — that requires the replace-color endpoint.
+    """
+    import anthropic as _anthropic
+    import json as _json
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    seed_text = f"The seed color is {req.seed_color}." if req.seed_color else "Choose any harmonious color palette."
+    style_map = {
+        "professional": "corporate, trustworthy, clean — blues, grays, whites",
+        "vibrant":      "energetic, bold, modern — saturated colors, high contrast",
+        "pastel":       "soft, gentle, approachable — muted pastels, light backgrounds",
+        "dark":         "sophisticated, dramatic — dark backgrounds, light text, vivid accents",
+        "monochrome":   "elegant, minimal — single hue with tints/shades, high contrast",
+    }
+    style_desc = style_map.get(req.style, style_map["professional"])
+
+    prompt = (
+        f"Generate a presentation color palette. Style: {req.style} ({style_desc}). {seed_text}\n\n"
+        f"Return ONLY a JSON object with exactly these keys:\n"
+        f"  name (string, catchy 2-3 word palette name),\n"
+        f"  description (string, one sentence describing the mood),\n"
+        f"  colors: an object with exactly these keys, each a hex color string (#RRGGBB):\n"
+        f"    primary (main brand color),\n"
+        f"    secondary (complementary supporting color),\n"
+        f"    accent (pop/highlight color for CTAs and key elements),\n"
+        f"    background (main slide background),\n"
+        f"    text (body text color),\n"
+        f"    muted (secondary text/supporting elements)\n\n"
+        f"Make sure all colors have good contrast for readability. Output ONLY the JSON, no markdown."
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp   = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=400,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = resp.content[0].text.strip()
+
+    try:
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        result = _json.loads(raw.strip())
+    except Exception:
+        raise HTTPException(502, f"AI returned unparseable theme JSON: {raw[:200]}")
+
+    log.info("studio: generated theme '%s' for %s", result.get("name", "?"), doc_id)
+    return result
+
+
+@app.delete("/api/docs/{doc_id}/elements/by-name")
+def bulk_delete_elements_by_name(doc_id: str, req: BulkDeleteByNameRequest):
+    """Delete all elements across all slides whose shape_name contains the given string."""
+    if not req.name_contains.strip():
+        raise HTTPException(400, "name_contains cannot be empty")
+    _snapshot_doc(doc_id)
+    d   = _require(doc_id)
+    doc = d["doc"]
+    pattern = req.name_contains.strip().lower()
+    removed = 0
+    for slide in doc.slides:
+        before = len(slide.elements)
+        slide.elements = [
+            e for e in slide.elements
+            if pattern not in (getattr(getattr(e, "identification", None), "shape_name", "") or "").lower()
+        ]
+        removed += before - len(slide.elements)
+    log.info("studio: bulk-deleted %d elements matching '%s' in %s", removed, pattern, doc_id)
+    return {"removed": removed, "pattern": req.name_contains}
+
+
+class SplitElementRequest(BaseModel):
+    element_id: str
+    keep_title: bool = True  # copy all non-split elements (title etc.) to each new slide
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/split-to-slides")
+def split_element_to_slides(doc_id: str, n: int, req: SplitElementRequest):
+    """Split a multi-paragraph element into multiple slides — one slide per paragraph.
+
+    Creates new slides immediately after slide n, one per non-empty paragraph.
+    Returns { new_slide_count, new_slide_ns }.
+    """
+    import copy as _copy
+
+    _snapshot_doc(doc_id)
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    # Find the element to split
+    split_el = None
+    split_el_idx = -1
+    for i, el in enumerate(slide.elements):
+        if _element_id(el, i) == req.element_id:
+            split_el = el
+            split_el_idx = i
+            break
+    if split_el is None:
+        raise HTTPException(404, f"Element {req.element_id!r} not found on slide {n}")
+
+    el_type = getattr(split_el, "element_type", "")
+    if el_type not in ("BridgeText", "BridgeShape", "BridgeFreeform"):
+        raise HTTPException(400, f"Element type {el_type!r} does not support text splitting")
+
+    # Get paragraphs with text
+    paras = _get_paras(split_el, el_type)
+    text_paras = [
+        p for p in paras
+        if any(getattr(r, "text", "").strip() and not getattr(r, "is_line_break", False) for r in getattr(p, "runs", []))
+    ]
+    if len(text_paras) <= 1:
+        raise HTTPException(400, "Element has only one paragraph — nothing to split")
+
+    # Elements to copy to each new slide (all except the split element)
+    other_els = [el for i, el in enumerate(slide.elements) if i != split_el_idx] if req.keep_title else []
+
+    # Get slide dimensions
+    w, h = _get_slide_dims(doc, slide)
+
+    # Sort existing slides and shift slides after n up by (len(text_paras) - 1)
+    shift = len(text_paras) - 1
+    for s in doc.slides:
+        if s.slide_number > n:
+            s.slide_number += shift
+
+    # Create new slides, one per paragraph
+    new_slide_ns: list[int] = []
+    from percy.bridge.bridge import BridgeSlide  # type: ignore[attr-defined]
+    for para_idx, para in enumerate(text_paras):
+        new_n = n + 1 + para_idx
+        new_slide = _copy.deepcopy(slide)
+        new_slide.slide_number = new_n
+        # Replace split element's text with this paragraph only
+        new_split = _copy.deepcopy(split_el)
+        new_paras = _get_paras(new_split, el_type)
+        # Set paragraphs to just this one
+        if el_type in ("BridgeText", "BridgeFreeform"):
+            new_split.paragraphs = [_copy.deepcopy(para)]
+        elif el_type == "BridgeShape":
+            tc = getattr(new_split, "text_content", None)
+            if tc:
+                tc.paragraphs = [_copy.deepcopy(para)]
+                tc.has_text = True
+        new_slide.elements = list(_copy.deepcopy(other_els)) + [new_split]
+        doc.slides.append(new_slide)
+        new_slide_ns.append(new_n)
+
+    # Sort slides by number
+    doc.slides.sort(key=lambda s: s.slide_number)
+
+    # Re-render new slides
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    try:
+        from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+        _rbs(doc, bridge_dir, slide_numbers=new_slide_ns)
+    except Exception as exc:
+        log.warning("split-to-slides: re-render failed (non-fatal): %s", exc)
+
+    new_count = len(doc.slides)
+    log.info("studio: split element on slide %d into %d slides in %s", n, len(new_slide_ns), doc_id)
+    return {"new_slide_count": new_count, "new_slide_ns": new_slide_ns}
+
+
 @app.post("/api/docs/{doc_id}/replace-text")
 def replace_text(doc_id: str, req: ReplaceTextRequest):
-    """Replace all occurrences of req.find with req.replace across all slides."""
+    """Replace all occurrences of req.find with req.replace across all slides (and optionally notes)."""
     if not req.find:
         raise HTTPException(400, "find text cannot be empty")
     d = _require(doc_id)
@@ -5026,6 +8754,27 @@ def replace_text(doc_id: str, req: ReplaceTextRequest):
         slide_count = 0
         for el in slide.elements:
             slide_count += _replace_in_element(el, req.find, req.replace, req.case_sensitive, req.use_regex)
+        if req.include_notes:
+            cp = slide.custom_properties or {}
+            notes_text = cp.get("notes_text", "")
+            if notes_text:
+                if req.use_regex:
+                    import re as _re
+                    flags = 0 if req.case_sensitive else _re.IGNORECASE
+                    new_notes, n_sub = _re.subn(req.find, req.replace, notes_text, flags=flags)
+                else:
+                    if req.case_sensitive:
+                        n_sub = notes_text.count(req.find)
+                        new_notes = notes_text.replace(req.find, req.replace)
+                    else:
+                        import re as _re
+                        n_sub = len(_re.findall(_re.escape(req.find), notes_text, _re.IGNORECASE))
+                        new_notes = _re.sub(_re.escape(req.find), req.replace, notes_text, flags=_re.IGNORECASE)
+                if n_sub:
+                    if slide.custom_properties is None:
+                        slide.custom_properties = {}
+                    slide.custom_properties["notes_text"] = new_notes
+                    slide_count += n_sub
         if slide_count:
             affected_slides.append(slide.slide_number)
             total += slide_count
@@ -5264,6 +9013,870 @@ def render_element_png(doc_id: str, n: int, element_id: str, v: int = 0):
     )
 
 
+# ── Chart data endpoints (typed editor for BridgeChart) ──────────────────────
+
+def _resolve_color(c: Any, theme: dict[str, str] | None) -> str | None:
+    """Return resolved #RRGGBB hex for a ColorSpec, or None if no value set."""
+    if c is None:
+        return None
+    val = getattr(c, "value", None)
+    if not val:
+        return None
+    try:
+        return c.resolve(theme or {})
+    except Exception:
+        return val if isinstance(val, str) and val.startswith("#") else None
+
+
+def _ser_chart_color(c: Any, theme: dict[str, str] | None) -> str | None:
+    """Same as _resolve_color but returns None silently if resolution fails."""
+    return _resolve_color(c, theme)
+
+
+def _ser_chart_series(s: Any, theme: dict[str, str] | None, idx: int) -> dict[str, Any]:
+    line = s.line
+    marker = s.marker
+    dl = s.data_labels
+    return {
+        "idx":       idx,
+        "name":      s.name or "",
+        "values":    [float(v) if v is not None else None for v in (s.values or [])],
+        "x_values":  [float(v) if v is not None else None for v in (s.x_values or [])],
+        "color":     _ser_chart_color(s.color, theme),
+        "plot_type": s.plot_type,
+        "smooth":    bool(s.smooth),
+        "invert_if_negative": bool(s.invert_if_negative),
+        "line": {
+            "visible": bool(getattr(line, "line_visible", True)),
+            "width":   getattr(line, "line_width", None),
+            "color":   _ser_chart_color(getattr(line, "line_color", None), theme),
+            "dash":    getattr(line, "line_style", None),
+        },
+        "marker": {
+            "style":          getattr(marker, "marker_style", None),
+            "size":           getattr(marker, "marker_size", None),
+            "color":          _ser_chart_color(getattr(marker, "marker_color", None), theme),
+            "line_visible":   bool(getattr(marker, "marker_line_visible", True)),
+        },
+        "data_labels": {
+            "show":           bool(getattr(dl, "show", False)),
+            "show_val":       bool(getattr(dl, "show_val", True)),
+            "show_cat_name":  bool(getattr(dl, "show_cat_name", False)),
+            "show_ser_name":  bool(getattr(dl, "show_ser_name", False)),
+            "show_percent":   bool(getattr(dl, "show_percent", False)),
+            "position":       getattr(dl, "position", None),
+            "format":         getattr(dl, "format", None),
+            "font_size":      getattr(dl, "font_size", None),
+            "font_color":     _ser_chart_color(getattr(dl, "font_color", None), theme),
+            "separator":      getattr(dl, "separator", None),
+        },
+    }
+
+
+def _ser_chart_axis(ax: Any, theme: dict[str, str] | None) -> dict[str, Any]:
+    return {
+        "visible":              bool(ax.visible) and not bool(ax.delete),
+        "axis_type":            ax.axis_type,
+        "min":                  ax.min_value,
+        "max":                  ax.max_value,
+        "major_unit":           ax.units.major_unit,
+        "minor_unit":           ax.units.minor_unit,
+        "gridlines_major":      bool(ax.gridlines.has_major_gridlines),
+        "gridlines_minor":      bool(ax.minor_gridlines.has_major_gridlines),
+        "number_format":        ax.number_format or ax.tick_labels.number_format,
+        "reverse_order":        bool(ax.reverse_order),
+        "title": {
+            "text":       ax.title.title_text,
+            "font_size":  ax.title.title_font_size,
+            "font_name":  ax.title.title_font_name,
+            "font_bold":  ax.title.title_font_bold,
+        },
+        "tick_label_font_size":  ax.tick_labels.tick_label_font_size,
+        "tick_label_font_color": _ser_chart_color(ax.tick_labels.tick_label_font_color, theme),
+        "tick_label_rotation":   ax.tick_labels.tick_label_rotation,
+    }
+
+
+def _ser_chart_data(el: Any, theme: dict[str, str] | None) -> dict[str, Any]:
+    """Serialize a BridgeChart into a typed JSON payload for the chart editor."""
+    cats = el.categories.categories or el.categories.categories_raw or []
+    return {
+        "chart_type": el.chart_type or "COLUMN_CLUSTERED",
+        "categories": [str(c) if c is not None else "" for c in cats],
+        "categories_are_numeric": bool(el.categories.categories_are_numeric),
+        "series": [_ser_chart_series(s, theme, i) for i, s in enumerate(el.series)],
+        "title": {
+            "text":       el.title.title,
+            "font_size":  el.title.title_font_size,
+            "font_name":  el.title.title_font_name,
+            "font_bold":  el.title.title_font_bold,
+            "font_italic": el.title.title_font_italic,
+            "font_color": _ser_chart_color(el.title.title_font_color, theme),
+        },
+        "legend": {
+            "visible":    bool(el.legend.visible),
+            "position":   el.legend.position,
+            "overlay":    bool(el.legend.overlay),
+            "font_size":  el.legend.font_size,
+            "font_name":  el.legend.font_name,
+            "font_color": _ser_chart_color(el.legend.font_color, theme),
+        },
+        "category_axis": _ser_chart_axis(el.category_axis, theme),
+        "value_axis":    _ser_chart_axis(el.value_axis, theme),
+        "plot_properties": {
+            "grouping":         el.plot_properties.grouping,
+            "bar_width_ratio":  el.plot_properties.bar_width_ratio,
+            "overlap":          el.plot_properties.overlap,
+            "is_horizontal":    bool(el.plot_properties.is_horizontal),
+            "first_slice_ang":  el.plot_properties.first_slice_ang,
+            "hole_size":        el.plot_properties.hole_size,
+            "vary_colors":      el.plot_properties.vary_colors,
+        },
+    }
+
+
+def _patch_color(target_cs: Any, hex_str: str | None) -> Any:
+    """Update a ColorSpec in-place with a new hex value. If hex_str is None, leave it.
+    If hex_str is empty string, clear the color (returns None).
+    Returns the updated/new ColorSpec or None."""
+    from percy.bridge.elements import ColorSpec
+    if hex_str is None:
+        return target_cs
+    if hex_str == "":
+        return None
+    if target_cs is None:
+        return ColorSpec(value=hex_str)
+    target_cs.value = hex_str
+    target_cs.lum_mod = None
+    target_cs.lum_off = None
+    target_cs.shade   = None
+    target_cs.tint    = None
+    return target_cs
+
+
+def _apply_chart_series(s: Any, src: dict[str, Any]) -> None:
+    """Apply a single-series update dict to ChartSeries in-place."""
+    if "name" in src:        s.name = src["name"]
+    if "values" in src:
+        vals = src["values"] or []
+        s.values = [float(v) if v is not None else 0.0 for v in vals]
+    if "x_values" in src:
+        xv = src["x_values"] or []
+        s.x_values = [float(v) if v is not None else 0.0 for v in xv]
+    if "color" in src:       s.color = _patch_color(s.color, src["color"])
+    if "plot_type" in src:   s.plot_type = src["plot_type"]
+    if "smooth" in src:      s.smooth = bool(src["smooth"])
+    if "invert_if_negative" in src: s.invert_if_negative = bool(src["invert_if_negative"])
+
+    line_src = src.get("line")
+    if isinstance(line_src, dict):
+        if "visible" in line_src: s.line.line_visible = bool(line_src["visible"])
+        if "width"   in line_src: s.line.line_width   = line_src["width"]
+        if "color"   in line_src: s.line.line_color   = _patch_color(s.line.line_color, line_src["color"])
+        if "dash"    in line_src: s.line.line_style   = line_src["dash"]
+
+    marker_src = src.get("marker")
+    if isinstance(marker_src, dict):
+        if "style"        in marker_src: s.marker.marker_style        = marker_src["style"]
+        if "size"         in marker_src: s.marker.marker_size         = marker_src["size"]
+        if "color"        in marker_src: s.marker.marker_color        = _patch_color(s.marker.marker_color, marker_src["color"])
+        if "line_visible" in marker_src: s.marker.marker_line_visible = bool(marker_src["line_visible"])
+
+    dl_src = src.get("data_labels")
+    if isinstance(dl_src, dict):
+        if "show"          in dl_src: s.data_labels.show          = bool(dl_src["show"])
+        if "show_val"      in dl_src: s.data_labels.show_val      = bool(dl_src["show_val"])
+        if "show_cat_name" in dl_src: s.data_labels.show_cat_name = bool(dl_src["show_cat_name"])
+        if "show_ser_name" in dl_src: s.data_labels.show_ser_name = bool(dl_src["show_ser_name"])
+        if "show_percent"  in dl_src: s.data_labels.show_percent  = bool(dl_src["show_percent"])
+        if "position"      in dl_src: s.data_labels.position      = dl_src["position"]
+        if "format"        in dl_src: s.data_labels.format        = dl_src["format"]
+        if "font_size"     in dl_src: s.data_labels.font_size     = dl_src["font_size"]
+        if "font_color"    in dl_src: s.data_labels.font_color    = _patch_color(s.data_labels.font_color, dl_src["font_color"])
+        if "separator"     in dl_src: s.data_labels.separator     = dl_src["separator"]
+
+
+def _apply_chart_axis(ax: Any, src: dict[str, Any]) -> None:
+    """Apply an axis-update dict to a BridgeAxis in-place."""
+    if "visible" in src:
+        v = bool(src["visible"])
+        ax.visible = v
+        ax.delete  = not v
+    if "min" in src:                ax.min_value           = src["min"]
+    if "max" in src:                ax.max_value           = src["max"]
+    if "major_unit" in src:         ax.units.major_unit    = src["major_unit"]
+    if "minor_unit" in src:         ax.units.minor_unit    = src["minor_unit"]
+    if "gridlines_major" in src:    ax.gridlines.has_major_gridlines = bool(src["gridlines_major"])
+    if "gridlines_minor" in src:    ax.minor_gridlines.has_major_gridlines = bool(src["gridlines_minor"])
+    if "number_format" in src:
+        ax.number_format = src["number_format"]
+        ax.tick_labels.number_format = src["number_format"]
+    if "reverse_order" in src:      ax.reverse_order = bool(src["reverse_order"])
+    title_src = src.get("title")
+    if isinstance(title_src, dict):
+        if "text"      in title_src: ax.title.title_text      = title_src["text"]
+        if "font_size" in title_src: ax.title.title_font_size = title_src["font_size"]
+        if "font_name" in title_src: ax.title.title_font_name = title_src["font_name"]
+        if "font_bold" in title_src: ax.title.title_font_bold = title_src["font_bold"]
+    if "tick_label_font_size" in src:  ax.tick_labels.tick_label_font_size  = src["tick_label_font_size"]
+    if "tick_label_rotation"  in src:  ax.tick_labels.tick_label_rotation   = src["tick_label_rotation"]
+    if "tick_label_font_color" in src:
+        ax.tick_labels.tick_label_font_color = _patch_color(ax.tick_labels.tick_label_font_color, src["tick_label_font_color"])
+
+
+def _apply_chart_data(el: Any, req: dict[str, Any]) -> None:
+    """Apply a chart-data PATCH dict to a BridgeChart in-place. Only keys present in req
+    are updated; everything else is left untouched (including data_source, overlay_files,
+    reconstruction_blobs, etc)."""
+    from percy.bridge.elements import ChartSeries, LineFormat, MarkerFormat, DataLabels
+
+    if "chart_type" in req:
+        el.chart_type = (req["chart_type"] or "").upper() or None
+
+    if "categories" in req:
+        cats = [str(c) if c is not None else "" for c in (req["categories"] or [])]
+        el.categories.categories = cats
+        el.categories.categories_raw = list(cats)
+
+    if "categories_are_numeric" in req:
+        el.categories.categories_are_numeric = bool(req["categories_are_numeric"])
+
+    if "series" in req:
+        series_src = req["series"] or []
+        # If lengths match, mutate in-place (keeps untouched fields like point_colors).
+        # Otherwise, rebuild from scratch using defaults.
+        if len(series_src) == len(el.series):
+            for s, src in zip(el.series, series_src):
+                _apply_chart_series(s, src)
+        else:
+            new_series: list[Any] = []
+            for src in series_src:
+                s = ChartSeries(
+                    name=src.get("name"),
+                    line=LineFormat(),
+                    marker=MarkerFormat(),
+                    data_labels=DataLabels(),
+                )
+                _apply_chart_series(s, src)
+                new_series.append(s)
+            el.series = new_series
+
+    title_src = req.get("title")
+    if isinstance(title_src, dict):
+        if "text"        in title_src: el.title.title             = title_src["text"]
+        if "font_size"   in title_src: el.title.title_font_size   = title_src["font_size"]
+        if "font_name"   in title_src: el.title.title_font_name   = title_src["font_name"]
+        if "font_bold"   in title_src: el.title.title_font_bold   = title_src["font_bold"]
+        if "font_italic" in title_src: el.title.title_font_italic = title_src["font_italic"]
+        if "font_color"  in title_src:
+            el.title.title_font_color = _patch_color(el.title.title_font_color, title_src["font_color"])
+        # text presence implies user wants the title shown
+        if "text" in title_src and title_src["text"]:
+            el.title.auto_title_deleted = False
+
+    legend_src = req.get("legend")
+    if isinstance(legend_src, dict):
+        if "visible"   in legend_src: el.legend.visible   = bool(legend_src["visible"])
+        if "position"  in legend_src: el.legend.position  = legend_src["position"]
+        if "overlay"   in legend_src: el.legend.overlay   = bool(legend_src["overlay"])
+        if "font_size" in legend_src: el.legend.font_size = legend_src["font_size"]
+        if "font_name" in legend_src: el.legend.font_name = legend_src["font_name"]
+        if "font_color" in legend_src:
+            el.legend.font_color = _patch_color(el.legend.font_color, legend_src["font_color"])
+
+    cat_ax_src = req.get("category_axis")
+    if isinstance(cat_ax_src, dict):
+        _apply_chart_axis(el.category_axis, cat_ax_src)
+
+    val_ax_src = req.get("value_axis")
+    if isinstance(val_ax_src, dict):
+        _apply_chart_axis(el.value_axis, val_ax_src)
+
+    pp_src = req.get("plot_properties")
+    if isinstance(pp_src, dict):
+        if "grouping"        in pp_src: el.plot_properties.grouping        = pp_src["grouping"]
+        if "bar_width_ratio" in pp_src: el.plot_properties.bar_width_ratio = pp_src["bar_width_ratio"]
+        if "overlap"         in pp_src: el.plot_properties.overlap         = pp_src["overlap"]
+        if "is_horizontal"   in pp_src: el.plot_properties.is_horizontal   = bool(pp_src["is_horizontal"])
+        if "first_slice_ang" in pp_src: el.plot_properties.first_slice_ang = pp_src["first_slice_ang"]
+        if "hole_size"       in pp_src: el.plot_properties.hole_size       = pp_src["hole_size"]
+        if "vary_colors"     in pp_src: el.plot_properties.vary_colors     = pp_src["vary_colors"]
+
+
+@app.get("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/chart-data")
+def get_chart_data(doc_id: str, n: int, element_id: str):
+    """Return typed chart-data JSON for a BridgeChart element (404 if not a chart)."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+    el  = _find_element(doc_id, n, element_id)
+    if el.element_type != "BridgeChart":
+        raise HTTPException(400, f"Element {element_id} is {el.element_type}, not a chart")
+    theme = getattr(doc, "theme_colors", None) or None
+    return _ser_chart_data(el, theme)
+
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/chart-data")
+async def update_chart_data(doc_id: str, n: int, element_id: str, request: Request):
+    """Patch chart data on a BridgeChart element. Body is a partial chart-data JSON;
+    only keys present are applied. Series and categories are full-list replacements;
+    other top-level keys (title, legend, axes, plot_properties) accept partial dicts."""
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "chart-data PATCH body must be a JSON object")
+    _snapshot_doc(doc_id)
+    d   = _require(doc_id)
+    doc = d["doc"]
+    el  = _find_element(doc_id, n, element_id)
+    if el.element_type != "BridgeChart":
+        raise HTTPException(400, f"Element {element_id} is {el.element_type}, not a chart")
+    _apply_chart_data(el, body)
+    log.info("studio: updated chart-data on %s slide %d of %s", element_id, n, doc_id)
+    theme = getattr(doc, "theme_colors", None) or None
+    return _ser_chart_data(el, theme)
+
+
+# ── Table data endpoints (typed editor for BridgeTable) ──────────────────────
+
+def _ser_border(b: Any, theme: dict[str, str] | None) -> dict[str, Any] | None:
+    if b is None:
+        return None
+    return {
+        "visible": bool(getattr(b, "visible", True)),
+        "style":   getattr(b, "style", None) or getattr(b, "dash_style", None),
+        "width":   getattr(b, "width", None),
+        "color":   _ser_chart_color(getattr(b, "color", None), theme),
+    }
+
+
+def _ser_table_cell(c: Any, theme: dict[str, str] | None) -> dict[str, Any]:
+    font = c.font
+    align = c.alignment
+    borders = c.borders
+    merge = c.merge
+    return {
+        "row":             c.grid_row,
+        "col":             c.grid_col,
+        "text":            c.text or "",
+        "font_name":       font.font_name,
+        "font_size":       font.font_size,
+        "font_bold":       font.font_bold,
+        "font_italic":     font.font_italic,
+        "font_color":      _ser_chart_color(font.text_color, theme),
+        "h_align":         align.text_alignment,
+        "v_align":         align.vertical_alignment,
+        "fill_color":      _ser_chart_color(c.fill_color, theme),
+        "fill_type":       c.fill_type,
+        "word_wrap":       c.word_wrap,
+        "merge": {
+            "is_origin":   bool(merge.is_merge_origin),
+            "is_spanned":  bool(merge.is_spanned),
+            "row_span":    merge.merge_span_rows,
+            "col_span":    merge.merge_span_cols,
+        },
+        "borders": {
+            "top":    _ser_border(borders.border_top,    theme),
+            "bottom": _ser_border(borders.border_bottom, theme),
+            "left":   _ser_border(borders.border_left,   theme),
+            "right":  _ser_border(borders.border_right,  theme),
+        },
+    }
+
+
+def _ser_table_data(el: Any, theme: dict[str, str] | None) -> dict[str, Any]:
+    """Serialize a BridgeTable to typed JSON for the table editor."""
+    formats = el.cell_formats or []
+    n_rows = len(formats)
+    n_cols = len(formats[0]) if formats else 0
+    cells: list[list[dict[str, Any]]] = []
+    for r in range(n_rows):
+        row_cells: list[dict[str, Any]] = []
+        for c in range(n_cols):
+            cf = formats[r][c] if c < len(formats[r]) else None
+            if cf is None:
+                row_cells.append({
+                    "row": r, "col": c, "text": "",
+                    "font_name": None, "font_size": None, "font_bold": None, "font_italic": None,
+                    "font_color": None, "h_align": "left", "v_align": "top",
+                    "fill_color": None, "fill_type": None, "word_wrap": None,
+                    "merge": {"is_origin": False, "is_spanned": False, "row_span": 1, "col_span": 1},
+                    "borders": {"top": None, "bottom": None, "left": None, "right": None},
+                })
+            else:
+                row_cells.append(_ser_table_cell(cf, theme))
+        cells.append(row_cells)
+    tp = el.table_properties
+    return {
+        "rows": n_rows,
+        "cols": n_cols,
+        "cells": cells,
+        "column_widths": list(el.dimensions.column_widths or []),
+        "row_heights":   list(el.dimensions.row_heights   or []),
+        "properties": {
+            "first_row_header": bool(tp.first_row_header),
+            "first_col_header": bool(tp.first_col_header),
+            "last_row_total":   bool(tp.last_row_total),
+            "last_col_total":   bool(tp.last_col_total),
+            "banded_rows":      bool(tp.banded_rows),
+            "banded_cols":      bool(tp.banded_cols),
+        },
+        "defaults": {
+            "font_name": el.defaults.default_font_name,
+            "font_size": el.defaults.default_font_size,
+        },
+    }
+
+
+def _patch_border(target: Any, src: dict[str, Any]) -> Any:
+    """Update or create a Border in-place from a dict."""
+    from percy.bridge.elements import Border
+    if target is None:
+        target = Border()
+    if "visible" in src: target.visible = bool(src["visible"])
+    if "style"   in src:
+        target.style = src["style"]
+        target.dash_style = src["style"]
+    if "width"   in src: target.width   = src["width"]
+    if "color"   in src: target.color   = _patch_color(target.color, src["color"])
+    return target
+
+
+def _apply_table_cell(cf: Any, src: dict[str, Any]) -> None:
+    """Apply a single-cell update dict to a CellFormat in-place."""
+    if "text"        in src:
+        cf.text = src["text"]
+        # Replace paragraphs with a single paragraph carrying the new text,
+        # inheriting font properties from the original first run if present.
+        try:
+            from percy.bridge.elements import TextParagraph, TextRun
+            first_run = None
+            if cf.paragraphs and cf.paragraphs[0].runs:
+                first_run = cf.paragraphs[0].runs[0]
+            new_run = TextRun(
+                text=src["text"],
+                font_name=getattr(first_run, "font_name", None) if first_run else None,
+                font_size=getattr(first_run, "font_size", None) if first_run else None,
+                font_bold=getattr(first_run, "font_bold", None) if first_run else None,
+                font_italic=getattr(first_run, "font_italic", None) if first_run else None,
+                font_color=getattr(first_run, "font_color", None) if first_run else None,
+            )
+            cf.paragraphs = [TextParagraph(runs=[new_run])]
+        except Exception:
+            pass
+    if "font_name"   in src: cf.font.font_name   = src["font_name"]
+    if "font_size"   in src: cf.font.font_size   = src["font_size"]
+    if "font_bold"   in src: cf.font.font_bold   = src["font_bold"]
+    if "font_italic" in src: cf.font.font_italic = src["font_italic"]
+    if "font_color"  in src: cf.font.text_color  = _patch_color(cf.font.text_color, src["font_color"])
+    if "h_align"     in src: cf.alignment.text_alignment     = src["h_align"]
+    if "v_align"     in src: cf.alignment.vertical_alignment = src["v_align"]
+    if "fill_color"  in src:
+        cf.fill_color = _patch_color(cf.fill_color, src["fill_color"])
+        if src["fill_color"] and not cf.fill_type:
+            cf.fill_type = "solid"
+        elif src["fill_color"] == "":
+            cf.fill_type = "none"
+    if "fill_type"   in src: cf.fill_type = src["fill_type"]
+    if "word_wrap"   in src: cf.word_wrap = src["word_wrap"]
+    borders_src = src.get("borders")
+    if isinstance(borders_src, dict):
+        if "top"    in borders_src: cf.borders.border_top    = _patch_border(cf.borders.border_top,    borders_src["top"]    or {}) if borders_src["top"]    is not None else None
+        if "bottom" in borders_src: cf.borders.border_bottom = _patch_border(cf.borders.border_bottom, borders_src["bottom"] or {}) if borders_src["bottom"] is not None else None
+        if "left"   in borders_src: cf.borders.border_left   = _patch_border(cf.borders.border_left,   borders_src["left"]   or {}) if borders_src["left"]   is not None else None
+        if "right"  in borders_src: cf.borders.border_right  = _patch_border(cf.borders.border_right,  borders_src["right"]  or {}) if borders_src["right"]  is not None else None
+    merge_src = src.get("merge")
+    if isinstance(merge_src, dict):
+        if "is_origin"  in merge_src: cf.merge.is_merge_origin = bool(merge_src["is_origin"])
+        if "is_spanned" in merge_src: cf.merge.is_spanned      = bool(merge_src["is_spanned"])
+        if "row_span"   in merge_src: cf.merge.merge_span_rows = int(merge_src["row_span"])
+        if "col_span"   in merge_src: cf.merge.merge_span_cols = int(merge_src["col_span"])
+        cf.merge.is_merged = cf.merge.is_merge_origin or cf.merge.is_spanned
+
+
+def _make_default_cell(row: int, col: int) -> Any:
+    from percy.bridge.elements import CellFormat, TextParagraph, TextRun
+    cf = CellFormat()
+    cf.grid_row = row
+    cf.grid_col = col
+    cf.text = ""
+    cf.paragraphs = [TextParagraph(runs=[TextRun(text="")])]
+    return cf
+
+
+def _apply_table_data(el: Any, req: dict[str, Any]) -> None:
+    """Apply a table-data PATCH dict to a BridgeTable in-place. Supports:
+       - cell-level updates (cells: [{row, col, ...partial}])
+       - structural insert/delete (op: 'insert_row'|'delete_row'|'insert_col'|'delete_col' + 'index')
+       - column_widths/row_heights replacements
+       - properties updates
+       - bulk-replace via 'rows', 'cols' for resize"""
+    n_rows = len(el.cell_formats)
+    n_cols = len(el.cell_formats[0]) if el.cell_formats else 0
+
+    op = req.get("op")
+    if op in ("insert_row", "delete_row", "insert_col", "delete_col"):
+        idx = int(req.get("index", 0))
+        if op == "insert_row":
+            new_row = [_make_default_cell(idx, c) for c in range(n_cols)]
+            el.cell_formats.insert(idx, new_row)
+            # bump grid_row on cells below
+            for r in range(idx + 1, len(el.cell_formats)):
+                for cell in el.cell_formats[r]:
+                    cell.grid_row = r
+            # adjust dimensions
+            if el.dimensions.row_heights:
+                avg = sum(el.dimensions.row_heights) / len(el.dimensions.row_heights)
+                el.dimensions.row_heights.insert(idx, avg)
+            # also expand legacy `data` if present
+            if el.data and idx <= len(el.data):
+                el.data.insert(idx, ["" for _ in range(n_cols)])
+        elif op == "delete_row":
+            if 0 <= idx < n_rows and n_rows > 1:
+                el.cell_formats.pop(idx)
+                for r in range(idx, len(el.cell_formats)):
+                    for cell in el.cell_formats[r]:
+                        cell.grid_row = r
+                if el.dimensions.row_heights and idx < len(el.dimensions.row_heights):
+                    el.dimensions.row_heights.pop(idx)
+                if el.data and idx < len(el.data):
+                    el.data.pop(idx)
+        elif op == "insert_col":
+            for r, row in enumerate(el.cell_formats):
+                row.insert(idx, _make_default_cell(r, idx))
+                for c in range(idx + 1, len(row)):
+                    row[c].grid_col = c
+            if el.dimensions.column_widths:
+                avg = sum(el.dimensions.column_widths) / len(el.dimensions.column_widths)
+                el.dimensions.column_widths.insert(idx, avg)
+            if el.data:
+                for row in el.data:
+                    if idx <= len(row):
+                        row.insert(idx, "")
+        elif op == "delete_col":
+            if 0 <= idx < n_cols and n_cols > 1:
+                for row in el.cell_formats:
+                    if idx < len(row):
+                        row.pop(idx)
+                        for c in range(idx, len(row)):
+                            row[c].grid_col = c
+                if el.dimensions.column_widths and idx < len(el.dimensions.column_widths):
+                    el.dimensions.column_widths.pop(idx)
+                if el.data:
+                    for row in el.data:
+                        if idx < len(row):
+                            row.pop(idx)
+
+    cells_src = req.get("cells")
+    if isinstance(cells_src, list):
+        for cd in cells_src:
+            if not isinstance(cd, dict): continue
+            r = cd.get("row"); c = cd.get("col")
+            if r is None or c is None: continue
+            if 0 <= r < len(el.cell_formats) and 0 <= c < len(el.cell_formats[r]):
+                _apply_table_cell(el.cell_formats[r][c], cd)
+                # mirror text into legacy `data`
+                if "text" in cd and el.data and r < len(el.data) and c < len(el.data[r]):
+                    el.data[r][c] = cd["text"]
+
+    if "column_widths" in req:
+        el.dimensions.column_widths = [float(v) for v in req["column_widths"] or []]
+    if "row_heights" in req:
+        el.dimensions.row_heights = [float(v) for v in req["row_heights"] or []]
+
+    props_src = req.get("properties")
+    if isinstance(props_src, dict):
+        if "first_row_header" in props_src: el.table_properties.first_row_header = bool(props_src["first_row_header"])
+        if "first_col_header" in props_src: el.table_properties.first_col_header = bool(props_src["first_col_header"])
+        if "last_row_total"   in props_src: el.table_properties.last_row_total   = bool(props_src["last_row_total"])
+        if "last_col_total"   in props_src: el.table_properties.last_col_total   = bool(props_src["last_col_total"])
+        if "banded_rows"      in props_src: el.table_properties.banded_rows      = bool(props_src["banded_rows"])
+        if "banded_cols"      in props_src: el.table_properties.banded_cols      = bool(props_src["banded_cols"])
+
+
+@app.get("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/table-data")
+def get_table_data(doc_id: str, n: int, element_id: str):
+    """Return typed table-data JSON for a BridgeTable element (404 if not a table)."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+    el  = _find_element(doc_id, n, element_id)
+    if el.element_type != "BridgeTable":
+        raise HTTPException(400, f"Element {element_id} is {el.element_type}, not a table")
+    theme = getattr(doc, "theme_colors", None) or None
+    return _ser_table_data(el, theme)
+
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/table-data")
+async def update_table_data(doc_id: str, n: int, element_id: str, request: Request):
+    """Patch a BridgeTable. Body keys: cells (per-cell updates), column_widths,
+    row_heights, properties (table flags), op + index for insert/delete row/col."""
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "table-data PATCH body must be a JSON object")
+    _snapshot_doc(doc_id)
+    d   = _require(doc_id)
+    doc = d["doc"]
+    el  = _find_element(doc_id, n, element_id)
+    if el.element_type != "BridgeTable":
+        raise HTTPException(400, f"Element {element_id} is {el.element_type}, not a table")
+    _apply_table_data(el, body)
+    log.info("studio: updated table-data on %s slide %d of %s", element_id, n, doc_id)
+    theme = getattr(doc, "theme_colors", None) or None
+    return _ser_table_data(el, theme)
+
+
+# ── Connector data endpoints (typed editor for BridgeConnector) ──────────────
+
+def _ser_connector_data(el: Any, theme: dict[str, str] | None) -> dict[str, Any]:
+    line = el.line
+    ep = el.endpoints
+    return {
+        "connector_type": el.connector_type or "straight",
+        "endpoints": {
+            "start_x": ep.start_x, "start_y": ep.start_y,
+            "end_x":   ep.end_x,   "end_y":   ep.end_y,
+        },
+        "line": {
+            "visible":    bool(line.visible),
+            "color":      _ser_chart_color(line.color, theme),
+            "width":      line.width,
+            "dash_style": line.dash_style,
+            "head_end":   line.head_end,
+            "tail_end":   line.tail_end,
+            "head_size":  line.head_size,
+            "tail_size":  line.tail_size,
+        },
+    }
+
+
+def _apply_connector_data(el: Any, req: dict[str, Any]) -> None:
+    if "connector_type" in req:
+        el.connector_type = req["connector_type"] or "straight"
+    ep_src = req.get("endpoints")
+    if isinstance(ep_src, dict):
+        if "start_x" in ep_src: el.endpoints.start_x = float(ep_src["start_x"])
+        if "start_y" in ep_src: el.endpoints.start_y = float(ep_src["start_y"])
+        if "end_x"   in ep_src: el.endpoints.end_x   = float(ep_src["end_x"])
+        if "end_y"   in ep_src: el.endpoints.end_y   = float(ep_src["end_y"])
+    line_src = req.get("line")
+    if isinstance(line_src, dict):
+        if "visible"    in line_src: el.line.visible    = bool(line_src["visible"])
+        if "color"      in line_src: el.line.color      = _patch_color(el.line.color, line_src["color"])
+        if "width"      in line_src: el.line.width      = line_src["width"]
+        if "dash_style" in line_src: el.line.dash_style = line_src["dash_style"] or "solid"
+        if "head_end"   in line_src: el.line.head_end   = line_src["head_end"]
+        if "tail_end"   in line_src: el.line.tail_end   = line_src["tail_end"]
+        if "head_size"  in line_src: el.line.head_size  = line_src["head_size"]
+        if "tail_size"  in line_src: el.line.tail_size  = line_src["tail_size"]
+
+
+@app.get("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/connector-data")
+def get_connector_data(doc_id: str, n: int, element_id: str):
+    """Return typed connector-data JSON for a BridgeConnector element."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+    el  = _find_element(doc_id, n, element_id)
+    if el.element_type != "BridgeConnector":
+        raise HTTPException(400, f"Element {element_id} is {el.element_type}, not a connector")
+    theme = getattr(doc, "theme_colors", None) or None
+    return _ser_connector_data(el, theme)
+
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/connector-data")
+async def update_connector_data(doc_id: str, n: int, element_id: str, request: Request):
+    """Patch endpoints, connector_type, and line styling on a BridgeConnector."""
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "connector-data PATCH body must be a JSON object")
+    _snapshot_doc(doc_id)
+    d   = _require(doc_id)
+    doc = d["doc"]
+    el  = _find_element(doc_id, n, element_id)
+    if el.element_type != "BridgeConnector":
+        raise HTTPException(400, f"Element {element_id} is {el.element_type}, not a connector")
+    _apply_connector_data(el, body)
+    log.info("studio: updated connector-data on %s slide %d of %s", element_id, n, doc_id)
+    theme = getattr(doc, "theme_colors", None) or None
+    return _ser_connector_data(el, theme)
+
+
+# ── Connects: per-element Python scripts ────────────────────────────────────
+# A "connect" is an optional Python script attached to a Bridge element. It
+# receives the element JSON as `element` and `inputs` (test arguments) and may
+# return a dict that gets merged back into the element. Stored in
+# `custom_properties['connect']` so no schema change is required.
+#
+# The Tester (POST /connect/test) runs the script in a subprocess with a 10s
+# timeout. This is sandbox-lite — the script can still hit the local network.
+# For production we'd want a real sandbox (Lambda, gVisor, Pyodide-in-WASM).
+
+_CONNECT_RUNNER_TEMPLATE = '''
+import json, sys, traceback
+
+_input = json.loads(sys.stdin.read())
+_element = _input["element"]
+_inputs  = _input.get("inputs", {})
+
+def _user_main():
+{user_code_indented}
+
+try:
+    result = _user_main()
+except SystemExit as e:
+    print(json.dumps({"error": f"sys.exit({e.code})"}))
+    sys.exit(0)
+except Exception as e:
+    print(json.dumps({"error": f"{type(e).__name__}: {e}", "traceback": traceback.format_exc()}))
+    sys.exit(0)
+
+print(json.dumps({"result": result}, default=str))
+'''
+
+
+def _ser_connect(el: Any) -> dict[str, Any]:
+    cp = getattr(el, "custom_properties", None) or {}
+    connect = cp.get("connect") or {}
+    return {
+        "script":     connect.get("script") or "",
+        "inputs":     connect.get("inputs") or {},
+        "updated_at": connect.get("updated_at") or 0,
+        "language":   "python",
+    }
+
+
+def _apply_connect(el: Any, src: dict[str, Any]) -> None:
+    if el.custom_properties is None:
+        el.custom_properties = {}
+    connect = el.custom_properties.get("connect") or {}
+    if "script" in src:
+        connect["script"] = (src["script"] or "")
+    if "inputs" in src:
+        connect["inputs"] = src["inputs"] or {}
+    connect["updated_at"] = int(time.time())
+    el.custom_properties["connect"] = connect
+
+
+@app.get("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/connect")
+def get_element_connect(doc_id: str, n: int, element_id: str):
+    """Return the Python connect script (and any saved test inputs) for an element."""
+    _require(doc_id)
+    el = _find_element(doc_id, n, element_id)
+    return _ser_connect(el)
+
+
+@app.get("/api/docs/{doc_id}/connects")
+def list_doc_connects(doc_id: str):
+    """List every element across the doc that has a non-empty connect script."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+    out: list[dict[str, Any]] = []
+    for slide in doc.slides:
+        for i, el in enumerate(slide.elements):
+            cp = getattr(el, "custom_properties", None) or {}
+            connect = cp.get("connect") or {}
+            script = (connect.get("script") or "").strip()
+            if not script:
+                continue
+            ident = getattr(el, "identification", None)
+            shape_id = getattr(ident, "shape_id", None) if ident else None
+            shape_name = (getattr(ident, "shape_name", None) if ident else None) or ""
+            out.append({
+                "slide_n":      slide.slide_number,
+                "element_id":   str(shape_id) if shape_id is not None else f"idx_{i}",
+                "element_type": el.element_type,
+                "element_name": shape_name or el.element_type,
+                "updated_at":   connect.get("updated_at") or 0,
+                "script_chars": len(script),
+            })
+    return {"connects": sorted(out, key=lambda r: -r["updated_at"])}
+
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/connect")
+async def update_element_connect(doc_id: str, n: int, element_id: str, request: Request):
+    """Save the Python connect script (and/or test inputs) for an element."""
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "connect PATCH body must be a JSON object")
+    _snapshot_doc(doc_id)
+    _require(doc_id)
+    el = _find_element(doc_id, n, element_id)
+    _apply_connect(el, body)
+    log.info("studio: updated connect on %s slide %d of %s", element_id, n, doc_id)
+    return _ser_connect(el)
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/connect/test")
+async def test_element_connect(doc_id: str, n: int, element_id: str, request: Request):
+    """Execute the connect script in a subprocess with a 10s timeout. Body is
+    optional `{ script?: string, inputs?: dict }`; if script is omitted the
+    saved one is used."""
+    import subprocess as _subprocess
+    import textwrap as _textwrap
+    import json as _json
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    if not isinstance(body, dict):
+        body = {}
+
+    _require(doc_id)
+    el  = _find_element(doc_id, n, element_id)
+    saved = _ser_connect(el)
+    script = body.get("script", saved.get("script") or "")
+    inputs = body.get("inputs", saved.get("inputs") or {})
+
+    if not script.strip():
+        raise HTTPException(400, "No connect script to test (provide one in the body or save it first)")
+
+    # Indent user code to fit inside _user_main():
+    indented = _textwrap.indent(script, "    ")
+    runner = _CONNECT_RUNNER_TEMPLATE.format(user_code_indented=indented)
+
+    # Serialize the element via to_dict() (Bridge dataclass)
+    try:
+        element_payload = el.to_dict()
+    except Exception:
+        element_payload = {"id": element_id, "type": el.element_type}
+
+    proc_input = _json.dumps({"element": element_payload, "inputs": inputs}, default=str)
+
+    try:
+        result = _subprocess.run(
+            [sys.executable, "-c", runner],
+            input=proc_input.encode("utf-8"),
+            capture_output=True,
+            timeout=10,
+        )
+    except _subprocess.TimeoutExpired:
+        return {"ok": False, "error": "Script timed out after 10s", "stdout": "", "stderr": "", "result": None}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "stdout": "", "stderr": "", "result": None}
+
+    stdout = result.stdout.decode("utf-8", errors="replace")
+    stderr = result.stderr.decode("utf-8", errors="replace")
+
+    # The runner always prints ONE JSON line at the end (either {result:..} or {error:..}).
+    # Earlier prints from the user script are kept above as logs.
+    last_line = stdout.strip().splitlines()[-1] if stdout.strip() else ""
+    parsed: dict[str, Any] = {}
+    try:
+        parsed = _json.loads(last_line) if last_line else {}
+    except Exception:
+        parsed = {}
+
+    log_lines = stdout.strip().splitlines()
+    user_logs = "\n".join(log_lines[:-1]) if log_lines else ""
+
+    return {
+        "ok":     "error" not in parsed and result.returncode == 0,
+        "result": parsed.get("result"),
+        "error":  parsed.get("error"),
+        "traceback": parsed.get("traceback"),
+        "stdout": user_logs,
+        "stderr": stderr,
+    }
+
+
 @app.post("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/generate-alt-text")
 def generate_alt_text(doc_id: str, n: int, element_id: str):
     """Use Claude Vision to generate descriptive alt text for an image element."""
@@ -5339,6 +9952,372 @@ def generate_alt_text(doc_id: str, n: int, element_id: str):
             pass
 
     return {"alt_text": alt_text, "element_id": element_id}
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/talking-points")
+def generate_talking_points(doc_id: str, n: int, element_id: str):
+    """Generate 3-5 talking points a presenter could use to expand on an element's text."""
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    el = None
+    for i, e in enumerate(slide.elements):
+        if _element_id(e, i) == element_id:
+            el = e
+            break
+    if el is None:
+        raise HTTPException(404, f"Element {element_id!r} not found")
+
+    text = _element_plain_text(el).strip()
+    if not text:
+        raise HTTPException(400, "Element has no text content")
+
+    prompt = (
+        f"You are a presentation coach. The slide element says:\n\n{text[:800]}\n\n"
+        f"Generate exactly 4 concise talking points a presenter could use when explaining this to an audience.\n"
+        f"Each talking point should:\n"
+        f"- Expand on or add context to the text\n"
+        f"- Be 1-2 sentences\n"
+        f"- Start with a strong opener\n\n"
+        f"Output ONLY the 4 talking points, one per line, each starting with •"
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=400,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = resp.content[0].text.strip()
+
+    points = [line.strip().lstrip("•").strip() for line in raw.split("\n") if line.strip() and line.strip().startswith("•")]
+    if not points:
+        points = [line.strip() for line in raw.split("\n") if line.strip()][:4]
+
+    return {"points": points[:4], "element_id": element_id, "source_text": text[:200]}
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/expand-slide")
+def expand_slide(doc_id: str, n: int):
+    """Use AI to create a new detail slide that expands on the current slide's content, inserted after n."""
+    import anthropic as _anthropic
+    import copy as _copy
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if not slide:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    # Collect current slide text
+    texts = [_element_plain_text(e).strip() for e in slide.elements]
+    texts = [t for t in texts if t]
+    if not texts:
+        raise HTTPException(400, "Slide has no text to expand on")
+
+    slide_text = "\n".join(texts[:5])
+
+    prompt = (
+        f"This presentation slide says:\n\n{slide_text[:600]}\n\n"
+        f"Create a follow-up detail slide that expands on this content.\n"
+        f"The new slide should:\n"
+        f"- Have a clear title (1 short line) that starts with 'Detail: ' or 'How: ' or 'Why: '\n"
+        f"- Have 3-5 bullet points that elaborate, add context, or explain HOW/WHY\n"
+        f"- Each bullet: 5-15 words, concrete and specific\n\n"
+        f"Output ONLY valid JSON:\n"
+        f'{{"title":"Detail: ...", "bullets":["First bullet","Second bullet"]}}'
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = resp.content[0].text.strip()
+
+    try:
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        data = json.loads(m.group()) if m else {}
+        title   = data.get("title", "Detail Slide")
+        bullets = data.get("bullets", [])[:5]
+    except Exception:
+        title   = "Detail"
+        bullets = ["See original slide for more context"]
+
+    if not bullets:
+        bullets = ["Details to be added"]
+
+    body_text = "\n".join(f"• {b}" for b in bullets)
+
+    _snapshot_doc(doc_id)
+
+    # Shift slides > n
+    for s in doc.slides:
+        if s.slide_number > n:
+            s.slide_number += 1
+
+    new_n = n + 1
+
+    # Build the new slide by cloning the current slide, clearing elements, adding new text
+    from percy.bridge.bridge import BridgeSlide  # type: ignore[attr-defined]
+    from percy.bridge.elements import (  # type: ignore[attr-defined]
+        BridgeShape, Position, Transform, Stacking, Identification,
+        Accessibility, ShapeIdentification, ShapeFill, ShapeLine,
+        ShapeShadow, ShapeTextContent, ShapeTextFrame, ShapeBorders, ColorSpec,
+        TextParagraph, TextRun,
+    )
+
+    def _make_text_el(label: str, l: float, t: float, w: float, h: float, text: str,
+                      font_size: float, bold: bool = False, color: str = "#1E293B") -> Any:
+        para = TextParagraph()
+        run  = TextRun()
+        run.text = text
+        run.font_size = font_size
+        run.font_bold = bold
+        run.font_color = color
+        para.runs = [run]
+        el = BridgeShape(
+            position=Position(left=l, top=t, width=w, height=h),
+            transforms=Transform(), stacking=Stacking(z_index=1),
+            identification=Identification(shape_id=200, shape_name=label),
+            accessibility=Accessibility(alt_text=label),
+            shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+            fill=ShapeFill(fill_type="none", color=None),
+            line=ShapeLine(visible=False),
+            shadow=ShapeShadow(), text_content=ShapeTextContent(),
+            text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+        )
+        el.text_content.paragraphs = [para]
+        el.text_content.has_text = True
+        return el
+
+    title_el  = _make_text_el("ExpandTitle",  0.5, 0.3, 12.33, 0.8, title,     font_size=24, bold=True)
+    body_el   = _make_text_el("ExpandBody",   0.5, 1.3, 12.33, 5.8, body_text, font_size=16)
+    accent_el = BridgeShape(
+        position=Position(left=0.5, top=1.2, width=12.33, height=0.05),
+        transforms=Transform(), stacking=Stacking(z_index=0),
+        identification=Identification(shape_id=201, shape_name="ExpandAccent"),
+        accessibility=Accessibility(alt_text=""),
+        shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+        fill=ShapeFill(fill_type="solid", color=ColorSpec(value="#6366F1")),
+        line=ShapeLine(visible=False), shadow=ShapeShadow(),
+        text_content=ShapeTextContent(), text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+    )
+
+    new_slide = BridgeSlide(
+        slide_number=new_n,
+        elements=[title_el, accent_el, body_el],
+    )
+    doc.slides.append(new_slide)
+    doc.slides.sort(key=lambda s: s.slide_number)
+
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    try:
+        from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+        _rbs(doc, bridge_dir, slide_numbers=[new_n])
+    except Exception as exc:
+        log.warning("expand-slide: re-render failed (non-fatal): %s", exc)
+
+    log.info("studio: expand-slide inserted detail slide at %d in %s", new_n, doc_id)
+    return {
+        "new_slide_n": new_n,
+        "slide_count": len(doc.slides),
+        "title": title,
+        "bullet_count": len(bullets),
+    }
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/generate-notes")
+def generate_slide_notes(doc_id: str, n: int, tone: str = "presenter", length: str = "medium"):
+    """Use Claude to generate speaker notes for a slide based on its text content.
+
+    tone: "presenter" | "casual" | "formal"
+    length: "brief" (50w) | "medium" (100w) | "detailed" (200w)
+    """
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    # Extract all text from the slide
+    slide_texts: list[str] = []
+    for el in slide.elements:
+        plain = _element_plain_text(el).strip()
+        if plain:
+            slide_texts.append(plain)
+
+    if not slide_texts:
+        raise HTTPException(400, "Slide has no text content — cannot generate notes")
+
+    slide_content = "\n".join(f"• {t}" for t in slide_texts)
+    doc_name = getattr(doc, "name", "this presentation")
+
+    word_targets = {"brief": "40-60", "medium": "80-120", "detailed": "160-200"}
+    tone_guides = {
+        "presenter": "as a confident presenter explaining to an audience",
+        "casual":    "in a casual, conversational style",
+        "formal":    "in a formal, professional tone",
+    }
+    word_target = word_targets.get(length, "80-120")
+    tone_guide  = tone_guides.get(tone, tone_guides["presenter"])
+
+    prompt = (
+        f'Slide content from "{doc_name}" (slide {n}):\n\n{slide_content}\n\n'
+        f'Write speaker notes for this slide {tone_guide}. '
+        f'Target {word_target} words. Be natural and helpful to a live presenter. '
+        f'Output ONLY the notes text, no labels or preamble.'
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=400,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    notes_text = resp.content[0].text.strip()
+
+    # Optionally save the notes if the slide has none
+    cp = getattr(slide, "custom_properties", None)
+    if cp is None:
+        slide.custom_properties = {}
+        cp = slide.custom_properties
+    existing = cp.get("notes_text", "").strip()
+
+    return {"notes_text": notes_text, "had_existing": bool(existing)}
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/notes-transform")
+def transform_slide_notes(doc_id: str, n: int, operation: str = "shorten", language: str = ""):
+    """Use Claude to transform existing speaker notes.
+
+    operation: "expand" | "shorten" | "formal" | "casual" | "bullets" | "translate"
+    language: target language for "translate" (e.g. "Spanish", "French")
+    """
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    cp = getattr(slide, "custom_properties", {}) or {}
+    existing_notes = cp.get("notes_text", "").strip()
+    if not existing_notes:
+        raise HTTPException(400, "Slide has no existing notes to transform")
+
+    op_prompts: dict[str, str] = {
+        "expand":   f"Expand these speaker notes to be more detailed and comprehensive (~150-200 words). Add context, examples, or elaboration.\n\nNotes:\n{existing_notes}",
+        "shorten":  f"Shorten these speaker notes to 50-80 words while keeping the key points. Be concise.\n\nNotes:\n{existing_notes}",
+        "formal":   f"Rewrite these speaker notes in a formal, professional tone. Keep the same content.\n\nNotes:\n{existing_notes}",
+        "casual":   f"Rewrite these speaker notes in a casual, conversational tone. Keep the same content.\n\nNotes:\n{existing_notes}",
+        "bullets":  f"Convert these speaker notes into a concise bulleted list of key talking points (5-8 bullets).\n\nNotes:\n{existing_notes}",
+        "translate": f"Translate these speaker notes to {language or 'Spanish'}. Keep the same structure and tone.\n\nNotes:\n{existing_notes}",
+    }
+
+    prompt = op_prompts.get(operation)
+    if prompt is None:
+        raise HTTPException(400, f"Unknown operation: {operation}. Use: expand, shorten, formal, casual, bullets, translate")
+
+    prompt += "\n\nOutput ONLY the transformed notes text, no labels or preamble."
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=500,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    notes_text = resp.content[0].text.strip()
+    return {"notes_text": notes_text}
+
+
+@app.post("/api/docs/{doc_id}/generate-notes-bulk")
+def generate_notes_bulk(doc_id: str, overwrite: bool = False, tone: str = "presenter", length: str = "medium"):
+    """Generate speaker notes for slides that have no notes (or all slides if overwrite=true)."""
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    word_targets = {"brief": "40-60", "medium": "80-120", "detailed": "160-200"}
+    tone_guides = {
+        "presenter": "as a confident presenter explaining to an audience",
+        "casual":    "in a casual, conversational style",
+        "formal":    "in a formal, professional tone",
+    }
+    word_target = word_targets.get(length, "80-120")
+    tone_guide  = tone_guides.get(tone, tone_guides["presenter"])
+    doc_name = getattr(doc, "name", "this presentation")
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    generated = 0
+    skipped = 0
+
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        cp = getattr(slide, "custom_properties", None) or {}
+        existing = cp.get("notes_text", "").strip()
+        if existing and not overwrite:
+            skipped += 1
+            continue
+
+        texts = [_element_plain_text(el).strip() for el in slide.elements]
+        slide_texts = [t for t in texts if t]
+        if not slide_texts:
+            skipped += 1
+            continue
+
+        slide_content = "\n".join(f"• {t}" for t in slide_texts)
+        prompt = (
+            f'Slide content from "{doc_name}" (slide {slide.slide_number}):\n\n{slide_content}\n\n'
+            f'Write speaker notes for this slide {tone_guide}. '
+            f'Target {word_target} words. Output ONLY the notes text, no labels or preamble.'
+        )
+
+        try:
+            resp = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=400,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            notes_text = resp.content[0].text.strip()
+            if slide.custom_properties is None:
+                slide.custom_properties = {}
+            slide.custom_properties["notes_text"] = notes_text
+            generated += 1
+        except Exception:
+            skipped += 1
+
+    log.info("generate-notes-bulk: generated %d, skipped %d for %s", generated, skipped, doc_id)
+    return {"generated": generated, "skipped": skipped}
 
 
 class ChatMessage(BaseModel):
@@ -5466,6 +10445,27 @@ _STUDIO_TOOLS = [
             },
         },
     },
+    {
+        "name": "set_slide_notes",
+        "description": "Set or append speaker notes for the current slide.",
+        "input_schema": {
+            "type": "object",
+            "required": ["notes"],
+            "properties": {
+                "notes": {"type": "string", "description": "Speaker notes text to set (replaces existing notes)"},
+            },
+        },
+    },
+    {
+        "name": "set_slide_section",
+        "description": "Set a section name for the current slide (used for slide organization).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "section": {"type": "string", "description": "Section name (empty string to clear)"},
+            },
+        },
+    },
 ]
 
 
@@ -5564,96 +10564,82 @@ def _execute_tool_call(doc_id: str, slide_n: int, element_id: str | None,
             set_slide_background(doc_id, slide_n, color_arg)
             return f"Slide background set to {color_arg or 'none'}"
 
+        if tool_name == "set_slide_notes":
+            notes_text = tool_input.get("notes", "")
+            d = _require(doc_id)
+            slide = next((s for s in d["doc"].slides if s.slide_number == slide_n), None)
+            if slide is None:
+                return f"Slide {slide_n} not found"
+            if slide.custom_properties is None:
+                slide.custom_properties = {}
+            slide.custom_properties["notes_text"] = notes_text
+            return f"Speaker notes set ({len(notes_text)} chars)"
+
+        if tool_name == "set_slide_section":
+            sec = tool_input.get("section", "").strip()
+            d_tmp = _require(doc_id)
+            sl_tmp = next((s for s in d_tmp["doc"].slides if s.slide_number == slide_n), None)
+            if sl_tmp is None:
+                return f"Slide {slide_n} not found"
+            if sl_tmp.custom_properties is None:
+                sl_tmp.custom_properties = {}
+            if sec:
+                sl_tmp.custom_properties["section_name"] = sec
+            else:
+                sl_tmp.custom_properties.pop("section_name", None)
+            return f"Section set to '{sec}'" if sec else "Section cleared"
+
         return f"Unknown tool: {tool_name}"
     except Exception as exc:
         return f"Tool execution error: {exc}"
 
 
 @app.post("/api/docs/{doc_id}/chat")
-def chat(doc_id: str, req: ChatRequest):
-    """AI chat powered by Claude — context-aware about the current slide and element."""
+async def chat(doc_id: str, req: ChatRequest, request: Request):
+    """Legacy chat shim → forwards to the new /api/agent/chat endpoint.
+
+    Kept so existing studio clients (StudioAgent.tsx) work without modification.
+    The body shape is mapped on the way in; the response is shaped to match
+    what the legacy clients expect (`reply`, `actions_taken`).
+    """
     _require(doc_id)
-    import anthropic as _anthropic
+    from app.backend.agent_chat import agent_chat as _new_chat
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        return {"reply": (
-            "No ANTHROPIC_API_KEY found in environment.\n\n"
-            "Set ANTHROPIC_API_KEY in your shell or .env file, then restart the backend."
-        ), "actions_taken": 0}
+    # Stuff a JSON body into a clone of the request so the new handler can read it.
+    new_body = {
+        "doc_id": doc_id,
+        "messages": [{"role": m.role, "content": m.content} for m in req.messages],
+        "context": {
+            "viewing_slide_n": req.slide_n,
+            "selected_element_id": req.element_id,
+        },
+    }
 
-    slide_ctx = _build_slide_context(doc_id, req.slide_n, req.element_id)
+    # Wrap the body in a fake JSON-only request the new handler can consume.
+    class _Wrapped:
+        def __init__(self, src: Request, body: dict):
+            self._src = src
+            self._body = json.dumps(body).encode("utf-8")
+            self.url = src.url
+            self.cookies = src.cookies
+            self.state = src.state
+            self.headers = src.headers
+        async def json(self):
+            return json.loads(self._body)
 
-    system_prompt = (
-        "You are Percy, an AI assistant specialized in PowerPoint presentation design. "
-        "You help users understand and edit their presentations through the Percy Studio interface.\n\n"
-        "You have access to the following context about the current state of the document:\n\n"
-        f"```\n{slide_ctx}\n```\n\n"
-        "Available tools and when to use them:\n"
-        "- move_element: reposition or resize the selected element\n"
-        "- style_element: change fill color, opacity, border, shadow\n"
-        "- update_text: replace text content of a text or shape element\n"
-        "- insert_shape: add a new shape/text box to the current slide\n"
-        "- delete_element: remove the selected element\n"
-        "- duplicate_element: copy the selected element with offset\n"
-        "- set_slide_background: change the slide background color\n\n"
-        "Use tools proactively whenever the user requests a visual change. "
-        "After using a tool, briefly confirm what you did in one sentence. "
-        "Keep all responses concise — plain text only, no markdown."
-    )
+    result = await _new_chat(_Wrapped(request, new_body))
+    return {
+        "reply":         result.get("reply", ""),
+        "actions_taken": result.get("actions_taken", 0),
+        "mode":          result.get("mode"),
+        "plan":          result.get("plan"),
+        "action_id":     result.get("action_id"),
+    }
 
-    client = _anthropic.Anthropic(api_key=api_key)
-    claude_messages = [{"role": m.role, "content": m.content} for m in req.messages]
 
-    actions_taken = 0
-    reply = ""
-
-    try:
-        # First call — may trigger tool use
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=1024,
-            system=system_prompt,
-            tools=_STUDIO_TOOLS,
-            messages=claude_messages,
-        )
-
-        # Process tool calls if any
-        tool_results = []
-        for block in response.content:
-            if block.type == "tool_use":
-                result_str = _execute_tool_call(
-                    doc_id, req.slide_n, req.element_id,
-                    block.name, block.input,
-                )
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": result_str,
-                })
-                actions_taken += 1
-
-        if tool_results:
-            # Second call after tool results
-            claude_messages = claude_messages + [
-                {"role": "assistant", "content": response.content},
-                {"role": "user", "content": tool_results},
-            ]
-            response2 = client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=512,
-                system=system_prompt,
-                tools=_STUDIO_TOOLS,
-                messages=claude_messages,
-            )
-            reply = next((b.text for b in response2.content if hasattr(b, "text")), "Done.")
-        else:
-            reply = next((b.text for b in response.content if hasattr(b, "text")), "")
-
-    except Exception as exc:
-        reply = f"Claude API error: {exc}"
-
-    return {"reply": reply, "actions_taken": actions_taken}
+# Legacy tool-use chat handler removed 2026-05-04 — replaced by the
+# router/planner/executor stack at app/backend/agent_chat.py. The legacy
+# /api/docs/{doc_id}/chat shim above forwards to /api/agent/chat.
 
 
 # ── reverse proxy /api/cloud/* → Percy Cloud control-plane API ───────────────
@@ -5724,11 +10710,17 @@ def get_document_outline(doc_id: str):
                     elif body_text is None:
                         body_text = t
 
+        cp = getattr(slide, "custom_properties", None) or {}
+        section = cp.get("section_name", "").strip()
+        notes = cp.get("notes_text", "").strip()
         slides_outline.append({
             "slide_n":      slide.slide_number,
             "title":        title_text or "",
             "body_preview": body_text or "",
             "title_el_id":  title_el_id,
+            "section":      section,
+            "has_notes":    bool(notes),
+            "notes_words":  len(notes.split()) if notes else 0,
         })
 
     return {"slides": slides_outline}
@@ -6022,6 +11014,46 @@ def delete_comment(doc_id: str, comment_id: str):
     return {"ok": True, "deleted": comment_id}
 
 
+class CommentReply(BaseModel):
+    text: str
+    author: str = "User"
+
+
+@app.post("/api/docs/{doc_id}/comments/{comment_id}/replies")
+def add_comment_reply(doc_id: str, comment_id: str, req: CommentReply):
+    """Add a reply to an existing comment thread."""
+    d = _require(doc_id)
+    comments: list[dict] = d.setdefault("comments", [])
+    comment = next((c for c in comments if c.get("id") == comment_id), None)
+    if not comment:
+        raise HTTPException(404, f"Comment {comment_id!r} not found")
+    replies: list[dict] = comment.setdefault("replies", [])
+    reply = {
+        "id": str(uuid.uuid4())[:8],
+        "text": req.text,
+        "author": req.author or "User",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    replies.append(reply)
+    return reply
+
+
+@app.delete("/api/docs/{doc_id}/comments/{comment_id}/replies/{reply_id}")
+def delete_comment_reply(doc_id: str, comment_id: str, reply_id: str):
+    """Delete a specific reply from a comment thread."""
+    d = _require(doc_id)
+    comments: list[dict] = d.setdefault("comments", [])
+    comment = next((c for c in comments if c.get("id") == comment_id), None)
+    if not comment:
+        raise HTTPException(404, f"Comment {comment_id!r} not found")
+    replies: list[dict] = comment.get("replies", [])
+    before = len(replies)
+    comment["replies"] = [r for r in replies if r.get("id") != reply_id]
+    if len(comment["replies"]) == before:
+        raise HTTPException(404, f"Reply {reply_id!r} not found")
+    return {"ok": True, "deleted": reply_id}
+
+
 @app.get("/api/docs/{doc_id}/presentation-check")
 def presentation_check(doc_id: str):
     """Run a quality check on the presentation and return a list of issues."""
@@ -6055,6 +11087,12 @@ def presentation_check(doc_id: str):
             issues.append({"slide_n": n, "type": "too_many_elements", "severity": "info",
                            "message": f"Slide {n} has {len(visible)} elements (may be cluttered)"})
 
+        # Check: too much text on slide (hard for audience to read)
+        slide_word_count = sum(len(_element_plain_text(el).split()) for el in elements)
+        if slide_word_count > 150:
+            issues.append({"slide_n": n, "type": "too_much_text", "severity": "warning",
+                           "message": f"Slide {n} has {slide_word_count} words of text — consider using fewer bullet points"})
+
         # Check: images without alt text (name is default placeholder)
         for el in elements:
             if getattr(el, "element_type", "") == "BridgeImage":
@@ -6064,7 +11102,14502 @@ def presentation_check(doc_id: str):
                                    "message": f"Slide {n} has an image with no descriptive name (accessibility)"})
                     break
 
+        # Check: notes too long (hard to read in presenter view)
+        if notes:
+            wc = len(notes.split())
+            if wc > 400:
+                issues.append({"slide_n": n, "type": "notes_too_long", "severity": "info",
+                               "message": f"Slide {n} notes are very long ({wc} words) — consider summarizing"})
+
+        # Check: small font sizes (hard to read projected)
+        for el in elements:
+            tf = getattr(el, "text_frame", None) or getattr(el, "body", None)
+            if tf is None:
+                continue
+            for para in getattr(tf, "paragraphs", []) or []:
+                for run in getattr(para, "runs", []) or []:
+                    sz = getattr(run, "font_size", None)
+                    if sz is not None and sz < 14:
+                        issues.append({"slide_n": n, "type": "small_font", "severity": "warning",
+                                       "message": f"Slide {n} has text smaller than 14pt (may be hard to read)"})
+                        break
+                else:
+                    continue
+                break
+
+        # Check: empty slide (no elements at all)
+        if not elements:
+            issues.append({"slide_n": n, "type": "empty_slide", "severity": "warning",
+                           "message": f"Slide {n} is empty — no elements found"})
+
+        # Check: placeholder text still present (common default text like "Click to edit title")
+        placeholder_keywords = ["click to edit", "click to add", "type something", "lorem ipsum"]
+        for el in elements:
+            plain = _element_plain_text(el).strip().lower()
+            if any(kw in plain for kw in placeholder_keywords):
+                issues.append({"slide_n": n, "type": "placeholder_text", "severity": "warning",
+                               "message": f"Slide {n} appears to contain placeholder text — replace with content"})
+                break
+
+    # Check: duplicate slide titles
+    titles_seen: dict[str, int] = {}
+    for slide in doc.slides:
+        for el in slide.elements:
+            plain = _element_plain_text(el).strip()
+            if plain:
+                t = plain.split("\n")[0][:80].strip()
+                if t:
+                    if t in titles_seen:
+                        issues.append({"slide_n": slide.slide_number, "type": "duplicate_title", "severity": "info",
+                                       "message": f'Slide {slide.slide_number} title "{t[:40]}" appears on multiple slides (slide {titles_seen[t]})'})
+                    else:
+                        titles_seen[t] = slide.slide_number
+                    break
+
+    # Check: no sections defined for decks with many slides
+    if len(doc.slides) >= 8:
+        has_sections = any(
+            (getattr(sl, "custom_properties", None) or {}).get("section_name")
+            for sl in doc.slides
+        )
+        if not has_sections:
+            issues.append({"slide_n": 0, "type": "no_sections", "severity": "info",
+                           "message": f"No sections defined — consider grouping {len(doc.slides)} slides into sections for easier navigation"})
+
     return {"issues": issues, "slide_count": len(doc.slides), "issue_count": len(issues)}
+
+
+# ── AI Presentation Scorer ─────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/ai-score")
+def ai_score_presentation(doc_id: str):
+    """Use Claude to score the presentation across 5 quality dimensions and return structured feedback."""
+    import anthropic as _anthropic
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    # Build a compact text summary of the presentation
+    lines = [f"Presentation: {d.get('name', 'Untitled')} ({len(doc.slides)} slides)\n"]
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number)[:40]:   # cap at 40 slides
+        texts = [_element_plain_text(e).strip() for e in slide.elements if _element_plain_text(e).strip()]
+        cp = slide.custom_properties or {}
+        notes_preview = (cp.get("notes_text") or "").strip()[:120]
+        slide_text = " | ".join(texts[:6])[:200]
+        line = f"Slide {slide.slide_number}: {slide_text}"
+        if notes_preview:
+            line += f"  [notes: {notes_preview}…]"
+        lines.append(line)
+
+    deck_summary = "\n".join(lines)
+
+    system = (
+        "You are an expert presentation coach. Analyze the presentation and respond with ONLY valid JSON (no markdown, no preamble).\n"
+        "Return this exact structure:\n"
+        '{"overall_score": <1-10 float>, "categories": {'
+        '"structure": {"score": <1-10>, "feedback": "<1 sentence>"},'
+        '"clarity": {"score": <1-10>, "feedback": "<1 sentence>"},'
+        '"pacing": {"score": <1-10>, "feedback": "<1 sentence>"},'
+        '"visual_consistency": {"score": <1-10>, "feedback": "<1 sentence>"},'
+        '"engagement": {"score": <1-10>, "feedback": "<1 sentence>"}'
+        '}, "strengths": ["<item>", ...], "top_issues": ["<item>", ...], "one_line_summary": "<sentence>"}\n'
+        "strengths and top_issues must be arrays of 2-4 short strings each.\n"
+        "Be constructive and specific. Score 1=very poor, 10=excellent."
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=600,
+        system=system,
+        messages=[{"role": "user", "content": deck_summary}],
+    )
+    raw = resp.content[0].text.strip()
+    if raw.startswith("```"):
+        raw = "\n".join(raw.split("\n")[1:])
+        if raw.endswith("```"):
+            raw = raw[:-3].rstrip()
+
+    try:
+        result = json.loads(raw)
+    except Exception:
+        result = {
+            "overall_score": 7.0,
+            "categories": {
+                "structure":   {"score": 7, "feedback": "Slide structure appears reasonable"},
+                "clarity":     {"score": 7, "feedback": "Text content is mostly clear"},
+                "pacing":      {"score": 7, "feedback": "Slide count seems appropriate"},
+                "visual_consistency": {"score": 7, "feedback": "Unable to assess visuals from text alone"},
+                "engagement":  {"score": 7, "feedback": "Content variety detected"},
+            },
+            "strengths":  ["Slides have content"],
+            "top_issues": ["Could not fully parse AI response"],
+            "one_line_summary": "Scored based on text content only",
+        }
+
+    log.info("studio: AI scored presentation %s → %.1f/10", doc_id, result.get("overall_score", 0))
+    return result
+
+
+class InsertSummaryRequest(BaseModel):
+    position: str = "end"      # "start" | "end" | "after_n" (requires after_n field)
+    after_n: int = 0
+    title: str = "Executive Summary"
+
+
+@app.post("/api/docs/{doc_id}/insert-summary-slide")
+def insert_summary_slide(doc_id: str, req: InsertSummaryRequest):
+    """Use AI to generate an executive summary of the deck and insert it as a new slide."""
+    import anthropic as _anthropic
+    import copy as _copy
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    # Collect slide titles + body text
+    lines: list[str] = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        texts = [_element_plain_text(e).strip() for e in slide.elements]
+        texts = [t for t in texts if t]
+        if texts:
+            lines.append(f"Slide {slide.slide_number}: " + " | ".join(texts[:3]))
+
+    deck_text = "\n".join(lines[:40])
+
+    prompt = (
+        f"You are summarizing a business presentation with {len(doc.slides)} slides.\n\n"
+        f"Content overview:\n{deck_text}\n\n"
+        f"Write a concise executive summary in 4-6 bullet points. Each bullet:\n"
+        f"- Starts with a bold key phrase (2-4 words) followed by a colon\n"
+        f"- One sentence of explanation (under 20 words)\n"
+        f"- Uses plain language, no jargon\n\n"
+        f"Output ONLY the bullet points, one per line, starting each with •"
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp   = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=400,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    summary_text = resp.content[0].text.strip()
+
+    # Determine insertion position
+    slide_count = len(doc.slides)
+    if req.position == "start":
+        insert_after = 0
+    elif req.position == "end":
+        insert_after = slide_count
+    else:
+        insert_after = max(0, min(req.after_n, slide_count))
+
+    # Shift existing slides
+    for slide in doc.slides:
+        if slide.slide_number > insert_after:
+            slide.slide_number += 1
+
+    new_n = insert_after + 1
+    _snapshot_doc(doc_id)
+
+    # Build summary slide
+    from percy.bridge.bridge import BridgeSlide  # type: ignore[attr-defined]
+    from percy.bridge.elements import (  # type: ignore[attr-defined]
+        BridgeShape, BridgeText, Position, Transform, Stacking, Identification,
+        Accessibility, ShapeIdentification, ShapeFill, ShapeLine,
+        ShapeShadow, ShapeTextContent, ShapeTextFrame, ShapeBorders, ColorSpec,
+        TextParagraph, TextRun,
+    )
+
+    w_in = 13.333; h_in = 7.5
+
+    def _make_text_box(label: str, l: float, t: float, w: float, h: float, text: str,
+                        font_size: float = 14, bold: bool = False, color: str = "#FFFFFF") -> Any:
+        para = TextParagraph()
+        run  = TextRun()
+        run.text = text
+        run.font_size = font_size
+        run.font_bold = bold
+        run.font_color = color
+        para.runs = [run]
+        el = BridgeShape(
+            position=Position(left=l, top=t, width=w, height=h),
+            transforms=Transform(),
+            stacking=Stacking(z_index=1),
+            identification=Identification(shape_id=100, shape_name=label),
+            accessibility=Accessibility(alt_text=label),
+            shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+            fill=ShapeFill(fill_type="none", color=None),
+            line=ShapeLine(visible=False),
+            shadow=ShapeShadow(),
+            text_content=ShapeTextContent(),
+            text_frame=ShapeTextFrame(),
+            borders=ShapeBorders(),
+        )
+        tc = el.text_content
+        tc.paragraphs = [para]
+        tc.has_text = True
+        return el
+
+    # Title element
+    title_el = _make_text_box("SummaryTitle", 0.5, 0.25, 12.33, 0.8, req.title,
+                               font_size=28, bold=True, color="#FFFFFF")
+    title_el.stacking.z_index = 2
+
+    # Accent bar
+    accent = BridgeShape(
+        position=Position(left=0.5, top=1.15, width=12.33, height=0.05),
+        transforms=Transform(), stacking=Stacking(z_index=1),
+        identification=Identification(shape_id=101, shape_name="AccentBar"),
+        accessibility=Accessibility(alt_text=""),
+        shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+        fill=ShapeFill(fill_type="solid", color=ColorSpec(value="#6366F1")),
+        line=ShapeLine(visible=False), shadow=ShapeShadow(),
+        text_content=ShapeTextContent(), text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+    )
+
+    # Body text
+    body_el = _make_text_box("SummaryBody", 0.5, 1.4, 12.33, 5.7,
+                              summary_text, font_size=14, color="#E2E8F0")
+    body_el.stacking.z_index = 3
+
+    # Background
+    bg_shape = BridgeShape(
+        position=Position(left=0, top=0, width=w_in, height=h_in),
+        transforms=Transform(), stacking=Stacking(z_index=0),
+        identification=Identification(shape_id=99, shape_name="SummaryBg"),
+        accessibility=Accessibility(alt_text=""),
+        shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+        fill=ShapeFill(fill_type="solid", color=ColorSpec(value="#0F172A")),
+        line=ShapeLine(visible=False), shadow=ShapeShadow(),
+        text_content=ShapeTextContent(), text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+    )
+
+    new_slide = BridgeSlide(
+        slide_number=new_n,
+        elements=[bg_shape, title_el, accent, body_el],
+    )
+    doc.slides.append(new_slide)
+    doc.slides.sort(key=lambda s: s.slide_number)
+
+    # Re-render
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    try:
+        from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+        _rbs(doc, bridge_dir, slide_numbers=[new_n])
+    except Exception as exc:
+        log.warning("insert-summary-slide: re-render failed (non-fatal): %s", exc)
+
+    log.info("studio: inserted AI summary slide at position %d in %s", new_n, doc_id)
+    return {
+        "new_slide_n": new_n,
+        "slide_count": len(doc.slides),
+        "summary_text": summary_text,
+    }
+
+
+# ── AI Slide Variation Generator ──────────────────────────────────────────────
+
+class GenerateVariationsRequest(BaseModel):
+    styles: List[str] = ["persuasive", "concise", "executive", "casual"]
+
+
+class InsertVariationRequest(BaseModel):
+    rewrites: List[dict]
+    label: str = "Variant"
+
+
+_VARIATION_STYLES = {
+    "persuasive": "More Persuasive — compelling language, action verbs, quantified impact, strong call-to-action",
+    "concise":    "More Concise — cut to essentials, remove filler words, shorter sentences, bullet-friendly",
+    "executive":  "Executive Tone — formal, strategic, board-ready language, high-level framing",
+    "casual":     "Casual Tone — conversational, friendly, approachable, everyday language",
+}
+
+_VARIATION_LABELS = {
+    "persuasive": "More Persuasive",
+    "concise":    "More Concise",
+    "executive":  "Executive Tone",
+    "casual":     "Casual Tone",
+}
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/generate-variations")
+def generate_slide_variations(doc_id: str, n: int, req: GenerateVariationsRequest):
+    """Use AI to generate alternate phrasings of a slide's text in different styles."""
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if not slide:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    # Collect text elements (skip very short labels / blanks)
+    text_elements: list[dict] = []
+    for el in slide.elements:
+        text = _element_plain_text(el).strip()
+        if text and len(text) > 3:
+            eid = (
+                getattr(getattr(el, "identification", None), "shape_name", None)
+                or str(getattr(getattr(el, "identification", None), "shape_id", ""))
+            )
+            text_elements.append({"element_id": eid, "text": text})
+
+    if not text_elements:
+        return {"variations": [], "original_elements": []}
+
+    valid_styles = [s for s in req.styles if s in _VARIATION_STYLES][:4]
+    if not valid_styles:
+        valid_styles = ["persuasive", "concise"]
+
+    elements_json = json.dumps(text_elements, indent=2)
+    style_list = "\n".join(f"- {s}: {_VARIATION_STYLES[s]}" for s in valid_styles)
+
+    prompt = (
+        f"You are rewriting presentation slide text in different communication styles.\n\n"
+        f"Original slide elements (JSON array):\n{elements_json}\n\n"
+        f"Rewrite every element for each of these styles:\n{style_list}\n\n"
+        f"Rules:\n"
+        f"- Keep rewrites under 2× the original length\n"
+        f"- Preserve the meaning, only change tone/phrasing\n"
+        f"- For multi-line text, preserve line breaks with \\n\n\n"
+        f"Output ONLY valid JSON:\n"
+        f'{{"variations":[{{"style":"persuasive","rewrites":[{{"element_id":"...","rewritten":"..."}}]}}]}}'
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=1400,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = resp.content[0].text.strip()
+
+    try:
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        data = json.loads(m.group()) if m else {}
+        variations: list[dict] = data.get("variations", [])
+    except Exception:
+        variations = []
+
+    # Enrich with labels and originals
+    orig_lookup = {e["element_id"]: e["text"] for e in text_elements}
+    for v in variations:
+        v["label"] = _VARIATION_LABELS.get(v.get("style", ""), v.get("style", "").title())
+        for rw in v.get("rewrites", []):
+            rw["original"] = orig_lookup.get(rw.get("element_id", ""), "")
+
+    log.info("studio: generated %d variations for slide %d in %s", len(variations), n, doc_id)
+    return {"variations": variations, "original_elements": text_elements}
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/insert-variation")
+def insert_slide_variation(doc_id: str, n: int, req: InsertVariationRequest):
+    """Duplicate slide n, apply text rewrites, insert new slide after n."""
+    import copy as _copy
+
+    d = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if not slide:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    _snapshot_doc(doc_id)
+
+    # Shift slides > n
+    for s in doc.slides:
+        if s.slide_number > n:
+            s.slide_number += 1
+
+    new_n = n + 1
+    new_slide = _copy.deepcopy(slide)
+    new_slide.slide_number = new_n
+
+    # Build rewrite map: element_id → new text
+    rewrites: dict[str, str] = {
+        str(rw.get("element_id", "")): str(rw.get("text", ""))
+        for rw in req.rewrites
+        if rw.get("element_id") and rw.get("text")
+    }
+
+    for el in new_slide.elements:
+        eid = (
+            getattr(getattr(el, "identification", None), "shape_name", None)
+            or str(getattr(getattr(el, "identification", None), "shape_id", ""))
+        )
+        if eid in rewrites:
+            try:
+                _apply_plain_text_to_element(el, rewrites[eid])
+            except Exception as exc:
+                log.warning("insert-variation: apply text failed for %s: %s", eid, exc)
+
+    doc.slides.append(new_slide)
+    doc.slides.sort(key=lambda s: s.slide_number)
+
+    # Re-render
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    try:
+        from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+        _rbs(doc, bridge_dir, slide_numbers=[new_n])
+    except Exception as exc:
+        log.warning("insert-variation: re-render failed (non-fatal): %s", exc)
+
+    log.info("studio: inserted variation slide at %d in %s (label=%s)", new_n, doc_id, req.label)
+    return {"new_slide_n": new_n, "slide_count": len(doc.slides)}
+
+
+# ── AI Slide Translation ───────────────────────────────────────────────────────
+
+class TranslateRequest(BaseModel):
+    target_language: str = "Spanish"
+    slide_numbers: List[int] | None = None  # None = all slides
+    include_notes: bool = False
+
+
+@app.post("/api/docs/{doc_id}/translate")
+def translate_slides(doc_id: str, req: TranslateRequest):
+    """Translate all text elements on the specified slides to the target language."""
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    target_slides = (
+        [s for s in doc.slides if s.slide_number in req.slide_numbers]
+        if req.slide_numbers else doc.slides
+    )
+
+    if not target_slides:
+        raise HTTPException(400, "No slides matched")
+
+    _snapshot_doc(doc_id)
+
+    # Collect all text to translate in one batch call
+    items: list[dict] = []
+    for slide in sorted(target_slides, key=lambda s: s.slide_number):
+        for el in slide.elements:
+            text = _element_plain_text(el).strip()
+            if text and len(text) > 1:
+                eid = (
+                    getattr(getattr(el, "identification", None), "shape_name", None)
+                    or str(getattr(getattr(el, "identification", None), "shape_id", ""))
+                )
+                items.append({
+                    "slide_n": slide.slide_number,
+                    "element_id": eid,
+                    "text": text[:500],
+                })
+        if req.include_notes and hasattr(slide, "notes_text") and slide.notes_text:
+            items.append({
+                "slide_n": slide.slide_number,
+                "element_id": "__notes__",
+                "text": slide.notes_text[:800],
+            })
+
+    if not items:
+        return {"translated": 0, "affected_slides": []}
+
+    # Batch limit: translate up to 80 items per call
+    items = items[:80]
+    batch_json = json.dumps(items, ensure_ascii=False)
+
+    prompt = (
+        f"Translate each 'text' field to {req.target_language}. "
+        f"Preserve formatting: keep newlines (\\n), bullet characters (•, -, *), "
+        f"and capitalization style. Keep proper nouns and brand names unchanged. "
+        f"Return ONLY valid JSON:\n"
+        f'{{"translations":[{{"slide_n":1,"element_id":"...","translated":"..."}}]}}\n\n'
+        f"Items to translate:\n{batch_json}"
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=2000,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = resp.content[0].text.strip()
+
+    try:
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        data = json.loads(m.group()) if m else {}
+        translations: list[dict] = data.get("translations", [])
+    except Exception:
+        translations = []
+
+    # Apply translations
+    slide_map = {s.slide_number: s for s in target_slides}
+    affected: set[int] = set()
+
+    for tr in translations:
+        sn  = tr.get("slide_n")
+        eid = str(tr.get("element_id", ""))
+        txt = str(tr.get("translated", ""))
+        if not (sn and eid and txt):
+            continue
+        slide = slide_map.get(sn)
+        if not slide:
+            continue
+
+        if eid == "__notes__":
+            if hasattr(slide, "notes_text"):
+                slide.notes_text = txt
+                affected.add(sn)
+            continue
+
+        for el in slide.elements:
+            el_eid = (
+                getattr(getattr(el, "identification", None), "shape_name", None)
+                or str(getattr(getattr(el, "identification", None), "shape_id", ""))
+            )
+            if el_eid == eid:
+                try:
+                    _apply_plain_text_to_element(el, txt)
+                    affected.add(sn)
+                except Exception as exc:
+                    log.warning("translate: apply failed el=%s slide=%d: %s", eid, sn, exc)
+                break
+
+    # Re-render affected slides
+    if affected:
+        bridge_dir = _CACHE_DIR / doc_id / "bridge"
+        try:
+            from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+            _rbs(doc, bridge_dir, slide_numbers=sorted(affected))
+        except Exception as exc:
+            log.warning("translate: re-render failed (non-fatal): %s", exc)
+
+    log.info(
+        "studio: translated %d elements on %d slides → %s in %s",
+        len(translations), len(affected), req.target_language, doc_id,
+    )
+    return {
+        "translated": len(translations),
+        "affected_slides": sorted(affected),
+        "target_language": req.target_language,
+    }
+
+
+# ── Table of Contents Generator ───────────────────────────────────────────────
+
+class TocRequest(BaseModel):
+    title: str = "Table of Contents"
+    after_n: int = 1        # insert after this slide (1 = after slide 1, 0 = at start)
+    include_sections: bool = True
+    style: str = "dark"     # "dark" | "light"
+
+
+@app.post("/api/docs/{doc_id}/insert-toc")
+def insert_toc(doc_id: str, req: TocRequest):
+    """
+    Build a Table of Contents slide from slide titles and insert it at the given position.
+    Returns new_slide_n and slide_count.
+    """
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slide_count = len(doc.slides)
+
+    # Collect slide titles / section headings
+    entries: list[dict] = []
+    prev_section: str | None = None
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        # Find first title-like element
+        title_text = ""
+        for el in slide.elements:
+            t = _element_plain_text(el).strip()
+            if t:
+                title_text = t
+                break
+        if not title_text:
+            title_text = f"Slide {slide.slide_number}"
+
+        section = getattr(slide, "section_name", None) or ""
+        if req.include_sections and section and section != prev_section:
+            entries.append({"type": "section", "text": section})
+            prev_section = section
+
+        entries.append({
+            "type": "slide",
+            "n": slide.slide_number,
+            "text": title_text[:80],
+        })
+
+    # Build TOC text lines
+    lines: list[str] = []
+    for entry in entries:
+        if entry["type"] == "section":
+            lines.append(f"  {entry['text'].upper()}")
+        else:
+            lines.append(f"  {entry['n']:>2}.  {entry['text']}")
+
+    toc_body = "\n".join(lines)
+
+    # Clamp insertion position
+    insert_after = max(0, min(req.after_n, slide_count))
+
+    # Shift slides
+    _snapshot_doc(doc_id)
+    for slide in doc.slides:
+        if slide.slide_number > insert_after:
+            slide.slide_number += 1
+
+    new_n = insert_after + 1
+
+    # Build the slide
+    from percy.bridge.bridge import BridgeSlide  # type: ignore[attr-defined]
+    from percy.bridge.elements import (  # type: ignore[attr-defined]
+        BridgeShape, BridgeText, Position, Transform, Stacking, Identification,
+        Accessibility, ShapeIdentification, ShapeFill, ShapeLine,
+        ShapeShadow, ShapeTextContent, ShapeTextFrame, ShapeBorders, ColorSpec,
+        TextParagraph, TextRun,
+    )
+
+    w_in = 13.333; h_in = 7.5
+    dark = req.style != "light"
+    bg_color   = "#0F172A" if dark else "#FFFFFF"
+    title_col  = "#FFFFFF" if dark else "#0F172A"
+    body_col   = "#CBD5E1" if dark else "#334155"
+    accent_col = "#6366F1"
+
+    def _mktb(label: str, l: float, t: float, w: float, h: float, text: str,
+               font_size: float, bold: bool, color: str) -> Any:
+        para = TextParagraph()
+        run  = TextRun()
+        run.text = text; run.font_size = font_size; run.font_bold = bold; run.font_color = color
+        para.runs = [run]
+        el = BridgeShape(
+            position=Position(left=l, top=t, width=w, height=h),
+            transforms=Transform(), stacking=Stacking(z_index=2),
+            identification=Identification(shape_id=200, shape_name=label),
+            accessibility=Accessibility(alt_text=label),
+            shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+            fill=ShapeFill(fill_type="none", color=None),
+            line=ShapeLine(visible=False), shadow=ShapeShadow(),
+            text_content=ShapeTextContent(), text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+        )
+        el.text_content.paragraphs = [para]
+        el.text_content.has_text = True
+        return el
+
+    bg = BridgeShape(
+        position=Position(left=0, top=0, width=w_in, height=h_in),
+        transforms=Transform(), stacking=Stacking(z_index=0),
+        identification=Identification(shape_id=199, shape_name="TocBg"),
+        accessibility=Accessibility(alt_text=""),
+        shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+        fill=ShapeFill(fill_type="solid", color=ColorSpec(value=bg_color)),
+        line=ShapeLine(visible=False), shadow=ShapeShadow(),
+        text_content=ShapeTextContent(), text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+    )
+    title_el  = _mktb("TocTitle", 0.5, 0.3, 12.33, 0.8, req.title, 28, True,  title_col)
+    accent_bar = BridgeShape(
+        position=Position(left=0.5, top=1.2, width=12.33, height=0.05),
+        transforms=Transform(), stacking=Stacking(z_index=1),
+        identification=Identification(shape_id=201, shape_name="TocBar"),
+        accessibility=Accessibility(alt_text=""),
+        shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+        fill=ShapeFill(fill_type="solid", color=ColorSpec(value=accent_col)),
+        line=ShapeLine(visible=False), shadow=ShapeShadow(),
+        text_content=ShapeTextContent(), text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+    )
+    body_el   = _mktb("TocBody",  0.5, 1.4, 12.33, 5.7, toc_body, 13, False, body_col)
+
+    new_slide = BridgeSlide(
+        slide_number=new_n,
+        elements=[bg, title_el, accent_bar, body_el],
+    )
+    doc.slides.append(new_slide)
+    doc.slides.sort(key=lambda s: s.slide_number)
+
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    try:
+        from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+        _rbs(doc, bridge_dir, slide_numbers=[new_n])
+    except Exception as exc:
+        log.warning("insert-toc: re-render failed (non-fatal): %s", exc)
+
+    log.info("studio: inserted TOC slide at %d in %s", new_n, doc_id)
+    return {
+        "new_slide_n": new_n,
+        "slide_count": len(doc.slides),
+        "entries": len([e for e in entries if e["type"] == "slide"]),
+    }
+
+
+# ── Style Audit ───────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/style-audit")
+def style_audit(doc_id: str):
+    """
+    Return a summary of all fonts and colors used in the deck.
+    Useful for consistency checks and brand audits.
+    """
+    from collections import Counter as _Counter
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    font_names: _Counter = _Counter()
+    font_sizes: _Counter = _Counter()
+    fill_colors: _Counter = _Counter()
+    text_colors: _Counter = _Counter()
+
+    for slide in doc.slides:
+        for el in slide.elements:
+            # Fill color
+            fill = getattr(el, "fill", None)
+            if fill:
+                ft = getattr(fill, "fill_type", None)
+                fc = getattr(fill, "color", None)
+                cv = getattr(fc, "value", None) if fc else None
+                if ft == "solid" and cv:
+                    fill_colors[cv.upper()] += 1
+
+            # Text runs
+            tc = getattr(el, "text_content", None)
+            paras = getattr(tc, "paragraphs", []) if tc else []
+            for para in paras:
+                for run in getattr(para, "runs", []):
+                    fn = getattr(run, "font_name", None)
+                    if fn:
+                        font_names[fn] += 1
+                    fs = getattr(run, "font_size", None)
+                    if fs:
+                        font_sizes[round(fs, 1)] += 1
+                    fco = getattr(run, "font_color", None)
+                    fcv = getattr(fco, "value", None) if fco else None
+                    if fcv:
+                        text_colors[fcv.upper()] += 1
+
+    return {
+        "font_names":   [{"name": k, "count": v} for k, v in font_names.most_common(20)],
+        "font_sizes":   [{"size": k, "count": v} for k, v in font_sizes.most_common(20)],
+        "fill_colors":  [{"color": k, "count": v} for k, v in fill_colors.most_common(20)],
+        "text_colors":  [{"color": k, "count": v} for k, v in text_colors.most_common(20)],
+        "unique_fonts": len(font_names),
+        "unique_sizes": len(font_sizes),
+        "unique_fill_colors": len(fill_colors),
+        "unique_text_colors": len(text_colors),
+    }
+
+
+# ── Speaker Notes Export ──────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/notes-export")
+def notes_export(doc_id: str, fmt: str = "md"):
+    """
+    Export all speaker notes as markdown or plain text.
+    fmt: 'md' (markdown) or 'txt' (plain text)
+    """
+    from fastapi.responses import PlainTextResponse
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+    doc_name = d.get("name", doc_id)
+
+    lines: list[str] = []
+    if fmt == "md":
+        lines.append(f"# Speaker Notes — {doc_name}\n")
+    else:
+        lines.append(f"SPEAKER NOTES — {doc_name}\n")
+        lines.append("=" * 60)
+
+    slides_with_notes = 0
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        notes = getattr(slide, "notes", None) or ""
+        if not notes.strip():
+            continue
+
+        # Get slide title for context
+        title = ""
+        for el in slide.elements:
+            t = _element_plain_text(el).strip()
+            if t:
+                title = t[:80]
+                break
+
+        slides_with_notes += 1
+        if fmt == "md":
+            lines.append(f"\n---\n\n## Slide {slide.slide_number}" + (f": {title}" if title else ""))
+            lines.append(f"\n{notes.strip()}")
+        else:
+            lines.append(f"\n\nSlide {slide.slide_number}" + (f": {title}" if title else ""))
+            lines.append("-" * 40)
+            lines.append(notes.strip())
+
+    if slides_with_notes == 0:
+        lines.append("\n*(No speaker notes found in this deck)*" if fmt == "md" else "\nNo speaker notes found.")
+
+    content = "\n".join(lines)
+    media_type = "text/markdown" if fmt == "md" else "text/plain"
+    filename = f"{doc_name.replace(' ', '_')}_notes.{'md' if fmt == 'md' else 'txt'}"
+    return PlainTextResponse(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ── Timer Budget Plan ─────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/timer-budget-plan")
+def timer_budget_plan(doc_id: str, minutes: float = 20.0):
+    """
+    Given a total presentation duration in minutes, distribute time per slide
+    based on word count / content weight. Returns per-slide allocation.
+    """
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides = sorted(doc.slides, key=lambda s: s.slide_number)
+    if not slides:
+        return {"slides": [], "total_minutes": minutes, "seconds_per_slide": 0}
+
+    # Score each slide by content volume
+    scores: list[float] = []
+    for slide in slides:
+        word_count = sum(
+            len(_element_plain_text(el).split())
+            for el in slide.elements
+        )
+        notes_words = len((getattr(slide, "notes", None) or "").split())
+        el_count = len(slide.elements)
+        # Combined score: words dominate, elements add a flat base
+        score = max(1.0, word_count * 1.0 + notes_words * 0.5 + el_count * 0.5)
+        scores.append(score)
+
+    total_score = sum(scores)
+    total_seconds = minutes * 60.0
+
+    result_slides = []
+    for i, slide in enumerate(slides):
+        alloc_seconds = round((scores[i] / total_score) * total_seconds)
+        result_slides.append({
+            "slide_n": slide.slide_number,
+            "seconds": alloc_seconds,
+            "minutes": round(alloc_seconds / 60, 1),
+            "score": round(scores[i], 1),
+        })
+
+    return {
+        "slides": result_slides,
+        "total_minutes": minutes,
+        "total_slides": len(slides),
+        "avg_seconds": round(total_seconds / max(1, len(slides)), 1),
+    }
+
+
+# ── Reading Level Checker ─────────────────────────────────────────────────────
+
+def _flesch_kincaid(text: str) -> dict:
+    """Compute Flesch Reading Ease and Kincaid Grade Level."""
+    import re as _re
+
+    words = _re.findall(r"\b\w+\b", text.lower())
+    sentences = max(1, len(_re.findall(r"[.!?]+", text)) or 1)
+    word_count = max(1, len(words))
+
+    # Count syllables (simplified English heuristic)
+    def count_syllables(word: str) -> int:
+        word = word.lower()
+        count = 0
+        vowels = "aeiouy"
+        prev_vowel = False
+        for ch in word:
+            is_v = ch in vowels
+            if is_v and not prev_vowel:
+                count += 1
+            prev_vowel = is_v
+        if word.endswith("e") and count > 1:
+            count -= 1
+        return max(1, count)
+
+    syllable_count = sum(count_syllables(w) for w in words)
+
+    # Flesch Reading Ease (higher = easier; 60-70 is plain English)
+    fre = 206.835 - 1.015 * (word_count / sentences) - 84.6 * (syllable_count / word_count)
+    fre = max(0.0, min(100.0, fre))
+
+    # Flesch-Kincaid Grade Level
+    fkgl = 0.39 * (word_count / sentences) + 11.8 * (syllable_count / word_count) - 15.59
+
+    if fre >= 80:
+        label = "Easy"
+    elif fre >= 60:
+        label = "Standard"
+    elif fre >= 40:
+        label = "Difficult"
+    else:
+        label = "Complex"
+
+    return {
+        "reading_ease": round(fre, 1),
+        "grade_level": round(max(0.0, fkgl), 1),
+        "label": label,
+        "word_count": word_count,
+        "sentence_count": sentences,
+        "syllable_count": syllable_count,
+    }
+
+
+@app.get("/api/docs/{doc_id}/reading-level")
+def reading_level(doc_id: str):
+    """
+    Compute Flesch-Kincaid reading level metrics per slide and overall.
+    No AI needed — pure text analysis.
+    """
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slide_results = []
+    all_text_parts: list[str] = []
+
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        texts = [_element_plain_text(el).strip() for el in slide.elements]
+        slide_text = " ".join(t for t in texts if t)
+        if slide_text.strip():
+            metrics = _flesch_kincaid(slide_text)
+            slide_results.append({"slide_n": slide.slide_number, **metrics})
+            all_text_parts.append(slide_text)
+        else:
+            slide_results.append({
+                "slide_n": slide.slide_number,
+                "reading_ease": None, "grade_level": None, "label": "Empty",
+                "word_count": 0, "sentence_count": 0, "syllable_count": 0,
+            })
+
+    overall = _flesch_kincaid(" ".join(all_text_parts)) if all_text_parts else None
+
+    return {
+        "slides": slide_results,
+        "overall": overall,
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── Bulk Text Case Changer ────────────────────────────────────────────────────
+
+class TextCaseRequest(BaseModel):
+    case: str = "title"   # "upper" | "lower" | "title" | "sentence"
+    slides: List[int] = []  # empty = all slides
+    element_names: List[str] = []  # empty = all text elements
+
+
+@app.post("/api/docs/{doc_id}/change-text-case")
+def change_text_case(doc_id: str, req: TextCaseRequest):
+    """
+    Apply a text case transformation (UPPER, lower, Title Case, Sentence case) to slide text.
+    """
+    import re as _re
+
+    def _apply_case(text: str) -> str:
+        if req.case == "upper":
+            return text.upper()
+        elif req.case == "lower":
+            return text.lower()
+        elif req.case == "title":
+            # Title case but respect all-caps abbreviations
+            return text.title()
+        elif req.case == "sentence":
+            if not text:
+                return text
+            return text[0].upper() + text[1:].lower()
+        return text
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    target_slides = set(req.slides) if req.slides else None
+    target_names  = set(req.element_names) if req.element_names else None
+
+    _snapshot_doc(doc_id)
+    changed = 0
+    affected_slides: set[int] = set()
+
+    for slide in doc.slides:
+        if target_slides and slide.slide_number not in target_slides:
+            continue
+
+        for el in slide.elements:
+            name = getattr(getattr(el, "identification", None), "shape_name", None) or ""
+            if target_names and name not in target_names:
+                continue
+
+            tc = getattr(el, "text_content", None)
+            paras = getattr(tc, "paragraphs", []) if tc else []
+            for para in paras:
+                for run in getattr(para, "runs", []):
+                    orig = getattr(run, "text", "") or ""
+                    if orig.strip():
+                        run.text = _apply_case(orig)
+                        changed += 1
+                        affected_slides.add(slide.slide_number)
+
+    # Re-render affected slides
+    if affected_slides:
+        bridge_dir = _CACHE_DIR / doc_id / "bridge"
+        try:
+            from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+            _rbs(doc, bridge_dir, slide_numbers=sorted(affected_slides))
+        except Exception as exc:
+            log.warning("change-text-case: re-render failed (non-fatal): %s", exc)
+
+    return {
+        "changed": changed,
+        "affected_slides": sorted(affected_slides),
+        "case": req.case,
+    }
+
+
+# ── AI Impact Score ───────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/impact-scores")
+def impact_scores(doc_id: str, max_slides: int = 30):
+    """
+    Use Claude haiku to score each slide 1–10 for impact/memorability.
+    Returns score, label, and a brief improvement tip per slide.
+    """
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides = sorted(doc.slides, key=lambda s: s.slide_number)[:max_slides]
+
+    # Build a compact deck summary
+    slide_summaries: list[str] = []
+    for slide in slides:
+        texts = [_element_plain_text(el).strip() for el in slide.elements]
+        texts = [t for t in texts if t]
+        el_count = len(slide.elements)
+        has_image = any(
+            getattr(getattr(el, "shape_identification", None), "shape_type", "") in ("picture", "placeholder_picture")
+            for el in slide.elements
+        )
+        summary = f"Slide {slide.slide_number}: {' | '.join(texts[:3])[:120]}"
+        if has_image:
+            summary += " [has image]"
+        summary += f" ({el_count} elements)"
+        slide_summaries.append(summary)
+
+    prompt = (
+        f"Rate each presentation slide for IMPACT/MEMORABILITY on a scale of 1-10.\n"
+        f"High impact = clear message, visual interest, memorable takeaway, concise.\n"
+        f"Low impact = vague, text-heavy, no clear takeaway.\n\n"
+        f"Slides:\n" + "\n".join(slide_summaries) + "\n\n"
+        f"For each slide return JSON array: [{{'slide_n': N, 'score': X, 'label': 'High/Medium/Low', 'tip': 'one sentence improvement suggestion'}}]\n"
+        f"Return ONLY the JSON array."
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = resp.content[0].text.strip()
+        m = re.search(r"\[.*\]", raw, re.DOTALL)
+        scores_data: list[dict] = json.loads(m.group()) if m else []
+    except Exception:
+        scores_data = []
+
+    # Fallback: fill missing slides with score=5
+    scored_ns = {item.get("slide_n") for item in scores_data}
+    for slide in slides:
+        if slide.slide_number not in scored_ns:
+            scores_data.append({
+                "slide_n": slide.slide_number,
+                "score": 5,
+                "label": "Medium",
+                "tip": "Add a clear headline and visual to boost impact.",
+            })
+
+    # Normalize scores to 1-10 int
+    for item in scores_data:
+        item["score"] = max(1, min(10, int(round(item.get("score", 5)))))
+        if not item.get("label"):
+            s = item["score"]
+            item["label"] = "High" if s >= 7 else "Medium" if s >= 4 else "Low"
+
+    scores_data.sort(key=lambda x: x.get("slide_n", 99))
+
+    avg = sum(x["score"] for x in scores_data) / max(1, len(scores_data))
+    return {
+        "scores": scores_data,
+        "average": round(avg, 1),
+        "slide_count": len(slides),
+        "high_count": sum(1 for x in scores_data if x["score"] >= 7),
+        "low_count":  sum(1 for x in scores_data if x["score"] <= 3),
+    }
+
+
+# ── AI Auto-Tag Slides ────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/auto-tag-slides")
+def auto_tag_slides(doc_id: str, max_slides: int = 30):
+    """
+    Use Claude haiku to assign 1-3 topic tags to each slide.
+    Returns suggested tags per slide. Does not apply automatically.
+    """
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides = sorted(doc.slides, key=lambda s: s.slide_number)[:max_slides]
+
+    slide_summaries = []
+    for slide in slides:
+        texts = [_element_plain_text(el).strip() for el in slide.elements]
+        texts = [t for t in texts if t]
+        slide_summaries.append(f"Slide {slide.slide_number}: {' | '.join(texts[:3])[:100]}")
+
+    prompt = (
+        f"Assign 1-3 short topic tags to each presentation slide.\n"
+        f"Tags should be 1-2 words, lowercase, reflecting the slide's topic.\n"
+        f"Examples: 'strategy', 'market data', 'team intro', 'technical', 'roadmap'\n\n"
+        f"Slides:\n" + "\n".join(slide_summaries) + "\n\n"
+        f"Return ONLY a JSON object: {{\"1\": [\"tag1\", \"tag2\"], \"2\": [\"tag1\"], ...}}\n"
+        f"Keys are slide numbers as strings."
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = resp.content[0].text.strip()
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        tags_map: dict = json.loads(m.group()) if m else {}
+    except Exception:
+        tags_map = {}
+
+    # Normalize
+    result: list[dict] = []
+    for slide in slides:
+        tags = tags_map.get(str(slide.slide_number), [])
+        result.append({
+            "slide_n": slide.slide_number,
+            "tags": [str(t)[:30] for t in tags[:3]] if tags else [],
+        })
+
+    return {
+        "slides": result,
+        "slide_count": len(slides),
+        "tagged_count": sum(1 for r in result if r["tags"]),
+    }
+
+
+# ── AI Emotional Tone Analyzer ────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/emotional-tone")
+def emotional_tone(doc_id: str, max_slides: int = 30):
+    """
+    Use Claude haiku to detect the emotional tone of each slide's text.
+    Returns tone label + confidence + a short explanation per slide.
+    """
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides = sorted(doc.slides, key=lambda s: s.slide_number)[:max_slides]
+
+    slide_texts: list[str] = []
+    for slide in slides:
+        texts = [_element_plain_text(el).strip() for el in slide.elements]
+        combined = " | ".join(t for t in texts if t)[:150]
+        slide_texts.append(f"Slide {slide.slide_number}: {combined or '(no text)'}")
+
+    prompt = (
+        f"Analyze the emotional tone of each presentation slide.\n"
+        f"Tone options: Inspiring, Urgent, Calm, Analytical, Cautionary, Motivational, Neutral, Celebratory\n\n"
+        f"Slides:\n" + "\n".join(slide_texts) + "\n\n"
+        f"Return ONLY a JSON array: [{{'slide_n': N, 'tone': 'Inspiring', 'confidence': 'high/medium/low', 'note': 'one brief sentence'}}]"
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1200,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = resp.content[0].text.strip()
+        m = re.search(r"\[.*\]", raw, re.DOTALL)
+        tones: list[dict] = json.loads(m.group()) if m else []
+    except Exception:
+        tones = []
+
+    # Fill missing slides
+    found_ns = {t.get("slide_n") for t in tones}
+    for slide in slides:
+        if slide.slide_number not in found_ns:
+            tones.append({"slide_n": slide.slide_number, "tone": "Neutral", "confidence": "low", "note": ""})
+
+    tones.sort(key=lambda x: x.get("slide_n", 99))
+
+    # Count tone distribution
+    from collections import Counter as _Counter
+    tone_dist = dict(_Counter(t.get("tone", "Neutral") for t in tones).most_common())
+
+    return {
+        "slides": tones,
+        "tone_distribution": tone_dist,
+        "dominant_tone": max(tone_dist, key=tone_dist.get) if tone_dist else "Neutral",
+        "slide_count": len(slides),
+    }
+
+
+# ── Image Gallery ─────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/images")
+def list_images(doc_id: str):
+    """
+    List all image/picture elements in the deck with their slide number,
+    dimensions, and alt-text.
+    """
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    images: list[dict] = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        for el in slide.elements:
+            st = getattr(getattr(el, "shape_identification", None), "shape_type", "") or ""
+            if st not in ("picture", "placeholder_picture", "ole_object"):
+                continue
+
+            pos = getattr(el, "position", None)
+            alt = getattr(getattr(el, "accessibility", None), "alt_text", None) or ""
+            ident = getattr(el, "identification", None)
+            eid = (
+                getattr(ident, "shape_name", None)
+                or str(getattr(ident, "shape_id", ""))
+            )
+
+            images.append({
+                "slide_n": slide.slide_number,
+                "element_id": eid,
+                "shape_type": st,
+                "width_in":  round(getattr(pos, "width",  0.0), 3) if pos else 0.0,
+                "height_in": round(getattr(pos, "height", 0.0), 3) if pos else 0.0,
+                "alt_text": alt,
+                "thumbnail_url": f"/api/docs/{doc_id}/slides/{slide.slide_number}/elements/{eid}/element-png",
+            })
+
+    return {
+        "images": images,
+        "total": len(images),
+        "slide_count": len(doc.slides),
+        "images_per_slide": round(len(images) / max(1, len(doc.slides)), 1),
+    }
+
+
+# ── Accessibility Report ─────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/accessibility")
+def accessibility_report(doc_id: str):
+    """
+    Check the deck for accessibility issues:
+    - Missing alt text on images
+    - Very small font sizes (<10pt)
+    - Low text contrast indicators (simple check on very light/dark fill vs. text color)
+    - Missing slide titles
+    Returns per-slide issues + overall score (0-100).
+    """
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    issues: list[dict] = []
+
+    # Simple contrast check: if fill is dark (#000–#333) and text is also very dark → bad
+    # if fill is light (#EEE–#FFF) and text is also very light → bad
+    def _is_dark(c: str | None) -> bool:
+        if not c: return False
+        c = c.lstrip("#")
+        if len(c) == 6:
+            r, g, b = int(c[:2],16), int(c[2:4],16), int(c[4:6],16)
+            return (r*299 + g*587 + b*114) / 1000 < 128
+        return False
+
+    def _is_light(c: str | None) -> bool:
+        if not c: return False
+        c = c.lstrip("#")
+        if len(c) == 6:
+            r, g, b = int(c[:2],16), int(c[2:4],16), int(c[4:6],16)
+            return (r*299 + g*587 + b*114) / 1000 >= 200
+        return False
+
+    slides = sorted(doc.slides, key=lambda s: s.slide_number)
+    for slide in slides:
+        slide_issues: list[dict] = []
+        has_title = False
+
+        for el in slide.elements:
+            # Shape type
+            st = getattr(getattr(el, "shape_identification", None), "shape_type", "") or ""
+            ident = getattr(el, "identification", None)
+            eid = (
+                getattr(ident, "shape_name", None)
+                or str(getattr(ident, "shape_id", ""))
+            )
+
+            # Images: check alt text
+            if st in ("picture", "placeholder_picture"):
+                alt = getattr(getattr(el, "accessibility", None), "alt_text", None) or ""
+                if not alt.strip():
+                    slide_issues.append({
+                        "element_id": eid,
+                        "type": "missing-alt-text",
+                        "severity": "high",
+                        "detail": f"Image '{eid}' has no alt text",
+                    })
+
+            # Text elements: check font size and contrast
+            tc = getattr(el, "text_content", None)
+            paras = getattr(tc, "paragraphs", []) if tc else []
+            text_color = None
+            for para in paras:
+                for run in getattr(para, "runs", []):
+                    fs = getattr(run, "font_size", None)
+                    if fs and fs < 10:
+                        slide_issues.append({
+                            "element_id": eid,
+                            "type": "small-font",
+                            "severity": "medium",
+                            "detail": f"Font size {fs}pt in '{eid}' may be too small",
+                        })
+                    fc = getattr(run, "font_color", None)
+                    cv = getattr(fc, "value", None) if fc else None
+                    if cv:
+                        text_color = cv
+
+            # Check for title-like element
+            t = _element_plain_text(el).strip()
+            if t and not has_title:
+                has_title = True
+
+            # Contrast: fill vs text color
+            fill = getattr(el, "fill", None)
+            if fill and text_color:
+                ft = getattr(fill, "fill_type", None)
+                fc_obj = getattr(fill, "color", None)
+                fv = getattr(fc_obj, "value", None) if fc_obj else None
+                if ft == "solid" and fv:
+                    bg_dark  = _is_dark(fv)
+                    txt_dark = _is_dark(text_color)
+                    if bg_dark and txt_dark:
+                        slide_issues.append({
+                            "element_id": eid,
+                            "type": "low-contrast",
+                            "severity": "high",
+                            "detail": f"Dark text on dark background in '{eid}'",
+                        })
+                    elif not bg_dark and not txt_dark:
+                        slide_issues.append({
+                            "element_id": eid,
+                            "type": "low-contrast",
+                            "severity": "high",
+                            "detail": f"Light text on light background in '{eid}'",
+                        })
+
+        if not has_title:
+            slide_issues.append({
+                "element_id": None,
+                "type": "missing-title",
+                "severity": "medium",
+                "detail": "Slide has no visible text (missing title)",
+            })
+
+        if slide_issues:
+            issues.append({"slide_n": slide.slide_number, "issues": slide_issues})
+
+    total_issues = sum(len(s["issues"]) for s in issues)
+    high_issues  = sum(1 for s in issues for i in s["issues"] if i["severity"] == "high")
+
+    # Simple score: start at 100, deduct per issue type
+    score = max(0, 100 - high_issues * 10 - (total_issues - high_issues) * 5)
+
+    return {
+        "slides": issues,
+        "total_issues": total_issues,
+        "high_severity": high_issues,
+        "score": score,
+        "slide_count": len(slides),
+        "clean_slides": len(slides) - len(issues),
+    }
+
+
+# ── Cover Slide Generator ────────────────────────────────────────────────────
+
+class CoverSlideRequest(BaseModel):
+    title: str
+    subtitle: str = ""
+    author: str = ""
+    date: str = ""
+    style: str = "dark"   # "dark" | "light" | "accent"
+
+
+@app.post("/api/docs/{doc_id}/generate-cover")
+def generate_cover(doc_id: str, req: CoverSlideRequest):
+    """
+    Create a professional cover slide and insert it at position 1.
+    Existing slides are shifted forward.
+    """
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    _snapshot_doc(doc_id)
+    for slide in doc.slides:
+        slide.slide_number += 1
+
+    from percy.bridge.bridge import BridgeSlide  # type: ignore[attr-defined]
+    from percy.bridge.elements import (  # type: ignore[attr-defined]
+        BridgeShape, Position, Transform, Stacking, Identification,
+        Accessibility, ShapeIdentification, ShapeFill, ShapeLine,
+        ShapeShadow, ShapeTextContent, ShapeTextFrame, ShapeBorders, ColorSpec,
+        TextParagraph, TextRun,
+    )
+
+    w_in = 13.333; h_in = 7.5
+
+    STYLES = {
+        "dark":   {"bg": "#0A0E1A", "title": "#FFFFFF", "sub": "#A5B4FC", "meta": "#64748B", "bar": "#6366F1"},
+        "light":  {"bg": "#FFFFFF", "title": "#0F172A", "sub": "#4F46E5", "meta": "#64748B", "bar": "#6366F1"},
+        "accent": {"bg": "#4F46E5", "title": "#FFFFFF", "sub": "#C7D2FE", "meta": "#A5B4FC", "bar": "#FFFFFF"},
+    }
+    s = STYLES.get(req.style, STYLES["dark"])
+
+    def mktb(label: str, l: float, t: float, w: float, h: float, text: str,
+             fs: float, bold: bool, color: str, z: int = 2) -> Any:
+        para = TextParagraph()
+        run  = TextRun()
+        run.text = text; run.font_size = fs; run.font_bold = bold; run.font_color = color
+        para.runs = [run]
+        el = BridgeShape(
+            position=Position(left=l, top=t, width=w, height=h),
+            transforms=Transform(), stacking=Stacking(z_index=z),
+            identification=Identification(shape_id=300, shape_name=label),
+            accessibility=Accessibility(alt_text=label),
+            shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+            fill=ShapeFill(fill_type="none", color=None),
+            line=ShapeLine(visible=False), shadow=ShapeShadow(),
+            text_content=ShapeTextContent(), text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+        )
+        el.text_content.paragraphs = [para]; el.text_content.has_text = True
+        return el
+
+    bg = BridgeShape(
+        position=Position(left=0, top=0, width=w_in, height=h_in),
+        transforms=Transform(), stacking=Stacking(z_index=0),
+        identification=Identification(shape_id=299, shape_name="CoverBg"),
+        accessibility=Accessibility(alt_text=""),
+        shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+        fill=ShapeFill(fill_type="solid", color=ColorSpec(value=s["bg"])),
+        line=ShapeLine(visible=False), shadow=ShapeShadow(),
+        text_content=ShapeTextContent(), text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+    )
+
+    accent_left = BridgeShape(
+        position=Position(left=0, top=0, width=0.08, height=h_in),
+        transforms=Transform(), stacking=Stacking(z_index=1),
+        identification=Identification(shape_id=301, shape_name="CoverAccentLeft"),
+        accessibility=Accessibility(alt_text=""),
+        shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+        fill=ShapeFill(fill_type="solid", color=ColorSpec(value=s["bar"])),
+        line=ShapeLine(visible=False), shadow=ShapeShadow(),
+        text_content=ShapeTextContent(), text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+    )
+
+    accent_bar = BridgeShape(
+        position=Position(left=0.08, top=3.8, width=6, height=0.05),
+        transforms=Transform(), stacking=Stacking(z_index=1),
+        identification=Identification(shape_id=302, shape_name="CoverBar"),
+        accessibility=Accessibility(alt_text=""),
+        shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+        fill=ShapeFill(fill_type="solid", color=ColorSpec(value=s["bar"])),
+        line=ShapeLine(visible=False), shadow=ShapeShadow(),
+        text_content=ShapeTextContent(), text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+    )
+
+    elements: list[Any] = [bg, accent_left, accent_bar]
+    elements.append(mktb("CoverTitle", 0.5, 1.5, 12.0, 2.0, req.title, 40, True, s["title"], 3))
+    if req.subtitle:
+        elements.append(mktb("CoverSubtitle", 0.5, 3.7, 10.0, 0.9, req.subtitle, 20, False, s["sub"], 3))
+    meta_parts = [p for p in [req.author, req.date] if p]
+    if meta_parts:
+        elements.append(mktb("CoverMeta", 0.5, 6.5, 10.0, 0.6, "  ·  ".join(meta_parts), 12, False, s["meta"], 3))
+
+    new_slide = BridgeSlide(slide_number=1, elements=elements)
+    doc.slides.append(new_slide)
+    doc.slides.sort(key=lambda sv: sv.slide_number)
+
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    try:
+        from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+        _rbs(doc, bridge_dir, slide_numbers=[1])
+    except Exception as exc:
+        log.warning("generate-cover: re-render failed (non-fatal): %s", exc)
+
+    return {"new_slide_n": 1, "slide_count": len(doc.slides)}
+
+
+# ── Outline Exporter ──────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/outline-export")
+def outline_export(doc_id: str, fmt: str = "md", include_notes: bool = False):
+    """Export the deck outline (slide titles + body preview) as markdown or plain text."""
+    from fastapi.responses import PlainTextResponse
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+    doc_name = d.get("name", doc_id)
+
+    lines: list[str] = []
+    if fmt == "md":
+        lines.append(f"# {doc_name}\n")
+    else:
+        lines.append(doc_name.upper())
+        lines.append("=" * max(len(doc_name), 20))
+
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        texts = [_element_plain_text(el).strip() for el in slide.elements]
+        texts = [t for t in texts if t]
+        title = texts[0] if texts else f"Slide {slide.slide_number}"
+        body  = texts[1] if len(texts) > 1 else ""
+
+        if fmt == "md":
+            lines.append(f"\n## {slide.slide_number}. {title}")
+            if body:
+                lines.append(f"\n{body[:200]}")
+        else:
+            lines.append(f"\n{slide.slide_number:>3}. {title}")
+            if body:
+                lines.append(f"     {body[:150]}")
+
+        if include_notes:
+            notes = (getattr(slide, "notes", None) or "").strip()
+            if notes:
+                if fmt == "md":
+                    lines.append(f"\n> *Notes: {notes[:200]}*")
+                else:
+                    lines.append(f"     [Notes: {notes[:150]}]")
+
+    content = "\n".join(lines)
+    filename = f"{doc_name.replace(' ', '_')}_outline.{'md' if fmt == 'md' else 'txt'}"
+    return PlainTextResponse(
+        content=content,
+        media_type="text/markdown" if fmt == "md" else "text/plain",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ── Progress Bar Inserter ────────────────────────────────────────────────────
+
+class ProgressBarRequest(BaseModel):
+    position: str = "bottom"     # "bottom" | "top"
+    color: str = "#6366F1"
+    height_pt: float = 4.0
+    remove: bool = False          # if True, remove existing bars
+
+
+_PROGRESS_BAR_NAME = "PercyProgressBar"
+
+
+@app.post("/api/docs/{doc_id}/progress-bars")
+def manage_progress_bars(doc_id: str, req: ProgressBarRequest):
+    """
+    Insert (or remove) a thin progress bar element on every slide showing reading progress.
+    The bar fills proportionally based on slide number / slide count.
+    """
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    _snapshot_doc(doc_id)
+
+    slides = sorted(doc.slides, key=lambda s: s.slide_number)
+    slide_count = len(slides)
+    affected: list[int] = []
+
+    if req.remove:
+        # Remove all existing progress bars
+        for slide in slides:
+            before = len(slide.elements)
+            slide.elements = [
+                el for el in slide.elements
+                if getattr(getattr(el, "identification", None), "shape_name", None) != _PROGRESS_BAR_NAME
+            ]
+            if len(slide.elements) < before:
+                affected.append(slide.slide_number)
+    else:
+        from percy.bridge.elements import (  # type: ignore[attr-defined]
+            BridgeShape, Position, Transform, Stacking, Identification,
+            Accessibility, ShapeIdentification, ShapeFill, ShapeLine,
+            ShapeShadow, ShapeTextContent, ShapeTextFrame, ShapeBorders, ColorSpec,
+        )
+
+        w_in = 13.333
+        h_in = 7.5
+        bar_h = req.height_pt / 72.0  # convert pt to inches
+
+        for slide in slides:
+            # Remove any existing bar first
+            slide.elements = [
+                el for el in slide.elements
+                if getattr(getattr(el, "identification", None), "shape_name", None) != _PROGRESS_BAR_NAME
+            ]
+
+            # Full background track
+            ratio = slide.slide_number / max(1, slide_count)
+            bar_w = w_in * ratio
+
+            top_y = 0.0 if req.position == "top" else h_in - bar_h
+
+            bar = BridgeShape(
+                position=Position(left=0, top=top_y, width=bar_w, height=bar_h),
+                transforms=Transform(), stacking=Stacking(z_index=100),
+                identification=Identification(shape_id=9000 + slide.slide_number, shape_name=_PROGRESS_BAR_NAME),
+                accessibility=Accessibility(alt_text="progress"),
+                shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+                fill=ShapeFill(fill_type="solid", color=ColorSpec(value=req.color)),
+                line=ShapeLine(visible=False), shadow=ShapeShadow(),
+                text_content=ShapeTextContent(), text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+            )
+            slide.elements.append(bar)
+            affected.append(slide.slide_number)
+
+    if affected:
+        bridge_dir = _CACHE_DIR / doc_id / "bridge"
+        try:
+            from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+            _rbs(doc, bridge_dir, slide_numbers=affected)
+        except Exception as exc:
+            log.warning("progress-bars: re-render failed (non-fatal): %s", exc)
+
+    return {"affected_slides": affected, "removed": req.remove}
+
+
+# ── Slide Text Map ────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/text-map")
+def text_map(doc_id: str):
+    """
+    Return per-slide text density information with element positions,
+    useful for rendering a visual density heatmap.
+    """
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slide_data: list[dict] = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        cells: list[dict] = []
+        for el in slide.elements:
+            text = _element_plain_text(el).strip()
+            if not text:
+                continue
+            pos = getattr(el, "position", None)
+            if not pos:
+                continue
+            cells.append({
+                "left":  round(getattr(pos, "left",   0.0), 2),
+                "top":   round(getattr(pos, "top",    0.0), 2),
+                "width": round(getattr(pos, "width",  1.0), 2),
+                "height":round(getattr(pos, "height", 0.5), 2),
+                "words": len(text.split()),
+            })
+        slide_data.append({
+            "slide_n": slide.slide_number,
+            "cells": cells,
+            "total_words": sum(c["words"] for c in cells),
+        })
+
+    return {
+        "slides": slide_data,
+        "slide_width_in": 13.333,
+        "slide_height_in": 7.5,
+    }
+
+
+# ── AI Hook Writer ────────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slides/{n}/write-hook")
+def write_hook(doc_id: str, n: int, hook_type: str = "question", apply: bool = False):
+    """
+    Use Claude haiku to generate an engaging opening hook for a slide.
+    hook_type: 'question' | 'statistic' | 'story' | 'statement' | 'quote'
+    Returns suggested hook text. Optionally prepends it to the first text element.
+    """
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if not slide:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    texts = [_element_plain_text(el).strip() for el in slide.elements]
+    slide_text = " | ".join(t for t in texts if t)[:300]
+
+    hook_prompts = {
+        "question": "Start with a thought-provoking question the audience will want answered.",
+        "statistic": "Start with a surprising, relevant statistic or data point.",
+        "story": "Start with a brief 1-2 sentence micro-story or scenario.",
+        "statement": "Start with a bold, provocative statement that challenges assumptions.",
+        "quote": "Start with a relevant quote from a well-known person.",
+    }
+
+    style_hint = hook_prompts.get(hook_type, hook_prompts["statement"])
+    prompt = (
+        f"Create a compelling opening hook for a presentation slide.\n"
+        f"Slide content: {slide_text or '(no text)'}\n\n"
+        f"Style: {style_hint}\n\n"
+        f"Rules:\n"
+        f"- Keep it under 30 words\n"
+        f"- Make it immediately engaging\n"
+        f"- Relevant to the slide content\n"
+        f"- No clichés\n\n"
+        f"Return ONLY the hook text, nothing else."
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=100,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    hook = resp.content[0].text.strip().strip('"')
+
+    applied = False
+    if apply:
+        _snapshot_doc(doc_id)
+        for el in slide.elements:
+            t = _element_plain_text(el).strip()
+            if t:
+                tc = getattr(el, "text_content", None)
+                paras = getattr(tc, "paragraphs", []) if tc else []
+                if paras:
+                    from percy.bridge.elements import TextParagraph, TextRun  # type: ignore[attr-defined]
+                    hook_para = TextParagraph()
+                    hr = TextRun()
+                    hr.text = hook; hr.font_bold = True
+                    hook_para.runs = [hr]
+                    tc.paragraphs = [hook_para] + list(paras)
+                    tc.has_text = True
+                    applied = True
+                    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+                    try:
+                        from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+                        _rbs(doc, bridge_dir, slide_numbers=[n])
+                    except Exception:
+                        pass
+                    break
+
+    return {"hook": hook, "hook_type": hook_type, "slide_n": n, "applied": applied}
+
+
+# ── Deck Pre-Flight Check ─────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/preflight")
+def preflight_check(doc_id: str):
+    """
+    Run a comprehensive pre-presentation checklist.
+    Returns pass/warn/fail for each check with details.
+    """
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides = sorted(doc.slides, key=lambda s: s.slide_number)
+    slide_count = len(slides)
+
+    checks: list[dict] = []
+
+    # 1. Notes coverage
+    notes_with = sum(1 for s in slides if (getattr(s, "notes", None) or "").strip())
+    notes_pct = round(notes_with / max(1, slide_count) * 100)
+    checks.append({
+        "id": "notes",
+        "label": "Speaker Notes Coverage",
+        "status": "pass" if notes_pct >= 70 else "warn" if notes_pct >= 30 else "fail",
+        "detail": f"{notes_with} of {slide_count} slides have notes ({notes_pct}%)",
+        "value": notes_pct,
+    })
+
+    # 2. Empty slides
+    empty_slides = [s.slide_number for s in slides if not any(_element_plain_text(el).strip() for el in s.elements)]
+    checks.append({
+        "id": "empty-slides",
+        "label": "No Empty Slides",
+        "status": "pass" if not empty_slides else "warn",
+        "detail": "All slides have content" if not empty_slides else f"Empty slides: {empty_slides[:5]}",
+        "value": len(empty_slides),
+    })
+
+    # 3. Slide count
+    checks.append({
+        "id": "slide-count",
+        "label": "Reasonable Slide Count",
+        "status": "pass" if slide_count <= 40 else "warn" if slide_count <= 80 else "fail",
+        "detail": f"{slide_count} slides" + (" — consider trimming" if slide_count > 40 else ""),
+        "value": slide_count,
+    })
+
+    # 4. Average word count per slide
+    word_counts = []
+    for s in slides:
+        wc = sum(len(_element_plain_text(el).split()) for el in s.elements)
+        word_counts.append(wc)
+    avg_words = round(sum(word_counts) / max(1, len(word_counts)))
+    checks.append({
+        "id": "word-count",
+        "label": "Not Too Text-Heavy",
+        "status": "pass" if avg_words <= 50 else "warn" if avg_words <= 100 else "fail",
+        "detail": f"Average {avg_words} words per slide" + (" — consider reducing" if avg_words > 50 else ""),
+        "value": avg_words,
+    })
+
+    # 5. Title consistency — does every slide have at least one text element?
+    no_title = [s.slide_number for s in slides if not any(_element_plain_text(el).strip() for el in s.elements)]
+    checks.append({
+        "id": "titles",
+        "label": "All Slides Have Content",
+        "status": "pass" if not no_title else "warn",
+        "detail": "All slides have text" if not no_title else f"Slides without text: {no_title[:5]}",
+        "value": len(no_title),
+    })
+
+    # 6. Undo state — just check doc loaded
+    checks.append({
+        "id": "doc-loaded",
+        "label": "Document Loaded Successfully",
+        "status": "pass",
+        "detail": f"Document with {slide_count} slides is ready",
+        "value": slide_count,
+    })
+
+    passed  = sum(1 for c in checks if c["status"] == "pass")
+    warned  = sum(1 for c in checks if c["status"] == "warn")
+    failed  = sum(1 for c in checks if c["status"] == "fail")
+    overall = "ready" if failed == 0 and warned <= 1 else "warning" if failed == 0 else "issues"
+
+    return {
+        "checks": checks,
+        "passed": passed,
+        "warned": warned,
+        "failed": failed,
+        "overall": overall,
+        "slide_count": slide_count,
+    }
+
+
+# ── AI Conclusion Slide Generator ────────────────────────────────────────────
+
+class ConclusionSlideRequest(BaseModel):
+    style: str = "dark"     # "dark" | "light"
+    include_cta: bool = True
+    include_contact: str = ""  # optional contact info line
+
+
+@app.post("/api/docs/{doc_id}/generate-conclusion")
+def generate_conclusion(doc_id: str, req: ConclusionSlideRequest):
+    """
+    Use Claude haiku to create a compelling conclusion slide and append it at the end.
+    Returns new_slide_n and slide_count.
+    """
+    import anthropic as _anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    # Collect deck content for context
+    slides = sorted(doc.slides, key=lambda s: s.slide_number)
+    key_points: list[str] = []
+    for slide in slides[-10:]:  # use last 10 slides for context
+        texts = [_element_plain_text(el).strip() for el in slide.elements]
+        texts = [t for t in texts if t]
+        if texts:
+            key_points.append(texts[0][:80])
+
+    context_str = " | ".join(key_points)
+
+    prompt = (
+        f"Create a conclusion slide for a presentation.\n"
+        f"Key themes covered: {context_str}\n\n"
+        f"Generate exactly 3 concise takeaway bullet points (start each with •).\n"
+        f"{'Also add a brief call-to-action line after the bullets (start with CTA:).' if req.include_cta else ''}\n"
+        f"Keep each bullet under 10 words. Be specific, not generic.\n"
+        f"Return ONLY the bullet points and optional CTA line."
+    )
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=200,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = resp.content[0].text.strip()
+
+    # Parse bullets and CTA
+    lines = [ln.strip() for ln in raw.split("\n") if ln.strip()]
+    bullets = [ln.lstrip("•-·").strip() for ln in lines if ln.startswith("•") or (ln.startswith("-") and not ln.startswith("CTA"))]
+    cta = next((ln[4:].strip() for ln in lines if ln.startswith("CTA:")), "")
+
+    _snapshot_doc(doc_id)
+    new_n = max(s.slide_number for s in doc.slides) + 1
+
+    from percy.bridge.bridge import BridgeSlide  # type: ignore[attr-defined]
+    from percy.bridge.elements import (  # type: ignore[attr-defined]
+        BridgeShape, Position, Transform, Stacking, Identification,
+        Accessibility, ShapeIdentification, ShapeFill, ShapeLine,
+        ShapeShadow, ShapeTextContent, ShapeTextFrame, ShapeBorders, ColorSpec,
+        TextParagraph, TextRun,
+    )
+
+    w_in = 13.333; h_in = 7.5
+    dark = req.style != "light"
+    bg_c  = "#0A0E1A" if dark else "#FFFFFF"
+    ttl_c = "#FFFFFF" if dark else "#0F172A"
+    bdy_c = "#CBD5E1" if dark else "#334155"
+    bar_c = "#6366F1"
+
+    def mktb(label: str, l: float, t: float, w: float, h: float, text: str,
+             fs: float, bold: bool, color: str, z: int = 2) -> Any:
+        para = TextParagraph(); run = TextRun()
+        run.text = text; run.font_size = fs; run.font_bold = bold; run.font_color = color
+        para.runs = [run]
+        el = BridgeShape(
+            position=Position(left=l, top=t, width=w, height=h),
+            transforms=Transform(), stacking=Stacking(z_index=z),
+            identification=Identification(shape_id=400, shape_name=label),
+            accessibility=Accessibility(alt_text=label),
+            shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+            fill=ShapeFill(fill_type="none", color=None),
+            line=ShapeLine(visible=False), shadow=ShapeShadow(),
+            text_content=ShapeTextContent(), text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+        )
+        el.text_content.paragraphs = [para]; el.text_content.has_text = True
+        return el
+
+    bg_el = BridgeShape(
+        position=Position(left=0, top=0, width=w_in, height=h_in),
+        transforms=Transform(), stacking=Stacking(z_index=0),
+        identification=Identification(shape_id=399, shape_name="ConcBg"),
+        accessibility=Accessibility(alt_text=""),
+        shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+        fill=ShapeFill(fill_type="solid", color=ColorSpec(value=bg_c)),
+        line=ShapeLine(visible=False), shadow=ShapeShadow(),
+        text_content=ShapeTextContent(), text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+    )
+
+    elements: list[Any] = [bg_el]
+    elements.append(mktb("ConcTitle", 0.5, 0.3, 12.33, 0.8, "Key Takeaways", 28, True, ttl_c, 3))
+
+    accent_bar = BridgeShape(
+        position=Position(left=0.5, top=1.2, width=12.33, height=0.04),
+        transforms=Transform(), stacking=Stacking(z_index=1),
+        identification=Identification(shape_id=401, shape_name="ConcBar"),
+        accessibility=Accessibility(alt_text=""),
+        shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+        fill=ShapeFill(fill_type="solid", color=ColorSpec(value=bar_c)),
+        line=ShapeLine(visible=False), shadow=ShapeShadow(),
+        text_content=ShapeTextContent(), text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+    )
+    elements.append(accent_bar)
+
+    bullets_text = "\n".join(f"• {b}" for b in bullets[:3])
+    elements.append(mktb("ConcBullets", 0.5, 1.4, 12.33, 4.2, bullets_text, 16, False, bdy_c, 3))
+
+    if cta and req.include_cta:
+        elements.append(mktb("ConcCta", 0.5, 5.7, 12.33, 0.8, cta, 13, True, "#6366F1", 3))
+
+    if req.include_contact:
+        elements.append(mktb("ConcContact", 0.5, 6.7, 12.33, 0.5, req.include_contact, 11, False, bdy_c, 3))
+
+    new_slide = BridgeSlide(slide_number=new_n, elements=elements)
+    doc.slides.append(new_slide)
+    doc.slides.sort(key=lambda sv: sv.slide_number)
+
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    try:
+        from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+        _rbs(doc, bridge_dir, slide_numbers=[new_n])
+    except Exception as exc:
+        log.warning("generate-conclusion: re-render failed (non-fatal): %s", exc)
+
+    return {"new_slide_n": new_n, "slide_count": len(doc.slides), "bullets": bullets, "cta": cta}
+
+
+# ── Section Separator Slide ───────────────────────────────────────────────────
+
+class SectionSepRequest(BaseModel):
+    title: str
+    subtitle: str = ""
+    after_n: int = 1
+    style: str = "gradient"   # "gradient" | "solid" | "minimal"
+    color: str = "#6366F1"
+
+
+@app.post("/api/docs/{doc_id}/insert-section-separator")
+def insert_section_separator(doc_id: str, req: SectionSepRequest):
+    """
+    Insert a styled section divider slide at the given position.
+    """
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    _snapshot_doc(doc_id)
+    insert_after = max(0, min(req.after_n, len(doc.slides)))
+
+    for slide in doc.slides:
+        if slide.slide_number > insert_after:
+            slide.slide_number += 1
+
+    new_n = insert_after + 1
+
+    from percy.bridge.bridge import BridgeSlide  # type: ignore[attr-defined]
+    from percy.bridge.elements import (  # type: ignore[attr-defined]
+        BridgeShape, Position, Transform, Stacking, Identification,
+        Accessibility, ShapeIdentification, ShapeFill, ShapeLine,
+        ShapeShadow, ShapeTextContent, ShapeTextFrame, ShapeBorders, ColorSpec,
+        TextParagraph, TextRun,
+    )
+
+    w_in = 13.333; h_in = 7.5
+
+    def mktb(label: str, l: float, t: float, w: float, h: float,
+             text: str, fs: float, bold: bool, color: str, z: int = 2) -> Any:
+        para = TextParagraph(); run = TextRun()
+        run.text = text; run.font_size = fs; run.font_bold = bold; run.font_color = color
+        para.runs = [run]
+        el = BridgeShape(
+            position=Position(left=l, top=t, width=w, height=h),
+            transforms=Transform(), stacking=Stacking(z_index=z),
+            identification=Identification(shape_id=500, shape_name=label),
+            accessibility=Accessibility(alt_text=label),
+            shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+            fill=ShapeFill(fill_type="none", color=None),
+            line=ShapeLine(visible=False), shadow=ShapeShadow(),
+            text_content=ShapeTextContent(), text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+        )
+        el.text_content.paragraphs = [para]; el.text_content.has_text = True
+        return el
+
+    # Background
+    bg = BridgeShape(
+        position=Position(left=0, top=0, width=w_in, height=h_in),
+        transforms=Transform(), stacking=Stacking(z_index=0),
+        identification=Identification(shape_id=499, shape_name="SepBg"),
+        accessibility=Accessibility(alt_text=""),
+        shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+        fill=ShapeFill(fill_type="solid", color=ColorSpec(value=req.color)),
+        line=ShapeLine(visible=False), shadow=ShapeShadow(),
+        text_content=ShapeTextContent(), text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+    )
+
+    elements: list[Any] = [bg]
+
+    if req.style == "gradient":
+        # Overlay darker panel on right 40%
+        overlay = BridgeShape(
+            position=Position(left=w_in * 0.6, top=0, width=w_in * 0.4, height=h_in),
+            transforms=Transform(), stacking=Stacking(z_index=1),
+            identification=Identification(shape_id=500, shape_name="SepOverlay"),
+            accessibility=Accessibility(alt_text=""),
+            shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+            fill=ShapeFill(fill_type="solid", color=ColorSpec(value="#00000040")),
+            line=ShapeLine(visible=False), shadow=ShapeShadow(),
+            text_content=ShapeTextContent(), text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+        )
+        elements.append(overlay)
+
+    elements.append(mktb("SepTitle",    0.5, 2.8, 10.0, 1.5, req.title,    36, True, "#FFFFFF", 3))
+    if req.subtitle:
+        elements.append(mktb("SepSub",  0.5, 4.4, 10.0, 0.8, req.subtitle, 16, False, "#FFFFFF99", 3))
+
+    # Accent line under title
+    bar = BridgeShape(
+        position=Position(left=0.5, top=4.5 if not req.subtitle else 5.3, width=3.0, height=0.05),
+        transforms=Transform(), stacking=Stacking(z_index=2),
+        identification=Identification(shape_id=501, shape_name="SepLine"),
+        accessibility=Accessibility(alt_text=""),
+        shape_identification=ShapeIdentification(shape_type="auto_shape", geometry_preset="rect"),
+        fill=ShapeFill(fill_type="solid", color=ColorSpec(value="#FFFFFF80")),
+        line=ShapeLine(visible=False), shadow=ShapeShadow(),
+        text_content=ShapeTextContent(), text_frame=ShapeTextFrame(), borders=ShapeBorders(),
+    )
+    elements.append(bar)
+
+    new_slide = BridgeSlide(slide_number=new_n, elements=elements)
+    doc.slides.append(new_slide)
+    doc.slides.sort(key=lambda sv: sv.slide_number)
+
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    try:
+        from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+        _rbs(doc, bridge_dir, slide_numbers=[new_n])
+    except Exception as exc:
+        log.warning("insert-section-separator: re-render failed (non-fatal): %s", exc)
+
+    return {"new_slide_n": new_n, "slide_count": len(doc.slides)}
+
+
+# ── Deck Diff ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slides/{n}/word-frequency")
+def slide_word_frequency(doc_id: str, n: int, top_n: int = 20):
+    """Return the top N most frequent words on a specific slide."""
+    import re as _re
+    from collections import Counter as _Counter
+
+    d = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if not slide:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    STOPWORDS = {"the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+                 "and", "or", "but", "in", "on", "at", "to", "for", "of", "with",
+                 "this", "that", "it", "its", "they", "we", "you", "i", "he", "she",
+                 "have", "has", "had", "will", "would", "could", "should", "may", "can",
+                 "our", "your", "their", "as", "by", "from", "not", "no", "so", "do"}
+
+    all_text = " ".join(_element_plain_text(el) for el in slide.elements)
+    words = [w.lower() for w in _re.findall(r"\b[a-zA-Z]{3,}\b", all_text) if w.lower() not in STOPWORDS]
+    freq = _Counter(words)
+    return {"words": [{"word": w, "count": c} for w, c in freq.most_common(top_n)], "slide_n": n}
+
+
+# ── Bulk Element Resizer ─────────────────────────────────────────────────────
+
+class BulkResizeRequest(BaseModel):
+    scale_factor: float = 1.1   # multiply dimensions by this
+    element_type: str = "all"   # "all" | "picture" | "text"
+    slides: List[int] = []       # empty = all slides
+    min_width_in: float = 0.1
+    max_width_in: float = 13.0
+
+
+@app.post("/api/docs/{doc_id}/bulk-resize-elements")
+def bulk_resize_elements(doc_id: str, req: BulkResizeRequest):
+    """Scale all (or filtered) elements' width/height by a factor."""
+    if req.scale_factor <= 0 or req.scale_factor > 5:
+        raise HTTPException(400, "scale_factor must be between 0.01 and 5.0")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+    target_slides = set(req.slides) if req.slides else None
+
+    _snapshot_doc(doc_id)
+    changed = 0
+    affected: set[int] = set()
+
+    for slide in doc.slides:
+        if target_slides and slide.slide_number not in target_slides:
+            continue
+        for el in slide.elements:
+            st = getattr(getattr(el, "shape_identification", None), "shape_type", "") or ""
+            if req.element_type == "picture" and st not in ("picture", "placeholder_picture"):
+                continue
+            if req.element_type == "text" and "picture" in st:
+                continue
+
+            pos = getattr(el, "position", None)
+            if not pos:
+                continue
+
+            new_w = max(req.min_width_in, min(req.max_width_in, getattr(pos, "width", 1.0) * req.scale_factor))
+            new_h = max(0.1, min(7.3, getattr(pos, "height", 0.5) * req.scale_factor))
+            pos.width  = new_w
+            pos.height = new_h
+            changed += 1
+            affected.add(slide.slide_number)
+
+    if affected:
+        bridge_dir = _CACHE_DIR / doc_id / "bridge"
+        try:
+            from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+            _rbs(doc, bridge_dir, slide_numbers=sorted(affected))
+        except Exception as exc:
+            log.warning("bulk-resize: re-render failed (non-fatal): %s", exc)
+
+    return {"changed": changed, "affected_slides": sorted(affected), "scale_factor": req.scale_factor}
+
+
+# ── Quick Format Preset ───────────────────────────────────────────────────────
+
+_FORMAT_PRESETS: dict[str, dict] = {
+    "corporate": {
+        "title_size": 28, "body_size": 14, "title_bold": True,
+        "title_color": "#1E293B", "body_color": "#475569",
+    },
+    "executive": {
+        "title_size": 32, "body_size": 16, "title_bold": True,
+        "title_color": "#0F172A", "body_color": "#334155",
+    },
+    "startup": {
+        "title_size": 30, "body_size": 14, "title_bold": True,
+        "title_color": "#FFFFFF", "body_color": "#CBD5E1",
+    },
+    "minimal": {
+        "title_size": 24, "body_size": 12, "title_bold": False,
+        "title_color": "#0F172A", "body_color": "#64748B",
+    },
+    "academic": {
+        "title_size": 24, "body_size": 12, "title_bold": True,
+        "title_color": "#1E3A5F", "body_color": "#334155",
+    },
+}
+
+
+@app.get("/api/docs/{doc_id}/format-presets")
+def list_format_presets(doc_id: str):
+    """Return available quick-format presets."""
+    return {"presets": list(_FORMAT_PRESETS.keys())}
+
+
+@app.post("/api/docs/{doc_id}/apply-format-preset")
+def apply_format_preset(doc_id: str, preset: str, slides: str = ""):
+    """
+    Apply a named quick-format preset to normalize font sizes/colors across slides.
+    Heuristic: first text element per slide → title; rest → body.
+    slides: comma-separated slide numbers (empty = all)
+    """
+    if preset not in _FORMAT_PRESETS:
+        raise HTTPException(400, f"Unknown preset: {preset}. Available: {list(_FORMAT_PRESETS.keys())}")
+
+    pset = _FORMAT_PRESETS[preset]
+    target_slides: set[int] | None = None
+    if slides.strip():
+        try:
+            target_slides = {int(s.strip()) for s in slides.split(",") if s.strip()}
+        except ValueError:
+            raise HTTPException(400, "slides must be comma-separated integers")
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+    _snapshot_doc(doc_id)
+    affected: set[int] = set()
+
+    for slide in doc.slides:
+        if target_slides and slide.slide_number not in target_slides:
+            continue
+
+        is_first_text = True
+        for el in slide.elements:
+            tc = getattr(el, "text_content", None)
+            paras = getattr(tc, "paragraphs", []) if tc else []
+            has_text = any(
+                (getattr(run, "text", "") or "").strip()
+                for para in paras for run in getattr(para, "runs", [])
+            )
+            if not has_text:
+                continue
+
+            fs   = pset["title_size"] if is_first_text else pset["body_size"]
+            bold = pset["title_bold"] if is_first_text else False
+            col  = pset["title_color"] if is_first_text else pset["body_color"]
+
+            for para in paras:
+                for run in getattr(para, "runs", []):
+                    run.font_size  = fs
+                    run.font_bold  = bold
+                    run.font_color = col
+
+            is_first_text = False
+            affected.add(slide.slide_number)
+
+    if affected:
+        bridge_dir = _CACHE_DIR / doc_id / "bridge"
+        try:
+            from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+            _rbs(doc, bridge_dir, slide_numbers=sorted(affected))
+        except Exception as exc:
+            log.warning("apply-format-preset: re-render failed (non-fatal): %s", exc)
+
+    return {"preset": preset, "affected_slides": sorted(affected)}
+
+
+# ── Duplicate Text Finder ────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/duplicate-text")
+def duplicate_text(doc_id: str, min_words: int = 5, threshold: float = 0.85):
+    """
+    Find slides with duplicate or near-duplicate text content.
+    Uses Jaccard similarity on word sets.
+    Returns groups of slides that share significant text overlap.
+    """
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    import re as _re
+
+    slides = sorted(doc.slides, key=lambda s: s.slide_number)
+
+    # Build per-slide word sets
+    slide_words: list[dict] = []
+    for slide in slides:
+        text = " ".join(_element_plain_text(el) for el in slide.elements)
+        words = set(_re.findall(r"\b[a-zA-Z]{3,}\b", text.lower()))
+        if len(words) >= min_words:
+            slide_words.append({"slide_n": slide.slide_number, "words": words, "text_preview": text[:120]})
+
+    # Find pairs above threshold
+    duplicates: list[dict] = []
+    seen_pairs: set[tuple] = set()
+
+    for i in range(len(slide_words)):
+        for j in range(i + 1, len(slide_words)):
+            a = slide_words[i]; b = slide_words[j]
+            pair = (a["slide_n"], b["slide_n"])
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+
+            union = a["words"] | b["words"]
+            inter = a["words"] & b["words"]
+            if not union:
+                continue
+            sim = len(inter) / len(union)
+
+            if sim >= threshold:
+                duplicates.append({
+                    "slides": [a["slide_n"], b["slide_n"]],
+                    "similarity": round(sim, 3),
+                    "shared_words": len(inter),
+                    "previews": [a["text_preview"], b["text_preview"]],
+                })
+
+    duplicates.sort(key=lambda x: x["similarity"], reverse=True)
+
+    return {
+        "duplicates": duplicates,
+        "total_groups": len(duplicates),
+        "slide_count": len(slides),
+        "threshold": threshold,
+    }
+
+
+# ── Slide Merge ───────────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slides/{n}/merge-with/{m}")
+def merge_slides(doc_id: str, n: int, m: int):
+    """
+    Merge slide m's text content into slide n, then delete slide m.
+    Elements are vertically stacked; slide m is removed and subsequent slides renumbered.
+    """
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slide_n = next((s for s in doc.slides if s.slide_number == n), None)
+    slide_m = next((s for s in doc.slides if s.slide_number == m), None)
+    if not slide_n:
+        raise HTTPException(404, f"Slide {n} not found")
+    if not slide_m:
+        raise HTTPException(404, f"Slide {m} not found")
+    if n == m:
+        raise HTTPException(400, "Cannot merge a slide with itself")
+
+    _snapshot_doc(doc_id)
+
+    # Offset elements from slide_m and append to slide_n
+    base_top = max(
+        (getattr(getattr(el, "position", None), "top", 0.0) +
+         getattr(getattr(el, "position", None), "height", 0.5))
+        for el in slide_n.elements
+    ) if slide_n.elements else 0.0
+    base_top += 0.2  # small gap
+
+    import copy as _copy
+    for el in slide_m.elements:
+        new_el = _copy.deepcopy(el)
+        pos = getattr(new_el, "position", None)
+        if pos:
+            pos.top = base_top + getattr(pos, "top", 0.0)
+            pos.top = min(pos.top, 7.0)  # clamp
+        slide_n.elements.append(new_el)
+
+    # Remove slide m and renumber
+    doc.slides = [s for s in doc.slides if s.slide_number != m]
+    for s in doc.slides:
+        if s.slide_number > m:
+            s.slide_number -= 1
+
+    doc.slides.sort(key=lambda s: s.slide_number)
+
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    try:
+        from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+        _rbs(doc, bridge_dir, slide_numbers=[n])
+    except Exception as exc:
+        log.warning("merge-slides: re-render failed (non-fatal): %s", exc)
+
+    return {"merged_into": n, "removed": m, "slide_count": len(doc.slides)}
+
+
+# ── Notes Auto-Expand ─────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slides/{n}/expand-notes")
+def expand_notes(doc_id: str, n: int, apply: bool = True):
+    """AI expands bullet speaker notes into full speaking paragraphs."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if not slide:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    notes_text = getattr(slide, "notes", None) or ""
+    notes_text = notes_text.strip()
+    if not notes_text:
+        return {"slide_n": n, "expanded": "", "applied": False, "message": "No notes to expand"}
+
+    # Build slide title context
+    title_text = ""
+    for el in slide.elements:
+        role = getattr(el, "role", "") or ""
+        if role in ("title", "heading") or (hasattr(el, "text_content") and el.text_content):
+            raw = getattr(el, "text_content", None)
+            if raw and not title_text:
+                title_text = str(raw)[:120]
+
+    prompt = (
+        f"You are writing speaker notes for a presentation slide.\n"
+        f"Slide title context: {title_text or 'unknown'}\n\n"
+        f"Current notes (may be brief bullets or fragments):\n{notes_text}\n\n"
+        "Expand these into natural, full spoken paragraphs a presenter would actually say aloud. "
+        "Maintain all key points. Write 2–4 sentences per bullet. "
+        "Output ONLY the expanded notes text, no extra commentary."
+    )
+    try:
+        import anthropic as _anthropic
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        expanded = msg.content[0].text.strip()
+    except Exception as exc:
+        raise HTTPException(500, f"AI expansion failed: {exc}") from exc
+
+    if apply:
+        _snapshot_doc(doc_id)
+        slide.notes = expanded
+
+    return {"slide_n": n, "expanded": expanded, "original": notes_text, "applied": apply}
+
+
+# ── Slide Complexity Score ─────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/complexity")
+def slide_complexity(doc_id: str):
+    """Score each slide on element + text density; flag over-stuffed slides."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    results = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n          = slide.slide_number
+        el_count   = len(slide.elements)
+        word_count = 0
+        char_count = 0
+        text_els   = 0
+        image_els  = 0
+        for el in slide.elements:
+            el_type = getattr(el, "element_type", "") or ""
+            if el_type in ("image", "picture"):
+                image_els += 1
+            elif el_type in ("chart", "table"):
+                image_els += 1  # counts as heavy
+            raw = getattr(el, "text_content", None)
+            if raw:
+                text_els += 1
+                words = str(raw).split()
+                word_count += len(words)
+                char_count += len(str(raw))
+
+        # Score: 0–100 where higher = more complex/stuffed
+        word_score  = min(word_count / 2.5, 40)   # 100 words → score 40
+        el_score    = min(el_count * 4, 30)        # 7+ elements → score 28+
+        image_score = min(image_els * 5, 20)       # 4 images → max 20
+        char_score  = min(char_count / 50, 10)     # 500 chars → 10
+        total_score = word_score + el_score + image_score + char_score
+
+        level = "simple" if total_score < 30 else "moderate" if total_score < 60 else "complex"
+        results.append({
+            "slide_n":     n,
+            "score":       round(total_score, 1),
+            "level":       level,
+            "word_count":  word_count,
+            "el_count":    el_count,
+            "text_els":    text_els,
+            "image_els":   image_els,
+        })
+
+    avg = round(sum(r["score"] for r in results) / len(results), 1) if results else 0.0
+    complex_count = sum(1 for r in results if r["level"] == "complex")
+    return {
+        "slides":        results,
+        "avg_score":     avg,
+        "complex_count": complex_count,
+        "slide_count":   len(results),
+    }
+
+
+# ── Content Gap Detector ───────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/content-gaps")
+def content_gaps(doc_id: str, deck_type: str = "general"):
+    """AI reviews the deck outline and flags expected topics that appear to be missing."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    # Build deck outline
+    outline_parts = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        title = ""
+        for el in slide.elements:
+            role = getattr(el, "role", "") or ""
+            raw  = getattr(el, "text_content", None)
+            if raw and (role in ("title", "heading") or not title):
+                title = str(raw)[:100]
+                break
+        outline_parts.append(f"Slide {n}: {title or '(no title)'}")
+
+    outline_text = "\n".join(outline_parts)
+    prompt = (
+        f"You are a presentation consultant reviewing a {deck_type} presentation.\n\n"
+        f"Here is the slide outline:\n{outline_text}\n\n"
+        "Identify any significant content gaps — topics or sections that would typically be expected "
+        f"in a {deck_type} presentation but appear to be missing or underdeveloped.\n\n"
+        "Return a JSON object with this exact shape (no markdown):\n"
+        '{"gaps": [{"topic": "...", "importance": "high|medium|low", "suggestion": "...", "insert_after_slide": 0}], '
+        '"overall_coverage": "good|fair|poor", "summary": "..."}'
+    )
+    try:
+        import anthropic as _anthropic
+        import json as _json
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw_text = msg.content[0].text.strip()
+        # Strip markdown fences if present
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("```")[1]
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:]
+        result = _json.loads(raw_text)
+    except Exception as exc:
+        raise HTTPException(500, f"Gap detection failed: {exc}") from exc
+
+    return {
+        "gaps":              result.get("gaps", []),
+        "overall_coverage":  result.get("overall_coverage", "fair"),
+        "summary":           result.get("summary", ""),
+        "slide_count":       len(doc.slides),
+        "deck_type":         deck_type,
+    }
+
+
+# ── Glossary Extractor ─────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/extract-glossary")
+def extract_glossary(doc_id: str, insert_slide: bool = False):
+    """AI identifies technical or domain-specific terms and builds a glossary."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    # Collect all text from the deck
+    all_text_parts = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        for el in slide.elements:
+            raw = getattr(el, "text_content", None)
+            if raw:
+                all_text_parts.append(str(raw))
+
+    all_text = " ".join(all_text_parts)[:4000]
+
+    prompt = (
+        "You are a technical writer. Read the following presentation text and identify "
+        "domain-specific, technical, or jargon terms that an audience member might not know.\n\n"
+        f"Presentation text:\n{all_text}\n\n"
+        "Return a JSON object with this exact shape (no markdown):\n"
+        '{"terms": [{"term": "...", "definition": "...", "slide_first_seen": 1}], "total_terms": 0}'
+        "\n\nLimit to at most 15 terms. Order by importance (most domain-specific first)."
+    )
+    try:
+        import anthropic as _anthropic
+        import json as _json
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw_text = msg.content[0].text.strip()
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("```")[1]
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:]
+        result = _json.loads(raw_text)
+        terms = result.get("terms", [])
+    except Exception as exc:
+        raise HTTPException(500, f"Glossary extraction failed: {exc}") from exc
+
+    inserted_slide = None
+    if insert_slide and terms:
+        _snapshot_doc(doc_id)
+        # Build a glossary slide at the end
+        max_n = max(s.slide_number for s in doc.slides) if doc.slides else 0
+        new_n = max_n + 1
+
+        glossary_lines = "\n".join(
+            f"• {t['term']}: {t['definition']}" for t in terms[:12]
+        )
+
+        from percy.bridge.models import (  # type: ignore[attr-defined]
+            BridgeSlide, BridgeShape, Position,
+            TextParagraph, TextRun, ParagraphFormat, RunFormat,
+        )
+        title_shape = BridgeShape(
+            element_id="gloss_title",
+            element_type="text",
+            position=Position(left=0.5, top=0.3, width=9.0, height=0.8),
+            text_content="Glossary",
+            role="title",
+            paragraphs=[TextParagraph(runs=[TextRun(text="Glossary",
+                fmt=RunFormat(bold=True, font_size=28))], fmt=ParagraphFormat())],
+        )
+        body_shape = BridgeShape(
+            element_id="gloss_body",
+            element_type="text",
+            position=Position(left=0.5, top=1.3, width=9.0, height=5.5),
+            text_content=glossary_lines,
+            role="body",
+            paragraphs=[
+                TextParagraph(
+                    runs=[TextRun(text=f"• {t['term']}: {t['definition']}",
+                        fmt=RunFormat(font_size=11))],
+                    fmt=ParagraphFormat(),
+                )
+                for t in terms[:12]
+            ],
+        )
+        gloss_slide = BridgeSlide(
+            slide_number=new_n,
+            elements=[title_shape, body_shape],
+        )
+        doc.slides.append(gloss_slide)
+        doc.slides.sort(key=lambda s: s.slide_number)
+
+        bridge_dir = _CACHE_DIR / doc_id / "bridge"
+        try:
+            from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+            _rbs(doc, bridge_dir, slide_numbers=[new_n])
+        except Exception as exc:
+            log.warning("glossary: re-render failed (non-fatal): %s", exc)
+
+        inserted_slide = new_n
+
+    return {
+        "terms":          terms,
+        "total_terms":    len(terms),
+        "slide_count":    len(doc.slides),
+        "inserted_slide": inserted_slide,
+    }
+
+
+# ── Slide Thumbnails ZIP ──────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/thumbnails-zip")
+def thumbnails_zip(doc_id: str):
+    """Return all rendered slide PNGs as a ZIP download."""
+    import io, zipfile
+    from fastapi.responses import StreamingResponse
+    _require(doc_id)
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    if not bridge_dir.exists():
+        raise HTTPException(404, "No rendered thumbnails found; open the document in Studio first")
+
+    pngs = sorted(bridge_dir.glob("slide_*.png"))
+    if not pngs:
+        raise HTTPException(404, "No slide PNGs found")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for p in pngs:
+            zf.write(p, p.name)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="slides-{doc_id[:8]}.zip"'},
+    )
+
+
+# ── AI Slide Title Generator ───────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/generate-titles")
+def generate_titles(
+    doc_id: str,
+    slide_numbers: list[int] | None = None,
+    tone: str = "professional",
+    apply: bool = True,
+):
+    """AI rewrites or fills in missing slide titles."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    target_slides = sorted(doc.slides, key=lambda s: s.slide_number)
+    if slide_numbers:
+        target_slides = [s for s in target_slides if s.slide_number in slide_numbers]
+
+    results = []
+    for slide in target_slides:
+        n = slide.slide_number
+        title_el  = None
+        body_text = []
+        for el in slide.elements:
+            role = getattr(el, "role", "") or ""
+            raw  = getattr(el, "text_content", None)
+            if raw:
+                if role in ("title", "heading") and not title_el:
+                    title_el = el
+                elif role == "body":
+                    body_text.append(str(raw)[:200])
+
+        current_title = str(getattr(title_el, "text_content", "") or "").strip()
+        body_summary  = " ".join(body_text)[:300]
+
+        prompt = (
+            f"Generate a concise, {tone} title for a presentation slide.\n"
+            f"Current title (may be empty or generic): {current_title or '(none)'}\n"
+            f"Slide body content: {body_summary or '(no body text)'}\n\n"
+            "Output ONLY the new title text, nothing else. Max 10 words."
+        )
+        try:
+            import anthropic as _anthropic
+            client = _anthropic.Anthropic()
+            msg = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=50,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            new_title = msg.content[0].text.strip().strip('"').strip("'")
+        except Exception as exc:
+            new_title = current_title
+            log.warning("generate-titles: AI failed for slide %d: %s", n, exc)
+
+        results.append({
+            "slide_n":       n,
+            "original":      current_title,
+            "new_title":     new_title,
+            "has_title_el":  title_el is not None,
+        })
+
+    if apply:
+        _snapshot_doc(doc_id)
+        for res in results:
+            if not res["new_title"]:
+                continue
+            slide = next((s for s in doc.slides if s.slide_number == res["slide_n"]), None)
+            if not slide:
+                continue
+            title_el = next(
+                (el for el in slide.elements
+                 if (getattr(el, "role", "") or "") in ("title", "heading")),
+                None,
+            )
+            if title_el:
+                _apply_plain_text_to_element(title_el, res["new_title"])
+            # If no title element, skip (don't create one automatically)
+
+        bridge_dir = _CACHE_DIR / doc_id / "bridge"
+        changed_slides = [r["slide_n"] for r in results]
+        try:
+            from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+            _rbs(doc, bridge_dir, slide_numbers=changed_slides)
+        except Exception as exc:
+            log.warning("generate-titles: re-render failed (non-fatal): %s", exc)
+
+    return {
+        "results":        results,
+        "applied":        apply,
+        "affected_slides": [r["slide_n"] for r in results],
+    }
+
+
+# ── Layout Analyzer ────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/layout-issues")
+def layout_issues(doc_id: str):
+    """Detect elements that are misaligned, overlapping, or out of slide bounds."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    SLIDE_W, SLIDE_H = 10.0, 7.5  # standard inches
+    MARGIN = 0.1
+
+    all_issues = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        slide_issues = []
+        positions = []
+
+        for el in slide.elements:
+            pos = getattr(el, "position", None)
+            if not pos:
+                continue
+            left   = getattr(pos, "left",   0.0)
+            top    = getattr(pos, "top",    0.0)
+            width  = getattr(pos, "width",  1.0)
+            height = getattr(pos, "height", 0.5)
+            eid    = getattr(el, "element_id", "?")
+            etype  = getattr(el, "element_type", "?")
+            raw    = getattr(el, "text_content", None)
+            label  = str(raw)[:40] if raw else etype
+
+            # Out-of-bounds check
+            if left < -MARGIN or top < -MARGIN:
+                slide_issues.append({"element_id": eid, "issue": "out_of_bounds", "detail": f"Positioned at ({left:.2f}, {top:.2f}) — partially outside slide", "label": label})
+            if left + width > SLIDE_W + MARGIN:
+                slide_issues.append({"element_id": eid, "issue": "out_of_bounds", "detail": f"Extends to x={left+width:.2f} (slide width={SLIDE_W})", "label": label})
+            if top + height > SLIDE_H + MARGIN:
+                slide_issues.append({"element_id": eid, "issue": "out_of_bounds", "detail": f"Extends to y={top+height:.2f} (slide height={SLIDE_H})", "label": label})
+
+            # Zero-size check
+            if width < 0.05 or height < 0.05:
+                slide_issues.append({"element_id": eid, "issue": "zero_size", "detail": f"Element is nearly invisible ({width:.3f}w × {height:.3f}h)", "label": label})
+
+            positions.append((eid, label, left, top, width, height))
+
+        # Overlap detection (pairwise, lightweight)
+        for i, (eid_a, lab_a, la, ta, wa, ha) in enumerate(positions):
+            for eid_b, lab_b, lb, tb, wb, hb in positions[i+1:]:
+                # Axis-aligned bounding box overlap
+                ox = min(la+wa, lb+wb) - max(la, lb)
+                oy = min(ta+ha, tb+hb) - max(ta, tb)
+                if ox > 0.1 and oy > 0.1:
+                    overlap_area = round(ox * oy, 3)
+                    slide_issues.append({
+                        "element_id": eid_a,
+                        "issue":      "overlap",
+                        "detail":     f'"{lab_a[:25]}" overlaps "{lab_b[:25]}" by {overlap_area} sq in',
+                        "label":      lab_a,
+                    })
+
+        if slide_issues:
+            all_issues.append({"slide_n": n, "issues": slide_issues})
+
+    total_issues = sum(len(s["issues"]) for s in all_issues)
+    return {
+        "slides_with_issues": all_issues,
+        "total_issues":       total_issues,
+        "slide_count":        len(doc.slides),
+        "clean":              total_issues == 0,
+    }
+
+
+# ── Speaking Pace Estimator ────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/speaking-pace")
+def speaking_pace(doc_id: str, wpm: int = 130):
+    """Estimate speaking time per slide based on word count and speaker WPM."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    wpm = max(60, min(wpm, 300))
+    slides_out = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        words = 0
+        for el in slide.elements:
+            raw = getattr(el, "text_content", None)
+            if raw:
+                words += len(str(raw).split())
+        notes_words = 0
+        notes = getattr(slide, "notes", None)
+        if notes:
+            notes_words = len(notes.split())
+
+        body_seconds  = round((words / wpm) * 60, 1)
+        notes_seconds = round((notes_words / wpm) * 60, 1)
+        slides_out.append({
+            "slide_n":       n,
+            "words":         words,
+            "notes_words":   notes_words,
+            "body_seconds":  body_seconds,
+            "notes_seconds": notes_seconds,
+            "total_seconds": round(body_seconds + notes_seconds, 1),
+        })
+
+    total_s = sum(s["total_seconds"] for s in slides_out)
+    return {
+        "slides":         slides_out,
+        "wpm":            wpm,
+        "total_seconds":  round(total_s, 1),
+        "total_minutes":  round(total_s / 60, 2),
+        "slide_count":    len(slides_out),
+    }
+
+
+# ── Citation Tracker ──────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/extract-citations")
+def extract_citations(doc_id: str):
+    """AI identifies statistics, facts, and external references that should be cited."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slide_texts = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        parts = []
+        for el in slide.elements:
+            raw = getattr(el, "text_content", None)
+            if raw:
+                parts.append(str(raw))
+        if parts:
+            slide_texts.append({"n": slide.slide_number, "text": " ".join(parts)[:400]})
+
+    if not slide_texts:
+        return {"citations": [], "total": 0, "slide_count": len(doc.slides)}
+
+    # Build prompt with all slide content
+    slides_block = "\n".join(f"Slide {s['n']}: {s['text']}" for s in slide_texts)
+    prompt = (
+        "You are a fact-checking assistant. Review this presentation content and identify:\n"
+        "1. Statistics or numerical claims (e.g., '87% of users', '$2B market')\n"
+        "2. Named studies, reports, or surveys referenced\n"
+        "3. Quotes attributed to specific people\n"
+        "4. Any factual claims that would benefit from a source citation\n\n"
+        f"Slide content:\n{slides_block}\n\n"
+        "Return a JSON object with this shape (no markdown):\n"
+        '{"citations": [{"slide_n": 1, "claim": "...", "type": "stat|study|quote|fact", "suggested_source": "..."}], "total": 0}'
+        "\n\nLimit to at most 20 citations."
+    )
+    try:
+        import anthropic as _anthropic
+        import json as _json
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw_text = msg.content[0].text.strip()
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("```")[1]
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:]
+        result = _json.loads(raw_text)
+    except Exception as exc:
+        raise HTTPException(500, f"Citation extraction failed: {exc}") from exc
+
+    citations = result.get("citations", [])
+    return {
+        "citations":   citations,
+        "total":       len(citations),
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── Contrast Checker ──────────────────────────────────────────────────────────
+
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int] | None:
+    """Convert hex color string to RGB tuple."""
+    h = hex_color.lstrip("#")
+    if len(h) not in (3, 6):
+        return None
+    if len(h) == 3:
+        h = h[0]*2 + h[1]*2 + h[2]*2
+    try:
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        return None
+
+def _relative_luminance(r: int, g: int, b: int) -> float:
+    """WCAG relative luminance."""
+    def _ch(c: int) -> float:
+        s = c / 255.0
+        return s / 12.92 if s <= 0.04045 else ((s + 0.055) / 1.055) ** 2.4
+    return 0.2126 * _ch(r) + 0.7152 * _ch(g) + 0.0722 * _ch(b)
+
+def _contrast_ratio(c1: str, c2: str) -> float | None:
+    rgb1, rgb2 = _hex_to_rgb(c1), _hex_to_rgb(c2)
+    if not rgb1 or not rgb2:
+        return None
+    l1, l2 = _relative_luminance(*rgb1), _relative_luminance(*rgb2)
+    lighter, darker = max(l1, l2), min(l1, l2)
+    return round((lighter + 0.05) / (darker + 0.05), 2)
+
+
+@app.get("/api/docs/{doc_id}/contrast-check")
+def contrast_check(doc_id: str):
+    """Check WCAG contrast ratios between text colors and slide/element backgrounds."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    results = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        slide_bg = getattr(getattr(slide, "background", None), "fill_color", None) or "#FFFFFF"
+
+        for el in slide.elements:
+            el_type = getattr(el, "element_type", "") or ""
+            if el_type not in ("text", "textbox", "title", "subtitle", "content"):
+                raw_type = str(el_type)
+                if "text" not in raw_type.lower() and raw_type not in ("", "unknown"):
+                    continue
+
+            raw = getattr(el, "text_content", None)
+            if not raw:
+                continue
+
+            eid  = getattr(el, "element_id", "?")
+            # Check each run's color
+            paragraphs = getattr(el, "paragraphs", None) or []
+            checked = False
+            for para in paragraphs:
+                for run in getattr(para, "runs", []):
+                    fmt   = getattr(run, "fmt", None)
+                    color = getattr(fmt, "color", None) if fmt else None
+                    if color and color.startswith("#"):
+                        ratio = _contrast_ratio(color, slide_bg)
+                        if ratio is not None:
+                            level = "AAA" if ratio >= 7.0 else "AA" if ratio >= 4.5 else "AA Large" if ratio >= 3.0 else "Fail"
+                            results.append({
+                                "slide_n":    n,
+                                "element_id": eid,
+                                "text_color": color,
+                                "bg_color":   slide_bg,
+                                "ratio":      ratio,
+                                "level":      level,
+                                "pass":       ratio >= 4.5,
+                                "preview":    str(raw)[:40],
+                            })
+                            checked = True
+                            break
+                if checked:
+                    break
+
+            if not checked:
+                # Use default black text assumption
+                ratio = _contrast_ratio("#000000", slide_bg)
+                if ratio is not None and ratio < 4.5:
+                    results.append({
+                        "slide_n":    n,
+                        "element_id": eid,
+                        "text_color": "#000000",
+                        "bg_color":   slide_bg,
+                        "ratio":      ratio,
+                        "level":      "Fail",
+                        "pass":       False,
+                        "preview":    str(raw)[:40],
+                    })
+
+    passing = sum(1 for r in results if r["pass"])
+    return {
+        "results":    results,
+        "total":      len(results),
+        "passing":    passing,
+        "failing":    len(results) - passing,
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── AI Q&A Prep ───────────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slides/{n}/qa-prep")
+def qa_prep(doc_id: str, n: int, count: int = 5):
+    """AI generates likely audience questions for a slide for speaker preparation."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if not slide:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    text_parts = [str(getattr(el, "text_content", "") or "")
+                  for el in slide.elements if getattr(el, "text_content", None)]
+    slide_text = " ".join(text_parts)[:800]
+
+    prompt = (
+        f"You are a presentation coach. Based on this slide content, generate {count} likely "
+        "questions an audience member might ask.\n\n"
+        f"Slide content:\n{slide_text or '(no text on this slide)'}\n\n"
+        "Return a JSON object with this shape (no markdown):\n"
+        '{"questions": [{"question": "...", "suggested_answer": "...", "difficulty": "easy|medium|hard"}]}'
+    )
+    try:
+        import anthropic as _anthropic
+        import json as _json
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw_text = msg.content[0].text.strip()
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("```")[1]
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:]
+        result = _json.loads(raw_text)
+    except Exception as exc:
+        raise HTTPException(500, f"Q&A prep failed: {exc}") from exc
+
+    return {
+        "slide_n":   n,
+        "questions": result.get("questions", []),
+        "count":     len(result.get("questions", [])),
+    }
+
+
+# ── Clone Slides to New Doc ────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/clone-slides")
+def clone_slides(doc_id: str, slide_numbers: list[int], new_doc_name: str = "Cloned Slides"):
+    """Clone selected slides into a brand-new document."""
+    import copy as _copy
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    selected = [s for s in doc.slides if s.slide_number in slide_numbers]
+    if not selected:
+        raise HTTPException(400, "No matching slides found")
+
+    # Build new doc skeleton
+    new_doc = _copy.deepcopy(doc)
+    new_doc.slides = []
+    for i, slide in enumerate(sorted(selected, key=lambda s: s.slide_number), 1):
+        new_slide = _copy.deepcopy(slide)
+        new_slide.slide_number = i
+        new_doc.slides.append(new_slide)
+
+    import uuid as _uuid
+    new_id = _uuid.uuid4().hex[:12]
+    new_doc_dir = _CACHE_DIR / new_id
+    new_doc_dir.mkdir(parents=True, exist_ok=True)
+
+    # Serialize new doc
+    import pickle as _pickle
+    with open(new_doc_dir / "doc.pkl", "wb") as f:
+        _pickle.dump(new_doc, f)
+
+    _DOCS[new_id] = {
+        "doc":       new_doc,
+        "name":      new_doc_name,
+        "source":    f"cloned-from-{doc_id}",
+        "upload_ts": __import__("time").time(),
+    }
+
+    return {
+        "new_doc_id":   new_id,
+        "new_doc_name": new_doc_name,
+        "cloned_slides": len(selected),
+        "slide_numbers": slide_numbers,
+    }
+
+
+# ── AI Slide Summarizer ────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/summarize-slides")
+def summarize_slides(doc_id: str, apply_to_notes: bool = False):
+    """AI generates a one-sentence summary for each slide."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    results = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        parts = []
+        for el in slide.elements:
+            raw = getattr(el, "text_content", None)
+            if raw:
+                parts.append(str(raw)[:300])
+        slide_text = " ".join(parts)[:600]
+
+        if not slide_text.strip():
+            results.append({"slide_n": n, "summary": "(no text content)"})
+            continue
+
+        prompt = (
+            f"Summarize this presentation slide content in exactly one clear, informative sentence.\n\n"
+            f"Content: {slide_text}\n\n"
+            "Output ONLY the summary sentence, nothing else."
+        )
+        try:
+            import anthropic as _anthropic
+            client = _anthropic.Anthropic()
+            msg = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=80,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            summary = msg.content[0].text.strip()
+        except Exception as exc:
+            summary = "(summary failed)"
+            log.warning("summarize-slides: slide %d failed: %s", n, exc)
+
+        results.append({"slide_n": n, "summary": summary})
+
+    if apply_to_notes:
+        _snapshot_doc(doc_id)
+        for res in results:
+            slide = next((s for s in doc.slides if s.slide_number == res["slide_n"]), None)
+            if slide and res["summary"] and res["summary"] != "(no text content)":
+                existing = getattr(slide, "notes", None) or ""
+                if existing:
+                    slide.notes = f"Summary: {res['summary']}\n\n{existing}"
+                else:
+                    slide.notes = f"Summary: {res['summary']}"
+
+    return {
+        "summaries":   results,
+        "total":       len(results),
+        "applied":     apply_to_notes,
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── Note Templates ─────────────────────────────────────────────────────────────
+
+_NOTE_TEMPLATES = {
+    "intro": (
+        "OPENING\n"
+        "• Welcome / housekeeping\n"
+        "• Today I'll cover: [overview]\n"
+        "• Why this matters: [hook]\n"
+        "\nTRANSITION → [next topic]"
+    ),
+    "main": (
+        "KEY POINT\n"
+        "• Main message: [one sentence]\n"
+        "• Supporting evidence: [data/example]\n"
+        "• Anticipated question: [question + answer]\n"
+        "\nTRANSITION → [next slide]"
+    ),
+    "transition": (
+        "BRIDGE\n"
+        "• We just covered: [previous topic]\n"
+        "• Now let's look at: [next topic]\n"
+        "• Connection: [why this flows logically]"
+    ),
+    "cta": (
+        "CALL TO ACTION\n"
+        "• The ask: [specific request]\n"
+        "• Timeline: [when]\n"
+        "• Next steps: [1. 2. 3.]\n"
+        "• Close with: [memorable line]"
+    ),
+    "data": (
+        "DATA SLIDE\n"
+        "• What this chart shows: [one sentence]\n"
+        "• The surprising part: [insight]\n"
+        "• Why it matters: [implication]\n"
+        "• Caveats: [limitations if any]"
+    ),
+}
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/note-template")
+def note_template(doc_id: str, n: int, template: str = "main", overwrite: bool = False):
+    """Insert a structured speaker note template into a slide."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if not slide:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    if template not in _NOTE_TEMPLATES:
+        raise HTTPException(400, f"Unknown template '{template}'. Options: {list(_NOTE_TEMPLATES.keys())}")
+
+    tpl_text = _NOTE_TEMPLATES[template]
+    existing = getattr(slide, "notes", None) or ""
+
+    _snapshot_doc(doc_id)
+    if overwrite or not existing.strip():
+        slide.notes = tpl_text
+    else:
+        slide.notes = f"{existing}\n\n--- Template ---\n{tpl_text}"
+
+    return {
+        "slide_n":  n,
+        "template": template,
+        "notes":    slide.notes,
+        "overwrote": overwrite,
+    }
+
+
+# ── Keyword Spotlight ──────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/keyword-spotlight")
+def keyword_spotlight(doc_id: str, keyword: str, case_sensitive: bool = False):
+    """Find all slides and elements containing a keyword."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    if not keyword.strip():
+        raise HTTPException(400, "keyword must not be empty")
+
+    search = keyword if case_sensitive else keyword.lower()
+    matches = []
+
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        slide_hits = []
+        for el in slide.elements:
+            raw = getattr(el, "text_content", None)
+            if not raw:
+                continue
+            text = str(raw)
+            compare = text if case_sensitive else text.lower()
+            count = compare.count(search)
+            if count > 0:
+                eid   = getattr(el, "element_id", "?")
+                role  = getattr(el, "role", "") or ""
+                slide_hits.append({
+                    "element_id": eid,
+                    "role":       role,
+                    "count":      count,
+                    "preview":    text[:120],
+                })
+        if slide_hits:
+            matches.append({
+                "slide_n": n,
+                "elements": slide_hits,
+                "total_hits": sum(h["count"] for h in slide_hits),
+            })
+
+    return {
+        "keyword":     keyword,
+        "matches":     matches,
+        "total_slides": len(matches),
+        "total_hits":   sum(m["total_hits"] for m in matches),
+        "slide_count":  len(doc.slides),
+    }
+
+
+# ── Emoji Remover ─────────────────────────────────────────────────────────────
+
+def _strip_emoji(text: str) -> str:
+    """Remove emoji and symbol characters from a string."""
+    import unicodedata
+    result = []
+    for ch in text:
+        cp = ord(ch)
+        # Emoji ranges + symbol blocks
+        if (
+            0x1F600 <= cp <= 0x1F64F  # Emoticons
+            or 0x1F300 <= cp <= 0x1F5FF  # Misc Symbols
+            or 0x1F680 <= cp <= 0x1F6FF  # Transport
+            or 0x1F700 <= cp <= 0x1F77F
+            or 0x1F780 <= cp <= 0x1F7FF
+            or 0x1F800 <= cp <= 0x1F8FF
+            or 0x1F900 <= cp <= 0x1F9FF
+            or 0x1FA00 <= cp <= 0x1FA6F
+            or 0x1FA70 <= cp <= 0x1FAFF
+            or 0x2600  <= cp <= 0x26FF   # Misc symbols
+            or 0x2700  <= cp <= 0x27BF   # Dingbats
+            or 0xFE00  <= cp <= 0xFE0F   # Variation selectors
+            or 0x1F1E0 <= cp <= 0x1F1FF  # Flags
+        ):
+            continue
+        cat = unicodedata.category(ch)
+        if cat.startswith("So"):  # Symbol, other
+            continue
+        result.append(ch)
+    return "".join(result).strip()
+
+
+@app.post("/api/docs/{doc_id}/remove-emoji")
+def remove_emoji(doc_id: str, slide_numbers: list[int] | None = None):
+    """Strip all emoji from text elements in the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    target = [s for s in doc.slides if not slide_numbers or s.slide_number in slide_numbers]
+    _snapshot_doc(doc_id)
+
+    changed_slides = set()
+    total_removed  = 0
+    for slide in target:
+        for el in slide.elements:
+            raw = getattr(el, "text_content", None)
+            if not raw:
+                continue
+            cleaned = _strip_emoji(str(raw))
+            if cleaned != str(raw):
+                _apply_plain_text_to_element(el, cleaned)
+                changed_slides.add(slide.slide_number)
+                total_removed += len(str(raw)) - len(cleaned)
+
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    if changed_slides:
+        try:
+            from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+            _rbs(doc, bridge_dir, slide_numbers=list(changed_slides))
+        except Exception as exc:
+            log.warning("remove-emoji: re-render failed (non-fatal): %s", exc)
+
+    return {
+        "changed_slides": sorted(changed_slides),
+        "total_chars_removed": total_removed,
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── Text Statistics ────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/text-stats")
+def text_stats(doc_id: str):
+    """Detailed per-slide and deck-level text statistics."""
+    import re as _re
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    deck_words_total = 0
+    deck_unique_total: set[str] = set()
+    slide_stats = []
+
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        all_text = []
+        for el in slide.elements:
+            raw = getattr(el, "text_content", None)
+            if raw:
+                all_text.append(str(raw))
+        combined = " ".join(all_text)
+        words = _re.findall(r"\b\w+\b", combined.lower())
+        sentences = _re.split(r"[.!?]+", combined)
+        sentences = [s.strip() for s in sentences if len(s.strip()) > 3]
+        unique = set(words)
+        word_count = len(words)
+        avg_word_len = round(sum(len(w) for w in words) / max(word_count, 1), 1)
+        avg_sent_len = round(word_count / max(len(sentences), 1), 1)
+        long_sentences = sum(1 for s in sentences if len(s.split()) > 25)
+
+        deck_words_total += word_count
+        deck_unique_total |= unique
+
+        slide_stats.append({
+            "slide_n":         n,
+            "word_count":      word_count,
+            "unique_words":    len(unique),
+            "sentence_count":  len(sentences),
+            "avg_word_length": avg_word_len,
+            "avg_sentence_length": avg_sent_len,
+            "long_sentences":  long_sentences,
+            "char_count":      len(combined),
+        })
+
+    return {
+        "slides":            slide_stats,
+        "deck_word_count":   deck_words_total,
+        "deck_unique_words": len(deck_unique_total),
+        "slide_count":       len(slide_stats),
+        "avg_words_per_slide": round(deck_words_total / max(len(slide_stats), 1), 1),
+    }
+
+
+# ── Auto-Capitalize Titles ─────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/capitalize-titles")
+def capitalize_titles(doc_id: str, style: str = "title", slide_numbers: list[int] | None = None):
+    """
+    Capitalize slide title elements.
+    style: 'title' (Title Case), 'sentence' (Sentence case), 'upper' (UPPER CASE)
+    """
+    import re as _re
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    TITLE_CASE_EXCEPTIONS = {"a","an","and","as","at","but","by","en","for","if","in","nor","of","on","or","per","the","to","v","via","vs","with"}
+
+    def _apply_style(text: str, s: str) -> str:
+        if s == "upper":
+            return text.upper()
+        if s == "sentence":
+            return text.capitalize()
+        # Title case
+        words = text.split()
+        result = []
+        for i, w in enumerate(words):
+            if i == 0 or i == len(words) - 1 or w.lower() not in TITLE_CASE_EXCEPTIONS:
+                result.append(w.capitalize())
+            else:
+                result.append(w.lower())
+        return " ".join(result)
+
+    target = [s for s in doc.slides if not slide_numbers or s.slide_number in slide_numbers]
+    _snapshot_doc(doc_id)
+
+    changed_slides = []
+    results = []
+    for slide in target:
+        n = slide.slide_number
+        for el in slide.elements:
+            role = getattr(el, "role", "") or ""
+            if role not in ("title", "heading"):
+                continue
+            raw = getattr(el, "text_content", None)
+            if not raw:
+                continue
+            original = str(raw)
+            new_text = _apply_style(original, style)
+            if new_text != original:
+                _apply_plain_text_to_element(el, new_text)
+                changed_slides.append(n)
+                results.append({"slide_n": n, "original": original, "new": new_text})
+
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    if changed_slides:
+        try:
+            from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+            _rbs(doc, bridge_dir, slide_numbers=list(set(changed_slides)))
+        except Exception as exc:
+            log.warning("capitalize-titles: re-render failed (non-fatal): %s", exc)
+
+    return {
+        "changed":         len(results),
+        "results":         results,
+        "style":           style,
+        "affected_slides": sorted(set(changed_slides)),
+    }
+
+
+# ── Pull Quote Highlighter ────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/pull-quotes")
+def pull_quotes(doc_id: str):
+    """AI identifies the single most impactful/quotable line from each slide."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    results = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        parts = []
+        for el in slide.elements:
+            raw = getattr(el, "text_content", None)
+            if raw:
+                parts.append(str(raw)[:300])
+        slide_text = " ".join(parts).strip()
+
+        if not slide_text:
+            results.append({"slide_n": n, "quote": None, "reason": "(no text)"})
+            continue
+
+        prompt = (
+            "From the following presentation slide content, identify the single most memorable, "
+            "impactful, or quotable line — something a presenter might read aloud or put on a "
+            "social media post.\n\n"
+            f"Slide content:\n{slide_text}\n\n"
+            "Return a JSON object (no markdown):\n"
+            '{"quote": "...", "reason": "..."}'
+        )
+        try:
+            import anthropic as _anthropic
+            import json as _json
+            client = _anthropic.Anthropic()
+            msg = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=150,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw_text = msg.content[0].text.strip()
+            if raw_text.startswith("```"):
+                raw_text = raw_text.split("```")[1]
+                if raw_text.startswith("json"):
+                    raw_text = raw_text[4:]
+            obj = _json.loads(raw_text)
+            results.append({"slide_n": n, "quote": obj.get("quote"), "reason": obj.get("reason", "")})
+        except Exception as exc:
+            results.append({"slide_n": n, "quote": None, "reason": f"(error: {exc})"})
+
+    return {
+        "quotes":      results,
+        "total":       sum(1 for r in results if r["quote"]),
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── Slide Flow Feedback ────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/flow-feedback")
+def flow_feedback(doc_id: str):
+    """AI reviews the deck's narrative arc and provides structured flow critique."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    outline_parts = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        titles = []
+        for el in slide.elements:
+            role = getattr(el, "role", "") or ""
+            raw  = getattr(el, "text_content", None)
+            if raw and role in ("title", "heading") and not titles:
+                titles.append(str(raw)[:80])
+        outline_parts.append(f"Slide {n}: {titles[0] if titles else '(no title)'}")
+
+    outline_text = "\n".join(outline_parts)
+    prompt = (
+        "You are a presentation coach. Review this slide outline and evaluate the narrative flow.\n\n"
+        f"Outline:\n{outline_text}\n\n"
+        "Provide structured feedback in JSON (no markdown):\n"
+        '{'
+        '"opening": {"score": 1-10, "feedback": "..."},'
+        '"middle": {"score": 1-10, "feedback": "..."},'
+        '"closing": {"score": 1-10, "feedback": "..."},'
+        '"transitions": {"score": 1-10, "feedback": "..."},'
+        '"overall_score": 1-10,'
+        '"strengths": ["...", "..."],'
+        '"improvements": ["...", "..."],'
+        '"summary": "..."'
+        '}'
+    )
+    try:
+        import anthropic as _anthropic
+        import json as _json
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw_text = msg.content[0].text.strip()
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("```")[1]
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:]
+        result = _json.loads(raw_text)
+    except Exception as exc:
+        raise HTTPException(500, f"Flow feedback failed: {exc}") from exc
+
+    return {**result, "slide_count": len(doc.slides)}
+
+
+# ── Footnote Inserter ─────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slides/{n}/add-footnote")
+def add_footnote(doc_id: str, n: int, text: str, font_size: int = 8):
+    """Add a small footnote text element at the bottom of a slide."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if not slide:
+        raise HTTPException(404, f"Slide {n} not found")
+    if not text.strip():
+        raise HTTPException(400, "text must not be empty")
+
+    _snapshot_doc(doc_id)
+
+    from percy.bridge.models import (  # type: ignore[attr-defined]
+        BridgeShape, Position,
+        TextParagraph, TextRun, ParagraphFormat, RunFormat,
+    )
+    footnote_id = f"footnote_{n}_{int(__import__('time').time())}"
+    footnote_shape = BridgeShape(
+        element_id=footnote_id,
+        element_type="text",
+        position=Position(left=0.4, top=6.8, width=9.2, height=0.35),
+        text_content=text,
+        role="footnote",
+        paragraphs=[
+            TextParagraph(
+                runs=[TextRun(text=text, fmt=RunFormat(font_size=font_size, color="#888888"))],
+                fmt=ParagraphFormat(),
+            )
+        ],
+    )
+    slide.elements.append(footnote_shape)
+
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    try:
+        from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+        _rbs(doc, bridge_dir, slide_numbers=[n])
+    except Exception as exc:
+        log.warning("add-footnote: re-render failed (non-fatal): %s", exc)
+
+    return {"slide_n": n, "element_id": footnote_id, "text": text}
+
+
+# ── Bulk Notes Copy ────────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slides/{n}/copy-notes-to")
+def copy_notes_to(doc_id: str, n: int, target_slides: list[int], overwrite: bool = False):
+    """Copy speaker notes from slide n to a list of target slides."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+    src = next((s for s in doc.slides if s.slide_number == n), None)
+    if not src:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    src_notes = getattr(src, "notes", None) or ""
+    if not src_notes.strip():
+        return {"copied_to": [], "message": f"Slide {n} has no notes to copy"}
+
+    _snapshot_doc(doc_id)
+    copied_to = []
+    for slide in doc.slides:
+        if slide.slide_number in target_slides and slide.slide_number != n:
+            existing = getattr(slide, "notes", None) or ""
+            if overwrite or not existing.strip():
+                slide.notes = src_notes
+                copied_to.append(slide.slide_number)
+
+    return {
+        "source_slide": n,
+        "copied_to":    copied_to,
+        "skipped":      len(target_slides) - len(copied_to),
+        "notes_length": len(src_notes),
+    }
+
+
+# ── Slide Word Cloud Data ─────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slides/{n}/word-cloud")
+def slide_word_cloud(doc_id: str, n: int, top_n: int = 40):
+    """Return word frequency data for word cloud visualization on a slide."""
+    import re as _re
+    import collections as _collections
+
+    _STOPWORDS = {
+        "a","an","the","and","or","but","in","on","at","to","for","of","with","is",
+        "was","are","were","be","been","have","has","had","do","does","did","will",
+        "would","could","should","may","might","that","this","these","those","it",
+        "its","we","you","he","she","they","our","your","their","by","as","from",
+        "not","no","so","if","i","all","also","into","which","who","when","where",
+    }
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if not slide:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    all_text = []
+    for el in slide.elements:
+        raw = getattr(el, "text_content", None)
+        if raw:
+            all_text.append(str(raw))
+    combined = " ".join(all_text)
+    words = _re.findall(r"\b[a-zA-Z]{3,}\b", combined.lower())
+    words = [w for w in words if w not in _STOPWORDS]
+    counts = _collections.Counter(words).most_common(top_n)
+
+    if not counts:
+        return {"slide_n": n, "words": [], "total_words": 0}
+
+    max_count = counts[0][1]
+    return {
+        "slide_n": n,
+        "words": [
+            {"word": w, "count": c, "weight": round(c / max_count, 3)}
+            for w, c in counts
+        ],
+        "total_words": len(words),
+    }
+
+
+# ── Deck Text Export ──────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/text-export")
+def text_export(doc_id: str, include_notes: bool = False, fmt: str = "txt"):
+    """Export all slide text as a plain-text or markdown file."""
+    from fastapi.responses import PlainTextResponse
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    parts = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        slide_parts = [f"=== Slide {n} ==="]
+        for el in slide.elements:
+            raw = getattr(el, "text_content", None)
+            if raw:
+                role = getattr(el, "role", "") or ""
+                if fmt == "md":
+                    if role in ("title", "heading"):
+                        slide_parts.append(f"## {str(raw)}")
+                    else:
+                        slide_parts.append(str(raw))
+                else:
+                    slide_parts.append(str(raw))
+        if include_notes:
+            notes = getattr(slide, "notes", None) or ""
+            if notes.strip():
+                slide_parts.append(f"\n[Notes: {notes}]")
+        parts.append("\n".join(slide_parts))
+
+    content = "\n\n".join(parts)
+    ext = "md" if fmt == "md" else "txt"
+    return PlainTextResponse(
+        content,
+        headers={
+            "Content-Disposition": f'attachment; filename="deck-text-{doc_id[:8]}.{ext}"',
+            "Content-Type": "text/plain; charset=utf-8",
+        },
+    )
+
+
+# ── Color Palette Extractor ───────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/color-palette")
+def color_palette(doc_id: str):
+    """Extract all unique colors used in the deck (text, backgrounds, fills)."""
+    import collections as _collections
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    color_counts: _collections.Counter = _collections.Counter()
+    color_roles: dict[str, set] = {}
+
+    for slide in doc.slides:
+        # Background
+        bg = getattr(getattr(slide, "background", None), "fill_color", None)
+        if bg and bg.startswith("#"):
+            bg = bg.upper()
+            color_counts[bg] += 1
+            color_roles.setdefault(bg, set()).add("background")
+
+        for el in slide.elements:
+            # Text run colors
+            for para in (getattr(el, "paragraphs", None) or []):
+                for run in getattr(para, "runs", []):
+                    fmt = getattr(run, "fmt", None)
+                    c = getattr(fmt, "color", None) if fmt else None
+                    if c and c.startswith("#"):
+                        c = c.upper()
+                        color_counts[c] += 1
+                        color_roles.setdefault(c, set()).add("text")
+
+            # Element fill
+            fill = getattr(getattr(el, "style", None), "fill_color", None)
+            if fill and fill.startswith("#"):
+                fill = fill.upper()
+                color_counts[fill] += 1
+                color_roles.setdefault(fill, set()).add("fill")
+
+    colors = [
+        {"hex": c, "count": color_counts[c], "roles": sorted(color_roles.get(c, set()))}
+        for c in sorted(color_counts, key=lambda x: -color_counts[x])
+    ]
+    return {
+        "colors":      colors,
+        "total_unique": len(colors),
+        "slide_count":  len(doc.slides),
+    }
+
+
+# ── Slide Custom Labels ────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slides/{n}/label")
+def set_slide_label(doc_id: str, n: int, label: str, color: str = "#6366f1"):
+    """Set a custom label/category on a slide (stored in slide metadata)."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if not slide:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    if not hasattr(slide, "custom_labels"):
+        object.__setattr__(slide, "custom_labels", []) if hasattr(slide, "__setattr__") else None
+        try:
+            slide.custom_labels = []
+        except Exception:
+            pass
+
+    try:
+        labels = getattr(slide, "custom_labels", [])
+        if not isinstance(labels, list):
+            labels = []
+        if label not in labels:
+            labels.append(label)
+        slide.custom_labels = labels
+    except Exception:
+        pass
+
+    return {"slide_n": n, "label": label, "color": color}
+
+
+@app.delete("/api/docs/{doc_id}/slides/{n}/label/{label}")
+def remove_slide_label(doc_id: str, n: int, label: str):
+    """Remove a custom label from a slide."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if not slide:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    try:
+        labels = getattr(slide, "custom_labels", [])
+        if isinstance(labels, list) and label in labels:
+            labels.remove(label)
+            slide.custom_labels = labels
+    except Exception:
+        pass
+
+    return {"slide_n": n, "removed": label}
+
+
+@app.get("/api/docs/{doc_id}/labels")
+def list_all_labels(doc_id: str):
+    """Return all custom labels used in the deck and which slides have them."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    label_map: dict[str, list[int]] = {}
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        labels = getattr(slide, "custom_labels", []) or []
+        for lbl in labels:
+            label_map.setdefault(lbl, []).append(slide.slide_number)
+
+    return {
+        "labels": [{"label": k, "slides": v} for k, v in sorted(label_map.items())],
+        "total_labels": len(label_map),
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── AI Deck Title Suggester ───────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/suggest-titles")
+def suggest_deck_titles(doc_id: str, count: int = 5, style: str = "professional"):
+    """AI generates multiple title options for the whole deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    # Collect slide titles and body text
+    parts = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number)[:8]:
+        for el in slide.elements:
+            role = getattr(el, "role", "") or ""
+            raw  = getattr(el, "text_content", None)
+            if raw and role in ("title", "heading"):
+                parts.append(str(raw)[:80])
+    summary = "; ".join(parts[:6]) or "(no titles found)"
+
+    prompt = (
+        f"You are a presentation expert. Based on these slide titles from a presentation, "
+        f"suggest {count} compelling {style} titles for the whole deck.\n\n"
+        f"Slide titles: {summary}\n\n"
+        "Return a JSON object (no markdown):\n"
+        '{"titles": [{"title": "...", "rationale": "..."}]}'
+    )
+    try:
+        import anthropic as _anthropic
+        import json as _json
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw_text = msg.content[0].text.strip()
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("```")[1]
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:]
+        result = _json.loads(raw_text)
+    except Exception as exc:
+        raise HTTPException(500, f"Title suggestion failed: {exc}") from exc
+
+    return {
+        "titles":      result.get("titles", []),
+        "style":       style,
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── Blank Slide Detector ───────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/blank-slides")
+def blank_slides(doc_id: str, min_words: int = 3):
+    """Find slides with no or very little text content."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    blank = []
+    sparse = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        total_words = 0
+        el_count = len(slide.elements)
+        for el in slide.elements:
+            raw = getattr(el, "text_content", None)
+            if raw:
+                total_words += len(str(raw).split())
+
+        if total_words == 0 and el_count == 0:
+            blank.append({"slide_n": n, "words": 0, "elements": 0, "type": "empty"})
+        elif total_words == 0:
+            blank.append({"slide_n": n, "words": 0, "elements": el_count, "type": "no_text"})
+        elif total_words < min_words:
+            sparse.append({"slide_n": n, "words": total_words, "elements": el_count, "type": "sparse"})
+
+    return {
+        "blank":   blank,
+        "sparse":  sparse,
+        "total_empty": len(blank),
+        "total_sparse": len(sparse),
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── Slide Description Generator ───────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slides/{n}/describe")
+def describe_slide(doc_id: str, n: int, apply_to_notes: bool = False):
+    """AI generates a plain-language description of the whole slide for accessibility."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if not slide:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    parts = []
+    for el in slide.elements:
+        raw  = getattr(el, "text_content", None)
+        role = getattr(el, "role", "") or ""
+        etype = getattr(el, "element_type", "") or ""
+        if raw:
+            parts.append(f"[{role or etype}] {str(raw)[:200]}")
+        elif etype in ("image", "picture"):
+            alt = getattr(el, "alt_text", None) or ""
+            parts.append(f"[image]{' - ' + alt if alt else ''}")
+    content = "\n".join(parts) or "(empty slide)"
+
+    prompt = (
+        "Write a concise, descriptive plain-English description of this slide for accessibility purposes. "
+        "The description should help a visually impaired person understand what the slide contains and conveys.\n\n"
+        f"Slide elements:\n{content}\n\n"
+        "Write 2-3 sentences. Start with the slide's main point."
+    )
+    try:
+        import anthropic as _anthropic
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=120,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        description = msg.content[0].text.strip()
+    except Exception as exc:
+        raise HTTPException(500, f"Description failed: {exc}") from exc
+
+    if apply_to_notes:
+        _snapshot_doc(doc_id)
+        existing = getattr(slide, "notes", None) or ""
+        prefix = f"Slide description: {description}\n\n"
+        slide.notes = prefix + existing if existing else prefix.rstrip()
+
+    return {"slide_n": n, "description": description, "applied": apply_to_notes}
+
+
+# ── Numbered List Fixer ────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/fix-numbered-lists")
+def fix_numbered_lists(doc_id: str, slide_numbers: list[int] | None = None):
+    """
+    Normalize numbered lists — ensure sequential numbering, consistent periods.
+    Detects text like '1)', '1.', '1-' and normalizes to '1. '
+    """
+    import re as _re
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    target = [s for s in doc.slides if not slide_numbers or s.slide_number in slide_numbers]
+    _snapshot_doc(doc_id)
+
+    fixed_slides = set()
+    total_fixed  = 0
+
+    list_pat = _re.compile(r"^(\d+)[.):\-]\s*")
+
+    for slide in target:
+        for el in slide.elements:
+            raw = getattr(el, "text_content", None)
+            if not raw:
+                continue
+            lines = str(raw).split("\n")
+            # Check if this looks like a numbered list
+            numbered = [l for l in lines if list_pat.match(l.strip())]
+            if len(numbered) < 2:
+                continue
+            # Rebuild with consistent numbering
+            new_lines = []
+            counter = 1
+            for line in lines:
+                m = list_pat.match(line.strip())
+                if m:
+                    rest = line.strip()[m.end():]
+                    new_lines.append(f"{counter}. {rest}")
+                    counter += 1
+                else:
+                    new_lines.append(line)
+            new_text = "\n".join(new_lines)
+            if new_text != str(raw):
+                _apply_plain_text_to_element(el, new_text)
+                fixed_slides.add(slide.slide_number)
+                total_fixed += 1
+
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    if fixed_slides:
+        try:
+            from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+            _rbs(doc, bridge_dir, slide_numbers=list(fixed_slides))
+        except Exception as exc:
+            log.warning("fix-numbered-lists: re-render failed (non-fatal): %s", exc)
+
+    return {
+        "fixed":          total_fixed,
+        "affected_slides": sorted(fixed_slides),
+        "slide_count":    len(doc.slides),
+    }
+
+
+# ── Slide Progress Tracker ─────────────────────────────────────────────────────
+
+_SLIDE_STATUSES = ("todo", "in-progress", "done", "needs-review")
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/status")
+def set_slide_status(doc_id: str, n: int, status: str):
+    """Set workflow status on a slide (todo/in-progress/done/needs-review)."""
+    if status not in _SLIDE_STATUSES:
+        raise HTTPException(400, f"Invalid status. Options: {_SLIDE_STATUSES}")
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if not slide:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    try:
+        slide.workflow_status = status
+    except Exception:
+        try:
+            object.__setattr__(slide, "workflow_status", status)
+        except Exception:
+            pass
+
+    return {"slide_n": n, "status": status}
+
+
+@app.get("/api/docs/{doc_id}/slide-statuses")
+def get_slide_statuses(doc_id: str):
+    """Return workflow status for all slides."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    statuses = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        status = getattr(slide, "workflow_status", "todo")
+        statuses.append({"slide_n": slide.slide_number, "status": status})
+
+    counts = {s: sum(1 for r in statuses if r["status"] == s) for s in _SLIDE_STATUSES}
+    return {
+        "statuses":   statuses,
+        "counts":     counts,
+        "slide_count": len(statuses),
+    }
+
+
+# ── Highlight Reel ─────────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/highlight-reel")
+def highlight_reel(doc_id: str, count: int = 5):
+    """AI picks the N most impactful slides from the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    outline = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        parts = []
+        for el in slide.elements:
+            raw = getattr(el, "text_content", None)
+            if raw:
+                parts.append(str(raw)[:150])
+        outline.append(f"Slide {n}: {' | '.join(parts)[:200]}")
+
+    outline_text = "\n".join(outline)
+    prompt = (
+        f"You are a presentation strategist. From this deck outline, pick the {count} most impactful, "
+        "memorable, or essential slides — the ones that best represent the deck's core message.\n\n"
+        f"Outline:\n{outline_text}\n\n"
+        "Return a JSON object (no markdown):\n"
+        '{"highlights": [{"slide_n": 1, "reason": "..."}]}'
+    )
+    try:
+        import anthropic as _anthropic
+        import json as _json
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw_text = msg.content[0].text.strip()
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("```")[1]
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:]
+        result = _json.loads(raw_text)
+    except Exception as exc:
+        raise HTTPException(500, f"Highlight reel failed: {exc}") from exc
+
+    return {
+        "highlights":  result.get("highlights", []),
+        "count":       len(result.get("highlights", [])),
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── Font Audit ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/font-audit")
+def font_audit(doc_id: str):
+    """Report all fonts used in the deck and where they appear."""
+    import collections as _collections
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    font_data: dict[str, dict] = {}  # font_name -> {slides: set, count: int}
+
+    for slide in doc.slides:
+        n = slide.slide_number
+        for el in slide.elements:
+            for para in (getattr(el, "paragraphs", None) or []):
+                for run in getattr(para, "runs", []):
+                    fmt = getattr(run, "fmt", None)
+                    font = getattr(fmt, "font_name", None) if fmt else None
+                    if font and isinstance(font, str) and font.strip():
+                        key = font.strip()
+                        if key not in font_data:
+                            font_data[key] = {"slides": set(), "count": 0}
+                        font_data[key]["slides"].add(n)
+                        font_data[key]["count"] += 1
+
+    fonts = sorted(
+        [{"font": k, "count": v["count"], "slides": sorted(v["slides"])} for k, v in font_data.items()],
+        key=lambda x: -x["count"],
+    )
+
+    return {
+        "fonts":       fonts,
+        "total_fonts": len(fonts),
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── Executive Briefing Generator ─────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/executive-briefing")
+def executive_briefing(doc_id: str, fmt: str = "md"):
+    """AI generates a 1-page executive briefing document from the deck."""
+    from fastapi.responses import PlainTextResponse
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    # Collect full deck content
+    slides_content = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        parts = []
+        for el in slide.elements:
+            raw = getattr(el, "text_content", None)
+            if raw:
+                parts.append(str(raw)[:200])
+        if parts:
+            slides_content.append(f"Slide {n}: {' | '.join(parts[:3])}")
+
+    deck_text = "\n".join(slides_content)[:3000]
+    prompt = (
+        "You are an executive communication expert. Based on this presentation content, "
+        "write a 1-page executive briefing document.\n\n"
+        "The briefing should include:\n"
+        "1. Executive Summary (2-3 sentences)\n"
+        "2. Key Points (3-5 bullet points)\n"
+        "3. Recommendations or Next Steps (2-3 items)\n"
+        "4. Key Metrics or Data Points (if any)\n\n"
+        f"Presentation content:\n{deck_text}\n\n"
+        "Write in a professional, concise style appropriate for senior executives."
+    )
+    try:
+        import anthropic as _anthropic
+        client = _anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        briefing = msg.content[0].text.strip()
+    except Exception as exc:
+        raise HTTPException(500, f"Briefing generation failed: {exc}") from exc
+
+    ext = "md" if fmt == "md" else "txt"
+    return PlainTextResponse(
+        briefing,
+        headers={
+            "Content-Disposition": f'attachment; filename="executive-briefing-{doc_id[:8]}.{ext}"',
+            "Content-Type": "text/plain; charset=utf-8",
+        },
+    )
+
+
+# ── Slide Margin Checker ──────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/margin-check")
+def margin_check(doc_id: str, margin_in: float = 0.3):
+    """Check which elements are too close to slide edges (within margin_in inches)."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    SLIDE_W, SLIDE_H = 10.0, 7.5
+    violations = []
+
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        slide_n = slide.slide_number
+        for el in slide.elements:
+            pos = getattr(el, "position", None)
+            if not pos:
+                continue
+            left   = getattr(pos, "left",   0.0)
+            top    = getattr(pos, "top",    0.0)
+            width  = getattr(pos, "width",  1.0)
+            height = getattr(pos, "height", 0.5)
+            eid   = getattr(el, "element_id", "?")
+            raw   = getattr(el, "text_content", None)
+            label = str(raw)[:40] if raw else getattr(el, "element_type", "?")
+
+            if left < margin_in:
+                violations.append({"slide_n": slide_n, "element_id": eid, "element_name": label, "side": "left",   "distance_in": round(left, 3),           "margin_in": margin_in})
+            if top < margin_in:
+                violations.append({"slide_n": slide_n, "element_id": eid, "element_name": label, "side": "top",    "distance_in": round(top, 3),            "margin_in": margin_in})
+            if left + width > SLIDE_W - margin_in:
+                violations.append({"slide_n": slide_n, "element_id": eid, "element_name": label, "side": "right",  "distance_in": round(SLIDE_W - left - width, 3), "margin_in": margin_in})
+            if top + height > SLIDE_H - margin_in:
+                violations.append({"slide_n": slide_n, "element_id": eid, "element_name": label, "side": "bottom", "distance_in": round(SLIDE_H - top - height, 3),  "margin_in": margin_in})
+
+    return {
+        "violations":  violations,
+        "total":       len(violations),
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── Slide Clone to Position ───────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slides/{n}/clone-to")
+def clone_slide_to(doc_id: str, n: int, position: int):
+    """Clone slide n and insert the copy at position."""
+    import copy as _copy
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if not slide:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    total = len(doc.slides)
+    position = max(1, min(position, total + 1))
+
+    _snapshot_doc(doc_id)
+
+    # Shift slides at or after position
+    for s in doc.slides:
+        if s.slide_number >= position:
+            s.slide_number += 1
+
+    # Create the clone
+    new_slide = _copy.deepcopy(slide)
+    new_slide.slide_number = position
+    doc.slides.append(new_slide)
+    doc.slides.sort(key=lambda s: s.slide_number)
+
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    try:
+        from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+        _rbs(doc, bridge_dir, slide_numbers=[position])
+    except Exception as exc:
+        log.warning("clone-to: re-render failed (non-fatal): %s", exc)
+
+    return {
+        "cloned_from":  n,
+        "new_slide_n":  position,
+        "slide_count":  len(doc.slides),
+    }
+
+
+# ── AI Deck Tagline ───────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/deck-tagline")
+async def deck_tagline(doc_id: str, apply: bool = False):
+    """AI generates a punchy one-line tagline for the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    text_parts = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number)[:15]:
+        for el in slide.elements:
+            t = _flatten_text(el)
+            if t.strip():
+                text_parts.append(t.strip())
+
+    combined = "\n".join(text_parts[:40])
+
+    prompt = (
+        "Based on the following presentation content, write a single punchy tagline (max 12 words) that "
+        "captures the core value proposition or key message. Return ONLY the tagline text, no quotes.\n\n"
+        f"Content:\n{combined[:3000]}"
+    )
+
+    tagline = ""
+    async with _ai_client() as client:
+        msg = await client.messages.create(
+            model=_AI_MODEL, max_tokens=80,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        tagline = msg.content[0].text.strip().strip('"').strip("'")
+
+    if apply:
+        _snapshot_doc(doc_id)
+        first = next((s for s in sorted(doc.slides, key=lambda s: s.slide_number)), None)
+        if first:
+            new_el = _build_text_element(
+                text=tagline, x=1.0, y=6.5, w=11.0, h=0.6,
+                font_size=16, bold=False, color="#CCCCCC",
+            )
+            first.elements.append(new_el)
+
+    return {"tagline": tagline, "applied": apply}
+
+
+# ── Section Word Count ────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/section-word-counts")
+def section_word_counts(doc_id: str):
+    """Return word count per auto-detected section."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    sections: list[dict] = []
+    current_section = "Introduction"
+    current_slides: list[int] = []
+    current_words = 0
+
+    SECTION_KEYWORDS = {"agenda", "agenda slide", "overview", "introduction", "background",
+                        "problem", "solution", "results", "data", "financials", "timeline",
+                        "roadmap", "conclusion", "summary", "appendix", "q&a", "thank you"}
+
+    def _is_section_header(text: str) -> bool:
+        t = text.strip().lower()
+        return len(t.split()) <= 5 and (t in SECTION_KEYWORDS or t.endswith(":"))
+
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        words_on_slide = 0
+        header_candidate = ""
+
+        for el in slide.elements:
+            t = _flatten_text(el)
+            if not t.strip():
+                continue
+            words_on_slide += len(t.split())
+            et = getattr(el, "element_type", "")
+            if et in ("title", "subtitle") and not header_candidate:
+                header_candidate = t.strip()
+
+        if header_candidate and _is_section_header(header_candidate) and n > 1:
+            if current_slides:
+                sections.append({"name": current_section, "slides": current_slides[:], "word_count": current_words})
+            current_section = header_candidate
+            current_slides  = [n]
+            current_words   = words_on_slide
+        else:
+            current_slides.append(n)
+            current_words += words_on_slide
+
+    if current_slides:
+        sections.append({"name": current_section, "slides": current_slides[:], "word_count": current_words})
+
+    total_words = sum(s["word_count"] for s in sections)
+    return {"sections": sections, "total_words": total_words, "slide_count": len(doc.slides)}
+
+
+# ── Slide Complexity Heatmap ──────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/complexity-heatmap")
+def complexity_heatmap(doc_id: str):
+    """Return per-slide complexity score (element count, word count, score 1-10)."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides_data = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n        = slide.slide_number
+        el_count = len(slide.elements)
+        words    = sum(len(_flatten_text(el).split()) for el in slide.elements)
+        images   = sum(1 for el in slide.elements if getattr(el, "element_type", "") in ("image", "picture"))
+        tables   = sum(1 for el in slide.elements if getattr(el, "element_type", "") in ("table",))
+
+        raw_score = (el_count * 0.4) + (words / 20) + (images * 1.5) + (tables * 2.0)
+        score     = min(10, max(1, round(raw_score)))
+        label     = "light" if score <= 3 else "medium" if score <= 6 else "heavy"
+
+        slides_data.append({
+            "slide_n":   n,
+            "score":     score,
+            "label":     label,
+            "elements":  el_count,
+            "words":     words,
+            "images":    images,
+            "tables":    tables,
+        })
+
+    avg_score = round(sum(s["score"] for s in slides_data) / len(slides_data), 1) if slides_data else 0
+    return {"slides": slides_data, "avg_score": avg_score, "slide_count": len(doc.slides)}
+
+
+# ── Duplicate Deck (copy to new doc) ─────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/duplicate-deck")
+def duplicate_deck(doc_id: str, new_name: str = ""):
+    """Duplicate the entire deck as a new document."""
+    import copy as _copy
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    new_id  = _new_doc_id()
+    new_doc = _copy.deepcopy(doc)
+    new_doc.doc_id   = new_id
+    new_doc.filename = new_name.strip() or f"Copy of {getattr(doc, 'filename', 'Untitled')}"
+
+    _CACHE_DIR.mkdir(exist_ok=True)
+    (_CACHE_DIR / new_id).mkdir(exist_ok=True)
+    (_CACHE_DIR / new_id / "bridge").mkdir(exist_ok=True)
+
+    _STORE[new_id] = {"doc": new_doc, "path": None}
+
+    # Render bridge slides for the new doc
+    bridge_dir = _CACHE_DIR / new_id / "bridge"
+    try:
+        from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
+        _rbs(new_doc, bridge_dir)
+    except Exception as exc:
+        log.warning("duplicate-deck: bridge render failed (non-fatal): %s", exc)
+
+    return {
+        "new_doc_id":  new_id,
+        "name":        new_doc.filename,
+        "slide_count": len(new_doc.slides),
+    }
+
+
+# ── AI Slide Reorder Rationale ────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/reorder-rationale")
+async def reorder_rationale(doc_id: str):
+    """AI explains why each slide is in its current position and suggests improvements."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides_summary = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number)[:20]:
+        n     = slide.slide_number
+        title = ""
+        body  = []
+        for el in slide.elements:
+            t = _flatten_text(el).strip()
+            if not t:
+                continue
+            et = getattr(el, "element_type", "")
+            if et in ("title", "subtitle") and not title:
+                title = t
+            else:
+                body.append(t[:80])
+        slides_summary.append(f"Slide {n}: {title or '(no title)'} — {' | '.join(body[:3])}")
+
+    prompt = (
+        "You are a presentation coach. Review the following slide order and provide for EACH slide: "
+        "(1) why it appears in this position, (2) any suggestion to improve the narrative flow. "
+        "Return a JSON array of objects: [{\"slide_n\": N, \"rationale\": \"...\", \"suggestion\": \"...\"}]. "
+        "Return ONLY valid JSON.\n\nSlides:\n" + "\n".join(slides_summary)
+    )
+
+    items = []
+    try:
+        async with _ai_client() as client:
+            msg = await client.messages.create(
+                model=_AI_MODEL, max_tokens=2000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        items = json.loads(raw)
+    except Exception as exc:
+        log.warning("reorder-rationale: parse failed: %s", exc)
+        items = []
+
+    return {"slides": items, "slide_count": len(doc.slides)}
+
+
+# ── Reading Order Check ───────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/reading-order")
+def reading_order_check(doc_id: str):
+    """Check if elements appear in a sensible top-left → bottom-right reading order."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides_out = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        els = []
+        for el in slide.elements:
+            pos = getattr(el, "position", None)
+            if not pos:
+                continue
+            left = getattr(pos, "left",  0.0)
+            top  = getattr(pos, "top",   0.0)
+            eid  = getattr(el, "element_id", "?")
+            raw  = getattr(el, "text_content", None)
+            label = str(raw)[:40] if raw else getattr(el, "element_type", "?")
+            els.append({"id": eid, "label": label, "left": round(left, 2), "top": round(top, 2)})
+
+        # Sort by natural reading order
+        sorted_els = sorted(els, key=lambda e: (round(e["top"] / 0.5) * 0.5, e["left"]))
+        out_of_order = []
+        for i, el in enumerate(els):
+            if el["id"] != sorted_els[i]["id"]:
+                out_of_order.append(el)
+
+        if out_of_order:
+            slides_out.append({"slide_n": n, "out_of_order": out_of_order, "count": len(out_of_order)})
+
+    return {
+        "violations":  slides_out,
+        "total_slides_affected": len(slides_out),
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── AI Title Slide Critique ───────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/title-slide-critique")
+async def title_slide_critique(doc_id: str):
+    """AI critiques the first (title) slide for impact and clarity."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    first = next((s for s in sorted(doc.slides, key=lambda s: s.slide_number)), None)
+    if not first:
+        raise HTTPException(404, "No slides found")
+
+    texts = [_flatten_text(el).strip() for el in first.elements if _flatten_text(el).strip()]
+    content = "\n".join(texts)
+
+    prompt = (
+        "You are a presentation coach. Critique this title slide content for impact, clarity, and professionalism. "
+        "Return a JSON object: {\"score\": 1-10, \"strengths\": [\"...\"], \"weaknesses\": [\"...\"], "
+        "\"suggestions\": [\"...\"], \"overall\": \"one sentence summary\"}. Return ONLY valid JSON.\n\n"
+        f"Title slide content:\n{content[:1500]}"
+    )
+
+    result = {}
+    try:
+        async with _ai_client() as client:
+            msg = await client.messages.create(
+                model=_AI_MODEL, max_tokens=600,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("title-slide-critique parse failed: %s", exc)
+        result = {"score": 0, "strengths": [], "weaknesses": [], "suggestions": [], "overall": "Analysis unavailable"}
+
+    return result
+
+
+# ── Bulk Font Replace ─────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/bulk-font-replace")
+def bulk_font_replace(doc_id: str, from_font: str, to_font: str):
+    """Replace all instances of from_font with to_font across the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+    _snapshot_doc(doc_id)
+
+    replaced = 0
+    affected_slides: list[int] = []
+
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        slide_replaced = 0
+        for el in slide.elements:
+            paras = getattr(el, "paragraphs", [])
+            for para in (paras or []):
+                runs = getattr(para, "runs", [])
+                for run in (runs or []):
+                    rf = getattr(run, "font_name", None)
+                    if rf and rf.strip().lower() == from_font.strip().lower():
+                        run.font_name = to_font
+                        slide_replaced += 1
+        if slide_replaced:
+            replaced += slide_replaced
+            affected_slides.append(n)
+
+    return {
+        "replaced":       replaced,
+        "affected_slides": affected_slides,
+        "from_font":      from_font,
+        "to_font":        to_font,
+    }
+
+
+# ── Slide Clutter Score ───────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/clutter-scores")
+def clutter_scores(doc_id: str, threshold: float = 5.0):
+    """Return clutter score per slide (based on overlapping/crowded elements)."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    def _overlap(a: dict, b: dict) -> float:
+        ax1, ay1 = a["left"], a["top"]
+        ax2, ay2 = ax1 + a["w"], ay1 + a["h"]
+        bx1, by1 = b["left"], b["top"]
+        bx2, by2 = bx1 + b["w"], by1 + b["h"]
+        ox = max(0, min(ax2, bx2) - max(ax1, bx1))
+        oy = max(0, min(ay2, by2) - max(ay1, by1))
+        return ox * oy
+
+    slides_data = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n    = slide.slide_number
+        rects: list[dict] = []
+        for el in slide.elements:
+            pos = getattr(el, "position", None)
+            if not pos:
+                continue
+            rects.append({
+                "left": getattr(pos, "left",   0.0),
+                "top":  getattr(pos, "top",    0.0),
+                "w":    getattr(pos, "width",  1.0),
+                "h":    getattr(pos, "height", 0.5),
+            })
+
+        overlap_area = 0.0
+        for i in range(len(rects)):
+            for j in range(i + 1, len(rects)):
+                overlap_area += _overlap(rects[i], rects[j])
+
+        total_area  = sum(r["w"] * r["h"] for r in rects)
+        el_count    = len(rects)
+        clutter     = round(min(10, (el_count * 0.3) + (overlap_area * 4.0)), 1)
+        label       = "clean" if clutter < 2 else "moderate" if clutter < threshold else "cluttered"
+
+        slides_data.append({
+            "slide_n":      n,
+            "clutter_score": clutter,
+            "label":        label,
+            "elements":     el_count,
+            "overlap_in2":  round(overlap_area, 2),
+            "total_area":   round(total_area, 2),
+        })
+
+    avg = round(sum(s["clutter_score"] for s in slides_data) / len(slides_data), 1) if slides_data else 0
+    cluttered = [s for s in slides_data if s["label"] == "cluttered"]
+    return {
+        "slides":          slides_data,
+        "avg_clutter":     avg,
+        "cluttered_count": len(cluttered),
+        "slide_count":     len(doc.slides),
+    }
+
+
+# ── AI Call-to-Action Slide ───────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/generate-cta")
+async def generate_cta(doc_id: str, insert: bool = False):
+    """AI generates a compelling call-to-action slide for the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    text_parts = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number)[:12]:
+        for el in slide.elements:
+            t = _flatten_text(el).strip()
+            if t:
+                text_parts.append(t)
+
+    combined = "\n".join(text_parts[:30])
+
+    prompt = (
+        "Based on the following presentation content, write a compelling call-to-action slide. "
+        "Return a JSON object: {\"title\": \"...\", \"body\": \"...\", \"cta\": \"...\", "
+        "\"subtext\": \"...\"}. "
+        "title = headline (≤8 words), body = supporting sentence, cta = the button/action text (≤5 words), "
+        "subtext = optional next step or contact info placeholder. Return ONLY valid JSON.\n\n"
+        f"Content:\n{combined[:3000]}"
+    )
+
+    cta_data = {}
+    try:
+        async with _ai_client() as client:
+            msg = await client.messages.create(
+                model=_AI_MODEL, max_tokens=300,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        cta_data = json.loads(raw)
+    except Exception as exc:
+        log.warning("generate-cta parse failed: %s", exc)
+        cta_data = {"title": "Take Action", "body": "", "cta": "Get Started", "subtext": ""}
+
+    new_slide_n = None
+    if insert:
+        _snapshot_doc(doc_id)
+        total = len(doc.slides)
+        new_n = total + 1
+        title_el = _build_text_element(cta_data.get("title", "Take Action"), 0.5, 1.5, 12.0, 1.2, font_size=40, bold=True)
+        body_el  = _build_text_element(cta_data.get("body", ""),             0.5, 3.0, 12.0, 0.8, font_size=20)
+        cta_el   = _build_text_element(cta_data.get("cta", "Get Started"),   4.0, 4.2,  5.0, 0.8, font_size=28, bold=True, color="#7C3AED")
+        sub_el   = _build_text_element(cta_data.get("subtext", ""),          0.5, 5.5, 12.0, 0.6, font_size=14, color="#888888")
+
+        new_slide = BridgeSlide(slide_number=new_n, elements=[title_el, body_el, cta_el, sub_el])
+        doc.slides.append(new_slide)
+        new_slide_n = new_n
+
+    return {
+        "cta":        cta_data,
+        "inserted":   insert,
+        "new_slide_n": new_slide_n,
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── AI Opening Hook Rewriter ──────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/opening-hook")
+async def opening_hook(doc_id: str, apply: bool = False):
+    """AI rewrites the first slide's text as an attention-grabbing hook."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    first = next((s for s in sorted(doc.slides, key=lambda s: s.slide_number)), None)
+    if not first:
+        raise HTTPException(404, "No slides found")
+
+    texts = [_flatten_text(el).strip() for el in first.elements if _flatten_text(el).strip()]
+    content = "\n".join(texts)
+
+    prompt = (
+        "You are a presentation coach. Rewrite the following title slide content as a compelling, "
+        "attention-grabbing opening hook (max 2 lines). Keep it punchy and memorable. "
+        "Return a JSON object: {\"original\": \"...\", \"hook\": \"...\", \"subhook\": \"...\"}. "
+        "hook = main headline (≤10 words), subhook = supporting line (≤15 words). Return ONLY valid JSON.\n\n"
+        f"Original title slide content:\n{content[:1000]}"
+    )
+
+    result: dict = {"original": content, "hook": "", "subhook": ""}
+    try:
+        async with _ai_client() as client:
+            msg = await client.messages.create(
+                model=_AI_MODEL, max_tokens=200,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+        result["original"] = content
+    except Exception as exc:
+        log.warning("opening-hook parse failed: %s", exc)
+
+    if apply and result.get("hook"):
+        _snapshot_doc(doc_id)
+        for el in first.elements:
+            et = getattr(el, "element_type", "")
+            if et in ("title", "subtitle"):
+                _apply_plain_text_to_element(el, result["hook"])
+                break
+
+    return {"result": result, "applied": apply}
+
+
+# ── TOC Consistency Check ─────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/toc-check")
+def toc_check(doc_id: str):
+    """Check if there's a TOC slide and whether its items match actual slide titles."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    toc_slide = None
+    toc_items: list[str] = []
+
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        for el in slide.elements:
+            t = _flatten_text(el).strip().lower()
+            if "agenda" in t or "table of contents" in t or "overview" in t:
+                toc_slide = slide.slide_number
+                lines = _flatten_text(el).strip().split("\n")
+                toc_items = [l.strip() for l in lines if len(l.strip()) > 2][:20]
+                break
+        if toc_slide:
+            break
+
+    if not toc_slide:
+        return {"toc_found": False, "toc_slide": None, "matches": [], "mismatches": [], "missing": []}
+
+    # Collect all slide titles
+    slide_titles: dict[int, str] = {}
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        if slide.slide_number == toc_slide:
+            continue
+        for el in slide.elements:
+            et = getattr(el, "element_type", "")
+            if et in ("title", "subtitle"):
+                t = _flatten_text(el).strip()
+                if t:
+                    slide_titles[slide.slide_number] = t
+                    break
+
+    matches: list[dict] = []
+    mismatches: list[dict] = []
+
+    for item in toc_items:
+        found = False
+        for n, title in slide_titles.items():
+            if item.lower() in title.lower() or title.lower() in item.lower():
+                matches.append({"toc_item": item, "slide_n": n, "slide_title": title})
+                found = True
+                break
+        if not found:
+            mismatches.append({"toc_item": item, "note": "No matching slide title found"})
+
+    matched_titles = {m["slide_title"] for m in matches}
+    missing = [
+        {"slide_n": n, "title": t}
+        for n, t in slide_titles.items()
+        if t not in matched_titles and n > (toc_slide or 0)
+    ][:10]
+
+    return {
+        "toc_found":  True,
+        "toc_slide":  toc_slide,
+        "matches":    matches,
+        "mismatches": mismatches,
+        "missing":    missing,
+    }
+
+
+# ── Link / URL Checker ────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/link-check")
+def link_check(doc_id: str):
+    """Scan all text for URLs/hyperlinks and report their format validity."""
+    import re as _re
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    URL_RE = _re.compile(
+        r'(https?://[^\s\)\]\"\'<>]+|www\.[^\s\)\]\"\'<>]+)',
+        _re.IGNORECASE,
+    )
+
+    results: list[dict] = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        for el in slide.elements:
+            text = _flatten_text(el)
+            for m in URL_RE.finditer(text):
+                url = m.group(0)
+                valid_fmt = url.startswith("http://") or url.startswith("https://")
+                results.append({
+                    "slide_n": n,
+                    "url":     url,
+                    "valid_format": valid_fmt,
+                    "note":    "" if valid_fmt else "Missing https:// scheme",
+                })
+
+    return {
+        "links":        results,
+        "total":        len(results),
+        "invalid":      sum(1 for r in results if not r["valid_format"]),
+        "slide_count":  len(doc.slides),
+    }
+
+
+# ── AI Metaphor Finder ────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/metaphor-finder")
+async def metaphor_finder(doc_id: str):
+    """AI finds slides where a metaphor or analogy would strengthen the message."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides_summary = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number)[:18]:
+        n = slide.slide_number
+        texts = [_flatten_text(el).strip() for el in slide.elements if _flatten_text(el).strip()]
+        if texts:
+            slides_summary.append(f"Slide {n}: {' | '.join(texts[:3])}")
+
+    prompt = (
+        "You are a presentation coach. Review these slides and identify up to 5 where adding a metaphor or analogy "
+        "would make the message clearer or more memorable. "
+        "Return a JSON array: [{\"slide_n\": N, \"original_text\": \"...\", \"metaphor\": \"...\", \"reason\": \"...\"}]. "
+        "Return ONLY valid JSON.\n\nSlides:\n" + "\n".join(slides_summary)
+    )
+
+    items: list = []
+    try:
+        async with _ai_client() as client:
+            msg = await client.messages.create(
+                model=_AI_MODEL, max_tokens=1200,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        items = json.loads(raw)
+    except Exception as exc:
+        log.warning("metaphor-finder parse failed: %s", exc)
+
+    return {"suggestions": items, "slide_count": len(doc.slides)}
+
+
+# ── Speaker Confidence Scores ─────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/speaker-confidence")
+async def speaker_confidence(doc_id: str):
+    """AI scores how confident and clear the speaker notes sound per slide."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides_with_notes = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        notes = getattr(slide, "notes", "") or ""
+        if notes.strip():
+            slides_with_notes.append({"n": slide.slide_number, "notes": notes.strip()[:400]})
+
+    if not slides_with_notes:
+        return {"scores": [], "avg_score": 0, "note": "No speaker notes found in this deck."}
+
+    summaries = "\n".join(f"Slide {s['n']}: {s['notes']}" for s in slides_with_notes[:15])
+    prompt = (
+        "You are a public speaking coach. For each slide's speaker notes below, rate the speaker's confidence "
+        "on a scale of 1-10 (10=most confident/assertive). Look for hedging language, vagueness, filler words. "
+        "Return a JSON array: [{\"slide_n\": N, \"score\": 1-10, \"feedback\": \"...\"}]. Return ONLY valid JSON.\n\n"
+        f"Notes:\n{summaries}"
+    )
+
+    scores = []
+    try:
+        async with _ai_client() as client:
+            msg = await client.messages.create(
+                model=_AI_MODEL, max_tokens=1200,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        scores = json.loads(raw)
+    except Exception as exc:
+        log.warning("speaker-confidence parse failed: %s", exc)
+
+    avg = round(sum(s.get("score", 0) for s in scores) / len(scores), 1) if scores else 0
+    return {"scores": scores, "avg_score": avg, "slide_count": len(doc.slides)}
+
+
+# ── Deck Style Guide Extractor ────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/style-guide")
+def style_guide(doc_id: str):
+    """Extract and document the deck's implicit style rules (fonts, colors, sizes)."""
+    from collections import Counter as _Counter
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    fonts: _Counter  = _Counter()
+    colors: _Counter = _Counter()
+    sizes: _Counter  = _Counter()
+
+    for slide in doc.slides:
+        for el in slide.elements:
+            for para in (getattr(el, "paragraphs", []) or []):
+                for run in (getattr(para, "runs", []) or []):
+                    fn = getattr(run, "font_name", None)
+                    fc = getattr(run, "font_color", None)
+                    fs = getattr(run, "font_size", None)
+                    if fn:
+                        fonts[fn.strip()] += 1
+                    if fc and isinstance(fc, str) and fc.startswith("#"):
+                        colors[fc.upper()] += 1
+                    if fs and isinstance(fs, (int, float)):
+                        sizes[int(fs)] += 1
+
+    top_fonts  = [{"font": f, "count": c} for f, c in fonts.most_common(5)]
+    top_colors = [{"color": c, "count": n} for c, n in colors.most_common(8)]
+    top_sizes  = sorted([{"size": s, "count": c} for s, c in sizes.most_common(6)], key=lambda x: x["size"], reverse=True)
+
+    # Infer role for most-used sizes
+    for item in top_sizes:
+        s = item["size"]
+        item["role"] = "display" if s >= 36 else "heading" if s >= 24 else "subheading" if s >= 18 else "body" if s >= 12 else "caption"
+
+    return {
+        "fonts":       top_fonts,
+        "colors":      top_colors,
+        "font_sizes":  top_sizes,
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── Agenda Sync ───────────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/agenda-sync")
+async def agenda_sync(doc_id: str, apply: bool = False):
+    """AI syncs the agenda slide to match the current section headings in the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    agenda_slide = None
+    section_titles: list[str] = []
+
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        for el in slide.elements:
+            t = _flatten_text(el).strip().lower()
+            if ("agenda" in t or "table of contents" in t or "overview" in t) and len(t.split()) <= 5:
+                agenda_slide = slide
+                break
+        if agenda_slide:
+            break
+
+    # Collect section titles (slides after agenda)
+    start_n = agenda_slide.slide_number if agenda_slide else 0
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        if slide.slide_number <= start_n:
+            continue
+        for el in slide.elements:
+            et = getattr(el, "element_type", "")
+            if et == "title":
+                t = _flatten_text(el).strip()
+                if t and len(t.split()) <= 8:
+                    section_titles.append(t)
+                    break
+
+    if not section_titles:
+        return {"agenda_found": bool(agenda_slide), "new_items": [], "applied": False}
+
+    prompt = (
+        "Given these slide titles from a presentation, generate a clean agenda/table of contents list. "
+        "Filter out overly short or generic titles. Return a JSON array of strings (the agenda items). "
+        "Return ONLY valid JSON.\n\nSlide titles:\n" + "\n".join(f"- {t}" for t in section_titles[:20])
+    )
+
+    new_items: list[str] = []
+    try:
+        async with _ai_client() as client:
+            msg = await client.messages.create(
+                model=_AI_MODEL, max_tokens=400,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        new_items = json.loads(raw)
+    except Exception as exc:
+        log.warning("agenda-sync parse failed: %s", exc)
+        new_items = section_titles[:10]
+
+    if apply and agenda_slide and new_items:
+        _snapshot_doc(doc_id)
+        for el in agenda_slide.elements:
+            et = getattr(el, "element_type", "")
+            if et not in ("title", "subtitle"):
+                agenda_text = "\n".join(f"• {item}" for item in new_items)
+                _apply_plain_text_to_element(el, agenda_text)
+                break
+
+    return {
+        "agenda_found": bool(agenda_slide),
+        "agenda_slide": agenda_slide.slide_number if agenda_slide else None,
+        "new_items":    new_items,
+        "applied":      apply and bool(agenda_slide),
+    }
+
+
+# ── Slide Pace Checker (word count limit) ────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/pace-check")
+def pace_check(doc_id: str, max_words: int = 75, include_notes: bool = False):
+    """Find slides that exceed the max word count — likely too dense to present."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    results = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        body_words = sum(len(_flatten_text(el).split()) for el in slide.elements)
+        notes_text = getattr(slide, "notes", "") or ""
+        notes_words = len(notes_text.split()) if include_notes else 0
+        total = body_words + notes_words
+
+        if total > max_words:
+            results.append({
+                "slide_n":     n,
+                "word_count":  total,
+                "body_words":  body_words,
+                "notes_words": notes_words,
+                "over_by":     total - max_words,
+            })
+
+    return {
+        "violations":  results,
+        "total":       len(results),
+        "max_words":   max_words,
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── AI Counterarguments ───────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/counterarguments")
+async def counterarguments(doc_id: str, count: int = 5):
+    """AI generates potential counterarguments to the deck's key claims."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    text_parts = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number)[:15]:
+        for el in slide.elements:
+            t = _flatten_text(el).strip()
+            if t:
+                text_parts.append(t)
+
+    combined = "\n".join(text_parts[:30])
+
+    prompt = (
+        f"You are a critical thinking expert. Given this presentation content, identify the {count} most likely "
+        "counterarguments, objections, or tough questions an audience might raise. "
+        "Return a JSON array: [{\"claim\": \"...\", \"counterargument\": \"...\", \"suggested_response\": \"...\"}]. "
+        "Return ONLY valid JSON.\n\nContent:\n" + combined[:3000]
+    )
+
+    items = []
+    try:
+        async with _ai_client() as client:
+            msg = await client.messages.create(
+                model=_AI_MODEL, max_tokens=1500,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        items = json.loads(raw)
+    except Exception as exc:
+        log.warning("counterarguments parse failed: %s", exc)
+
+    return {"counterarguments": items, "slide_count": len(doc.slides)}
+
+
+# ── Data Table Detector ───────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/data-table-candidates")
+def data_table_candidates(doc_id: str):
+    """Detect text elements that look like tabular data (CSV-ish) and should be a table."""
+    import re as _re
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    candidates = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        for el in slide.elements:
+            text = _flatten_text(el).strip()
+            if not text or len(text.split()) < 6:
+                continue
+            lines = text.split("\n")
+            if len(lines) < 2:
+                continue
+            delimited = sum(1 for l in lines if "\t" in l or "|" in l or l.count(",") >= 2)
+            if delimited >= 2:
+                candidates.append({
+                    "slide_n":   n,
+                    "preview":   text[:150],
+                    "lines":     len(lines),
+                    "delimiter": "tab" if any("\t" in l for l in lines) else "pipe" if any("|" in l for l in lines) else "comma",
+                })
+
+    return {
+        "candidates":  candidates,
+        "total":       len(candidates),
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── AI Humor Suggestions ──────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/humor-suggestions")
+async def humor_suggestions(doc_id: str):
+    """AI suggests where a light touch of humor could make a slide more engaging."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides_summary = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number)[:15]:
+        n = slide.slide_number
+        texts = [_flatten_text(el).strip() for el in slide.elements if _flatten_text(el).strip()]
+        if texts:
+            slides_summary.append(f"Slide {n}: {' | '.join(texts[:2])}")
+
+    prompt = (
+        "You are a presentation coach. Review these slides and identify up to 4 places where a brief, tasteful moment "
+        "of humor or a light anecdote would increase audience engagement — without diminishing professionalism. "
+        "Return a JSON array: [{\"slide_n\": N, \"context\": \"...\", \"suggestion\": \"...\", \"example\": \"...\"}]. "
+        "Return ONLY valid JSON.\n\nSlides:\n" + "\n".join(slides_summary)
+    )
+
+    items = []
+    try:
+        async with _ai_client() as client:
+            msg = await client.messages.create(
+                model=_AI_MODEL, max_tokens=1000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        items = json.loads(raw)
+    except Exception as exc:
+        log.warning("humor-suggestions parse failed: %s", exc)
+
+    return {"suggestions": items, "slide_count": len(doc.slides)}
+
+
+# ── Text Alignment Audit ──────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/alignment-audit")
+def alignment_audit(doc_id: str):
+    """Detect text elements with inconsistent alignment across slides."""
+    from collections import Counter as _Counter
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    alignment_counter: _Counter = _Counter()
+    slide_alignments: list[dict] = []
+
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        slide_aligns: list[str] = []
+        for el in slide.elements:
+            for para in (getattr(el, "paragraphs", []) or []):
+                align = getattr(para, "alignment", None)
+                if align:
+                    align_str = str(align).lower().replace("pp_paragraph_alignment.", "").replace("_", "")
+                    slide_aligns.append(align_str)
+                    alignment_counter[align_str] += 1
+        if slide_aligns:
+            dominant = _Counter(slide_aligns).most_common(1)[0][0]
+            mixed = len(set(slide_aligns)) > 1
+            slide_alignments.append({
+                "slide_n":   n,
+                "dominant":  dominant,
+                "mixed":     mixed,
+                "alignments": list(set(slide_aligns)),
+            })
+
+    dominant_overall = alignment_counter.most_common(1)[0][0] if alignment_counter else "left"
+    inconsistent = [s for s in slide_alignments if s["dominant"] != dominant_overall or s["mixed"]]
+
+    return {
+        "dominant_alignment":  dominant_overall,
+        "inconsistent_slides": inconsistent,
+        "total_inconsistent":  len(inconsistent),
+        "alignment_counts":    dict(alignment_counter),
+        "slide_count":         len(doc.slides),
+    }
+
+
+# ── Speaker Notes Length Check ────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/notes-length-check")
+def notes_length_check(doc_id: str, max_words: int = 150):
+    """Find slides with speaker notes that are too long (essay vs bullet points)."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    violations = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        notes = getattr(slide, "notes", "") or ""
+        wc = len(notes.split())
+        if wc > max_words:
+            violations.append({
+                "slide_n":   n,
+                "word_count": wc,
+                "over_by":   wc - max_words,
+                "preview":   notes[:100],
+            })
+
+    return {
+        "violations":  violations,
+        "total":       len(violations),
+        "max_words":   max_words,
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── AI Deck Quiz ──────────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/deck-quiz")
+async def deck_quiz(doc_id: str, question_count: int = 5):
+    """AI generates a quiz with multiple-choice questions based on deck content."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    text_parts = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number)[:15]:
+        for el in slide.elements:
+            t = _flatten_text(el).strip()
+            if t:
+                text_parts.append(t)
+
+    combined = "\n".join(text_parts[:30])
+
+    prompt = (
+        f"Based on this presentation content, create {question_count} multiple-choice quiz questions to test "
+        "comprehension. Return a JSON array: [{\"question\": \"...\", \"options\": [\"A. ...\", \"B. ...\", \"C. ...\", \"D. ...\"], "
+        "\"answer\": \"A\", \"explanation\": \"...\"}]. Return ONLY valid JSON.\n\nContent:\n" + combined[:3000]
+    )
+
+    questions = []
+    try:
+        async with _ai_client() as client:
+            msg = await client.messages.create(
+                model=_AI_MODEL, max_tokens=2000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        questions = json.loads(raw)
+    except Exception as exc:
+        log.warning("deck-quiz parse failed: %s", exc)
+
+    return {"questions": questions, "slide_count": len(doc.slides)}
+
+
+# ── Background Color Audit ────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/background-audit")
+def background_audit(doc_id: str):
+    """Detect slides with inconsistent or unusual background colors."""
+    from collections import Counter as _Counter
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    bg_colors: _Counter = _Counter()
+    slide_bgs: list[dict] = []
+
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        bg = getattr(slide, "background_color", None) or getattr(slide, "bg_color", None)
+        bg_str = str(bg).upper() if bg else "DEFAULT"
+        bg_colors[bg_str] += 1
+        slide_bgs.append({"slide_n": n, "background": bg_str})
+
+    dominant = bg_colors.most_common(1)[0][0] if bg_colors else "DEFAULT"
+    inconsistent = [s for s in slide_bgs if s["background"] != dominant]
+
+    return {
+        "dominant_background": dominant,
+        "inconsistent_slides": inconsistent,
+        "total_inconsistent":  len(inconsistent),
+        "background_counts":   dict(bg_colors),
+        "slide_count":         len(doc.slides),
+    }
+
+
+# ── Placeholder / TBD Finder ──────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/placeholder-finder")
+def placeholder_finder(doc_id: str):
+    """Find slides with placeholder text like [TODO], TBD, PLACEHOLDER, etc."""
+    import re as _re
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    PLACEHOLDER_RE = _re.compile(
+        r'\b(todo|tbd|tba|placeholder|fixme|fill\s+in|insert\s+here|add\s+content|lorem ipsum|coming\s+soon)\b'
+        r'|\[.*?\]'
+        r'|<.*?>',
+        _re.IGNORECASE,
+    )
+
+    results = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        slide_matches = []
+        for el in slide.elements:
+            text = _flatten_text(el)
+            for m in PLACEHOLDER_RE.finditer(text):
+                context = text[max(0, m.start() - 20):m.end() + 20].strip()
+                slide_matches.append({"match": m.group(0), "context": context})
+        if slide_matches:
+            results.append({"slide_n": n, "matches": slide_matches[:5], "count": len(slide_matches)})
+
+    return {
+        "slides":      results,
+        "total_slides": len(results),
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── AI Section Title Suggestions ─────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/suggest-section-titles")
+async def suggest_section_titles(doc_id: str):
+    """AI suggests improved section title names based on slide content."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    sections: list[dict] = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        for el in slide.elements:
+            et = getattr(el, "element_type", "")
+            if et == "title":
+                t = _flatten_text(el).strip()
+                if t and len(t.split()) <= 8:
+                    body = []
+                    for el2 in slide.elements:
+                        if el2 is not el:
+                            bt = _flatten_text(el2).strip()
+                            if bt:
+                                body.append(bt[:60])
+                    sections.append({
+                        "slide_n": slide.slide_number,
+                        "current_title": t,
+                        "body_preview": " | ".join(body[:2]),
+                    })
+                break
+
+    if not sections:
+        return {"suggestions": [], "slide_count": len(doc.slides)}
+
+    prompt = (
+        "For each slide title below, suggest a more impactful, specific alternative. "
+        "Return a JSON array: [{\"slide_n\": N, \"current\": \"...\", \"suggested\": \"...\", \"reason\": \"...\"}]. "
+        "Only suggest improvements — skip titles that are already great. Return ONLY valid JSON.\n\n"
+        "Slides:\n" + "\n".join(f"Slide {s['slide_n']}: \"{s['current_title']}\" — {s['body_preview']}" for s in sections[:20])
+    )
+
+    results = []
+    try:
+        async with _ai_client() as client:
+            msg = await client.messages.create(
+                model=_AI_MODEL, max_tokens=1500,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        results = json.loads(raw)
+    except Exception as exc:
+        log.warning("suggest-section-titles parse failed: %s", exc)
+
+    return {"suggestions": results, "slide_count": len(doc.slides)}
+
+
+# ── AI Action Plan Extractor ──────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/action-plan")
+async def action_plan(doc_id: str):
+    """AI extracts action items with implied owners and deadlines from the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    text_parts = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        for el in slide.elements:
+            t = _flatten_text(el).strip()
+            if t:
+                text_parts.append(t)
+
+    combined = "\n".join(text_parts[:40])
+
+    prompt = (
+        "You are a project manager. Extract all action items from this presentation content. "
+        "For each, infer the most likely owner (team/role) and timeline if mentioned. "
+        "Return a JSON array: [{\"action\": \"...\", \"owner\": \"...\", \"deadline\": \"...\", \"priority\": \"high|medium|low\"}]. "
+        "Return ONLY valid JSON.\n\nContent:\n" + combined[:3500]
+    )
+
+    items = []
+    try:
+        async with _ai_client() as client:
+            msg = await client.messages.create(
+                model=_AI_MODEL, max_tokens=1200,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        items = json.loads(raw)
+    except Exception as exc:
+        log.warning("action-plan parse failed: %s", exc)
+
+    return {"actions": items, "slide_count": len(doc.slides)}
+
+
+# ── Slide Bookmark Manager ────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slides/{n}/bookmark")
+def add_bookmark(doc_id: str, n: int, label: str = ""):
+    """Bookmark a slide with an optional label."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if not slide:
+        raise HTTPException(404, f"Slide {n} not found")
+    bookmarks = getattr(doc, "_bookmarks", {})
+    bookmarks[n] = {"label": label, "slide_n": n}
+    setattr(doc, "_bookmarks", bookmarks)
+    return {"slide_n": n, "label": label, "bookmarks": list(bookmarks.values())}
+
+
+@app.delete("/api/docs/{doc_id}/slides/{n}/bookmark")
+def remove_bookmark(doc_id: str, n: int):
+    """Remove a bookmark from a slide."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+    bookmarks = getattr(doc, "_bookmarks", {})
+    bookmarks.pop(n, None)
+    setattr(doc, "_bookmarks", bookmarks)
+    return {"slide_n": n, "removed": True, "bookmarks": list(bookmarks.values())}
+
+
+@app.get("/api/docs/{doc_id}/bookmarks")
+def get_bookmarks(doc_id: str):
+    """Get all bookmarks for a document."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+    bookmarks = getattr(doc, "_bookmarks", {})
+    return {"bookmarks": sorted(bookmarks.values(), key=lambda b: b["slide_n"]), "total": len(bookmarks)}
+
+
+# ── AI Data Insights Extractor ────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/data-insights")
+async def data_insights(doc_id: str):
+    """AI extracts and summarizes statistics, numbers, and data claims from the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    text_parts = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        for el in slide.elements:
+            t = _flatten_text(el).strip()
+            if t:
+                text_parts.append(t)
+
+    combined = "\n".join(text_parts[:40])
+
+    prompt = (
+        "Extract all statistics, numbers, percentages, and data claims from this presentation. "
+        "For each, identify the metric, value, source (if given), and whether it supports a positive or negative finding. "
+        "Return a JSON array: [{\"metric\": \"...\", \"value\": \"...\", \"context\": \"...\", \"sentiment\": \"positive|negative|neutral\", \"slide_hint\": \"...\"}]. "
+        "Return ONLY valid JSON.\n\nContent:\n" + combined[:3500]
+    )
+
+    items = []
+    try:
+        async with _ai_client() as client:
+            msg = await client.messages.create(
+                model=_AI_MODEL, max_tokens=1500,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        items = json.loads(raw)
+    except Exception as exc:
+        log.warning("data-insights parse failed: %s", exc)
+
+    return {"insights": items, "slide_count": len(doc.slides)}
+
+
+# ── AI Narrative Arc Analysis ─────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/narrative-arc")
+async def narrative_arc(doc_id: str):
+    """AI analyzes whether the deck follows a compelling narrative arc."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides_summary = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number)[:20]:
+        n = slide.slide_number
+        texts = [_flatten_text(el).strip() for el in slide.elements if _flatten_text(el).strip()]
+        if texts:
+            slides_summary.append(f"Slide {n}: {' | '.join(texts[:2])}")
+
+    prompt = (
+        "You are a presentation strategist. Analyze whether this deck follows a compelling narrative arc "
+        "(Problem → Solution → Proof → Call-to-Action, or Hero's Journey, STAR, etc.). "
+        "Return a JSON object: {\"arc_type\": \"...\", \"score\": 1-10, \"phases\": [{\"name\": \"...\", \"slides\": [N...], \"assessment\": \"...\"}], "
+        "\"strengths\": [\"...\"], \"gaps\": [\"...\"], \"recommendation\": \"...\"}. Return ONLY valid JSON.\n\n"
+        "Slides:\n" + "\n".join(slides_summary)
+    )
+
+    result: dict = {}
+    try:
+        async with _ai_client() as client:
+            msg = await client.messages.create(
+                model=_AI_MODEL, max_tokens=1000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("narrative-arc parse failed: %s", exc)
+        result = {"arc_type": "Unknown", "score": 0, "phases": [], "strengths": [], "gaps": [], "recommendation": ""}
+
+    return result
+
+
+# ── Bulk Notes Clear ──────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/clear-notes")
+def clear_notes(doc_id: str, slide_numbers: str = "all"):
+    """Clear speaker notes from all slides or specified slide numbers."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+    _snapshot_doc(doc_id)
+
+    target_slides: set[int] = set()
+    if slide_numbers == "all":
+        target_slides = {s.slide_number for s in doc.slides}
+    else:
+        for part in slide_numbers.split(","):
+            part = part.strip()
+            if part.isdigit():
+                target_slides.add(int(part))
+
+    cleared = 0
+    for slide in doc.slides:
+        if slide.slide_number in target_slides:
+            notes = getattr(slide, "notes", None)
+            if notes:
+                slide.notes = ""
+                cleared += 1
+
+    return {
+        "cleared":  cleared,
+        "slides":   sorted(target_slides),
+    }
+
+
+# ── Grid Alignment Check ──────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/grid-check")
+def grid_check(doc_id: str, grid_size: float = 0.25):
+    """Check if elements are aligned to a consistent grid (default 0.25in)."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    def _snap(v: float, g: float) -> float:
+        return round(v / g) * g
+
+    slides_data = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        off_grid = []
+        for el in slide.elements:
+            pos = getattr(el, "position", None)
+            if not pos:
+                continue
+            left = getattr(pos, "left", 0.0)
+            top  = getattr(pos, "top",  0.0)
+            if abs(left - _snap(left, grid_size)) > 0.02 or abs(top - _snap(top, grid_size)) > 0.02:
+                raw  = getattr(el, "text_content", None)
+                label = str(raw)[:30] if raw else getattr(el, "element_type", "?")
+                off_grid.append({
+                    "label": label,
+                    "left":  round(left, 3),
+                    "top":   round(top,  3),
+                    "snap_left": round(_snap(left, grid_size), 3),
+                    "snap_top":  round(_snap(top,  grid_size), 3),
+                })
+        if off_grid:
+            slides_data.append({"slide_n": n, "off_grid": off_grid, "count": len(off_grid)})
+
+    total = sum(s["count"] for s in slides_data)
+    return {
+        "slides":     slides_data,
+        "total":      total,
+        "grid_size":  grid_size,
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── AI Persuasion Scores ──────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/persuasion-scores")
+async def persuasion_scores(doc_id: str):
+    """AI scores how persuasive each slide is (1-10)."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides_data = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number)[:18]:
+        n = slide.slide_number
+        texts = [_flatten_text(el).strip() for el in slide.elements if _flatten_text(el).strip()]
+        if texts:
+            slides_data.append({"n": n, "content": " | ".join(texts[:3])})
+
+    if not slides_data:
+        return {"scores": [], "avg_score": 0}
+
+    prompt = (
+        "Rate each slide's persuasive power (1-10). Consider: specific claims, evidence, emotional appeal, "
+        "clear benefits. Return a JSON array: [{\"slide_n\": N, \"score\": 1-10, \"reason\": \"...\", \"tip\": \"...\"}]. "
+        "Return ONLY valid JSON.\n\nSlides:\n" + "\n".join(f"Slide {s['n']}: {s['content']}" for s in slides_data)
+    )
+
+    results = []
+    try:
+        async with _ai_client() as client:
+            msg = await client.messages.create(
+                model=_AI_MODEL, max_tokens=1500,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        results = json.loads(raw)
+    except Exception as exc:
+        log.warning("persuasion-scores parse failed: %s", exc)
+
+    avg = round(sum(r.get("score", 0) for r in results) / len(results), 1) if results else 0
+    return {"scores": results, "avg_score": avg, "slide_count": len(doc.slides)}
+
+
+# ── AI Social Media Snippets ──────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/social-snippets")
+async def social_snippets(doc_id: str, platforms: str = "linkedin,twitter"):
+    """AI generates social media posts from key deck content."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    text_parts = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number)[:12]:
+        for el in slide.elements:
+            t = _flatten_text(el).strip()
+            if t:
+                text_parts.append(t)
+
+    combined = "\n".join(text_parts[:25])
+    plat_list = [p.strip() for p in platforms.split(",")]
+
+    prompt = (
+        f"Based on this presentation content, write engaging social media posts for: {', '.join(plat_list)}. "
+        "Each post should capture a key insight. LinkedIn posts can be longer (150-200 words), "
+        "Twitter/X posts must be under 280 characters. "
+        "Return a JSON array: [{\"platform\": \"...\", \"post\": \"...\", \"hashtags\": [\"...\"], \"character_count\": N}]. "
+        "Return ONLY valid JSON.\n\nContent:\n" + combined[:3000]
+    )
+
+    posts = []
+    try:
+        async with _ai_client() as client:
+            msg = await client.messages.create(
+                model=_AI_MODEL, max_tokens=1500,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        posts = json.loads(raw)
+    except Exception as exc:
+        log.warning("social-snippets parse failed: %s", exc)
+
+    return {"posts": posts, "platforms": plat_list, "slide_count": len(doc.slides)}
+
+
+# ── Text Overflow Check ───────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/text-overflow")
+def text_overflow(doc_id: str, chars_per_line: int = 80, max_lines: int = 12):
+    """Detect text boxes likely to overflow based on character/line count heuristics."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    violations = []
+    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
+        n = slide.slide_number
+        for el in slide.elements:
+            pos  = getattr(el, "position", None)
+            text = _flatten_text(el).strip()
+            if not text or not pos:
+                continue
+            lines = text.split("\n")
+            long_lines = sum(1 for l in lines if len(l) > chars_per_line)
+            if len(lines) > max_lines or long_lines >= 3:
+                w = getattr(pos, "width", 0.0)
+                h = getattr(pos, "height", 0.0)
+                eid  = getattr(el, "element_id", "?")
+                violations.append({
+                    "slide_n":    n,
+                    "element_id": eid,
+                    "line_count": len(lines),
+                    "long_lines": long_lines,
+                    "width_in":   round(w, 2),
+                    "height_in":  round(h, 2),
+                    "preview":    text[:80],
+                })
+
+    return {
+        "violations":  violations,
+        "total":       len(violations),
+        "slide_count": len(doc.slides),
+    }
+
+
+# ── AI Per-Slide Audience Questions ──────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slides/{n}/audience-questions")
+async def audience_questions(doc_id: str, n: int, count: int = 3):
+    """AI generates expected audience questions for a specific slide."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if not slide:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    texts = [_flatten_text(el).strip() for el in slide.elements if _flatten_text(el).strip()]
+    content = "\n".join(texts)
+    notes   = getattr(slide, "notes", "") or ""
+
+    prompt = (
+        f"You are a sharp audience member. Based on this slide content, generate {count} questions "
+        "an audience would likely ask during or after the presentation. "
+        "Return a JSON array of strings (the questions). Return ONLY valid JSON.\n\n"
+        f"Slide {n} content:\n{content}\n\nSpeaker notes:\n{notes[:300]}"
+    )
+
+    questions = []
+    try:
+        async with _ai_client() as client:
+            msg = await client.messages.create(
+                model=_AI_MODEL, max_tokens=500,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        questions = json.loads(raw)
+    except Exception as exc:
+        log.warning("audience-questions parse failed: %s", exc)
+
+    return {"slide_n": n, "questions": questions}
+
+
+# ── Tone Consistency Check ────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/tone-consistency")
+async def tone_consistency(doc_id: str):
+    """AI analyzes whether the writing tone is consistent across all slides."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+    texts = []
+    for s in doc.slides:
+        slide_texts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = " ".join(p.text for p in sh.text_frame.paragraphs if p.text.strip())
+                if t.strip():
+                    slide_texts.append(t)
+        if slide_texts:
+            texts.append({"slide_n": s.slide_number, "text": " | ".join(slide_texts)})
+
+    if not texts:
+        return {"overall_tone": "neutral", "consistent": True, "issues": [], "summary": "No text found."}
+
+    sample = "\n".join(f"Slide {t['slide_n']}: {t['text'][:200]}" for t in texts[:15])
+    prompt = (
+        "Analyze the writing tone across these presentation slides and identify inconsistencies.\n"
+        "Return JSON: {\"overall_tone\": string, \"consistent\": bool, \"summary\": string, "
+        "\"issues\": [{\"slide_n\": int, \"detected_tone\": string, \"issue\": string}]}\n"
+        "Keep issues list to real problems only (not minor variations).\n\n"
+        f"Slides:\n{sample}"
+    )
+    issues: list[dict] = []
+    overall_tone = "professional"
+    consistent = True
+    summary = "Tone appears consistent."
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        parsed = json.loads(raw)
+        overall_tone = parsed.get("overall_tone", overall_tone)
+        consistent   = parsed.get("consistent", consistent)
+        summary      = parsed.get("summary", summary)
+        issues       = parsed.get("issues", issues)
+    except Exception as exc:
+        log.warning("tone-consistency parse failed: %s", exc)
+
+    return {"overall_tone": overall_tone, "consistent": consistent, "summary": summary, "issues": issues}
+
+
+# ── Sentence Variety Check ────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/sentence-variety")
+async def sentence_variety(doc_id: str):
+    """Check whether sentences across the deck vary in length and structure."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    all_sentences: list[dict] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    txt = para.text.strip()
+                    if txt and len(txt) > 10:
+                        words = len(txt.split())
+                        all_sentences.append({"slide_n": s.slide_number, "text": txt, "words": words})
+
+    if not all_sentences:
+        return {"avg_words": 0, "short_pct": 0, "long_pct": 0, "flags": [], "verdict": "No sentences found."}
+
+    avg = sum(x["words"] for x in all_sentences) / len(all_sentences)
+    short = [x for x in all_sentences if x["words"] <= 5]
+    long_ = [x for x in all_sentences if x["words"] >= 20]
+    short_pct = round(len(short) / len(all_sentences) * 100)
+    long_pct  = round(len(long_) / len(all_sentences) * 100)
+
+    flags: list[dict] = []
+    for item in long_[:6]:
+        flags.append({"slide_n": item["slide_n"], "text": item["text"][:120], "words": item["words"], "type": "long"})
+    for item in short[:4]:
+        flags.append({"slide_n": item["slide_n"], "text": item["text"], "words": item["words"], "type": "short"})
+
+    if long_pct > 30:
+        verdict = "Many long sentences — consider breaking them up for clarity."
+    elif short_pct > 60:
+        verdict = "Mostly very short bullets — some elaboration may help convey meaning."
+    else:
+        verdict = "Good sentence variety."
+
+    return {
+        "avg_words": round(avg, 1),
+        "short_pct": short_pct,
+        "long_pct": long_pct,
+        "total": len(all_sentences),
+        "flags": flags,
+        "verdict": verdict,
+    }
+
+
+# ── Deck Export Checklist ─────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/export-checklist")
+async def export_checklist(doc_id: str):
+    """Run a pre-export checklist: missing notes, placeholders, overflow risk, empty slides, etc."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    items: list[dict] = []
+
+    # Slides without speaker notes
+    no_notes = [s.slide_number for s in doc.slides if not any(
+        p.text.strip() for sh in s.shapes if sh.text_frame for p in sh.text_frame.paragraphs
+        if getattr(sh, "is_notes", False)
+    )]
+    items.append({
+        "check": "Speaker notes present",
+        "status": "pass" if not no_notes else "warn",
+        "detail": "All slides have notes" if not no_notes else f"{len(no_notes)} slides missing notes",
+    })
+
+    # Placeholder text
+    placeholder_re = re.compile(r"\[.*?\]|TODO|TBD|FIXME|Lorem ipsum", re.I)
+    ph_slides = set()
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    if placeholder_re.search(para.text):
+                        ph_slides.add(s.slide_number)
+    items.append({
+        "check": "No placeholder text",
+        "status": "pass" if not ph_slides else "fail",
+        "detail": "No placeholders found" if not ph_slides else f"Slides {sorted(ph_slides)} have placeholder text",
+    })
+
+    # Empty slides
+    empty = [s.slide_number for s in doc.slides if not any(
+        sh.text_frame and any(p.text.strip() for p in sh.text_frame.paragraphs)
+        for sh in s.shapes
+    )]
+    items.append({
+        "check": "No empty slides",
+        "status": "pass" if not empty else "warn",
+        "detail": "No empty slides" if not empty else f"Slides {empty} appear empty",
+    })
+
+    # Duplicate slide titles
+    titles: dict[str, list[int]] = {}
+    for s in doc.slides:
+        title = ""
+        for sh in s.shapes:
+            if sh.text_frame and sh.text_frame.paragraphs:
+                t = sh.text_frame.paragraphs[0].text.strip()
+                if t:
+                    title = t
+                    break
+        if title:
+            titles.setdefault(title, []).append(s.slide_number)
+    dups = {t: ns for t, ns in titles.items() if len(ns) > 1}
+    items.append({
+        "check": "No duplicate titles",
+        "status": "pass" if not dups else "warn",
+        "detail": "All titles unique" if not dups else f"{len(dups)} duplicate title(s) found",
+    })
+
+    # Slide count sanity
+    count = len(doc.slides)
+    items.append({
+        "check": "Slide count",
+        "status": "pass" if 5 <= count <= 80 else "warn",
+        "detail": f"{count} slides" + ("" if 5 <= count <= 80 else (" — very few slides" if count < 5 else " — very long deck")),
+    })
+
+    fails = sum(1 for i in items if i["status"] == "fail")
+    warns = sum(1 for i in items if i["status"] == "warn")
+    overall = "ready" if fails == 0 and warns == 0 else ("issues" if fails > 0 else "warnings")
+
+    return {"overall": overall, "fails": fails, "warns": warns, "items": items}
+
+
+# ── Slide Image Descriptions ──────────────────────────────────────────────────
+
+class ImageDescReq(BaseModel):
+    slide_ns: list[int] = []
+
+@app.post("/api/docs/{doc_id}/image-descriptions")
+async def image_descriptions(doc_id: str, body: ImageDescReq):
+    """AI generates natural-language descriptions of images on specified slides (or all)."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    target_slides = body.slide_ns if body.slide_ns else [s.slide_number for s in doc.slides]
+
+    results: list[dict] = []
+    for s in doc.slides:
+        if s.slide_number not in target_slides:
+            continue
+        img_count = sum(1 for sh in s.shapes if getattr(sh, "shape_type", None) == 13)
+        if img_count == 0:
+            continue
+
+        # Gather text context for the slide
+        ctx_parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    if para.text.strip():
+                        ctx_parts.append(para.text.strip())
+        context = " ".join(ctx_parts[:4])
+
+        prompt = (
+            f"A presentation slide (slide {s.slide_number}) has {img_count} image(s) on it. "
+            f"The slide text context is: \"{context[:300]}\". "
+            "Write a concise, professional alt-text description for each image (assume they are relevant to the slide topic). "
+            "Return JSON: {\"descriptions\": [string, ...]}"
+        )
+        descriptions: list[str] = [f"Image on slide {s.slide_number}"] * img_count
+        try:
+            import anthropic as _ant
+            client = _ant.Anthropic()
+            msg = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=300,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = msg.content[0].text.strip()
+            raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+            parsed = json.loads(raw)
+            descriptions = parsed.get("descriptions", descriptions)
+        except Exception as exc:
+            log.warning("image-descriptions parse failed for slide %d: %s", s.slide_number, exc)
+
+        results.append({"slide_n": s.slide_number, "image_count": img_count, "descriptions": descriptions})
+
+    return {"slides": results, "total_images": sum(r["image_count"] for r in results)}
+
+
+# ── Redundancy Finder ─────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/redundancy-finder")
+def redundancy_finder(doc_id: str):
+    """Find repeated phrases and ideas across slides."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    from collections import Counter
+    phrase_map: dict[str, list[int]] = {}
+    for s in doc.slides:
+        seen_in_slide: set[str] = set()
+        for sh in s.shapes:
+            if sh.text_frame:
+                full = " ".join(p.text.strip() for p in sh.text_frame.paragraphs if p.text.strip()).lower()
+                # extract 3-gram phrases
+                words = re.findall(r"[a-z]+", full)
+                for i in range(len(words) - 2):
+                    phrase = " ".join(words[i:i+3])
+                    if len(phrase) > 8 and phrase not in seen_in_slide:
+                        phrase_map.setdefault(phrase, []).append(s.slide_number)
+                        seen_in_slide.add(phrase)
+
+    # keep phrases appearing on 2+ distinct slides
+    duplicates = [
+        {"phrase": ph, "slides": sorted(set(ns)), "count": len(set(ns))}
+        for ph, ns in phrase_map.items()
+        if len(set(ns)) >= 2
+    ]
+    # sort by frequency desc, take top 20
+    duplicates.sort(key=lambda x: -x["count"])
+    duplicates = duplicates[:20]
+
+    return {"duplicates": duplicates, "total": len(duplicates)}
+
+
+# ── Passive Voice Detector ────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/passive-voice")
+def passive_voice(doc_id: str):
+    """Find sentences likely written in passive voice."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    passive_re = re.compile(
+        r"\b(is|are|was|were|be|been|being)\s+\w+ed\b",
+        re.I,
+    )
+
+    findings: list[dict] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    txt = para.text.strip()
+                    if passive_re.search(txt):
+                        findings.append({
+                            "slide_n": s.slide_number,
+                            "text": txt[:200],
+                            "match": passive_re.search(txt).group(0),
+                        })
+
+    return {"findings": findings[:30], "total": len(findings)}
+
+
+# ── Emotional Keywords Highlighter ───────────────────────────────────────────
+
+_EMOTIONAL_KEYWORDS: dict[str, list[str]] = {
+    "urgency":    ["now", "immediately", "critical", "urgent", "deadline", "asap", "today", "must"],
+    "trust":      ["proven", "trusted", "certified", "guarantee", "reliable", "secure", "verified"],
+    "excitement": ["incredible", "amazing", "breakthrough", "revolutionary", "exciting", "new"],
+    "fear":       ["risk", "danger", "threat", "problem", "failure", "loss", "miss", "avoid"],
+    "growth":     ["grow", "increase", "improve", "scale", "expand", "gain", "boost", "up"],
+}
+
+@app.get("/api/docs/{doc_id}/emotional-keywords")
+def emotional_keywords(doc_id: str):
+    """Highlight emotionally-charged keywords in the deck by category."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    hits: list[dict] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    txt = para.text.strip().lower()
+                    if not txt:
+                        continue
+                    for category, words in _EMOTIONAL_KEYWORDS.items():
+                        matched = [w for w in words if re.search(r"\b" + w + r"\b", txt)]
+                        if matched:
+                            hits.append({
+                                "slide_n": s.slide_number,
+                                "category": category,
+                                "text": para.text.strip()[:180],
+                                "matched_words": matched,
+                            })
+
+    # group by category for summary
+    by_cat: dict[str, int] = {}
+    for h in hits:
+        by_cat[h["category"]] = by_cat.get(h["category"], 0) + 1
+
+    return {"hits": hits[:40], "total": len(hits), "by_category": by_cat}
+
+
+# ── Deck Comparison (two docs) ────────────────────────────────────────────────
+
+class DeckCompareReq(BaseModel):
+    doc_id_b: str
+
+@app.post("/api/docs/{doc_id}/compare-decks")
+def compare_decks(doc_id: str, body: DeckCompareReq):
+    """Compare two decks: slide counts, shared keywords, unique keywords, title overlap."""
+    da = _require(doc_id)
+    db = _require(body.doc_id_b)
+
+    def _extract(d: dict) -> dict:
+        doc_ = d["doc"]
+        words: list[str] = []
+        titles: list[str] = []
+        for s in doc_.slides:
+            for sh in s.shapes:
+                if sh.text_frame:
+                    for i, para in enumerate(sh.text_frame.paragraphs):
+                        if para.text.strip():
+                            words += re.findall(r"[a-zA-Z]{4,}", para.text.lower())
+                            if i == 0:
+                                titles.append(para.text.strip().lower())
+        from collections import Counter
+        freq = Counter(words)
+        top_words = {w for w, _ in freq.most_common(40)}
+        return {"slide_count": len(doc_.slides), "top_words": top_words, "titles": set(titles), "name": d.get("meta", {}).get("name", "Deck")}
+
+    info_a = _extract(da)
+    info_b = _extract(db)
+
+    shared_kw  = sorted(info_a["top_words"] & info_b["top_words"])
+    unique_a   = sorted(info_a["top_words"] - info_b["top_words"])[:10]
+    unique_b   = sorted(info_b["top_words"] - info_a["top_words"])[:10]
+    shared_titles = sorted(info_a["titles"] & info_b["titles"])
+
+    return {
+        "deck_a": {"slide_count": info_a["slide_count"], "name": da.get("meta", {}).get("name", "Deck A")},
+        "deck_b": {"slide_count": info_b["slide_count"], "name": db.get("meta", {}).get("name", "Deck B")},
+        "shared_keywords": shared_kw[:20],
+        "unique_to_a": unique_a,
+        "unique_to_b": unique_b,
+        "shared_titles": shared_titles,
+        "overlap_score": round(len(shared_kw) / max(len(info_a["top_words"] | info_b["top_words"]), 1) * 100),
+    }
+
+
+# ── Jargon Detector ───────────────────────────────────────────────────────────
+
+_JARGON_WORDS = {
+    "synergy", "leverage", "scalable", "ecosystem", "paradigm", "disruptive",
+    "pivot", "agile", "bandwidth", "boil the ocean", "circle back", "deep dive",
+    "drill down", "game changer", "holistic", "ideate", "impactful", "iterate",
+    "low-hanging fruit", "move the needle", "on the same page", "pain point",
+    "paradigm shift", "proactive", "robust", "seamless", "stakeholder", "streamline",
+    "synergize", "thought leader", "touch base", "unique value proposition",
+    "value-add", "verticalize", "win-win", "best of breed", "bleeding edge",
+    "core competency", "cross-functional", "customer-centric", "data-driven",
+    "end-to-end", "go-to-market", "key performance indicator", "kpi", "mission critical",
+    "north star", "okr", "roi", "runway", "scrappy", "silo", "t-shaped", "10x",
+}
+
+@app.get("/api/docs/{doc_id}/jargon-detector")
+def jargon_detector(doc_id: str):
+    """Find overused corporate jargon in the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    hits: list[dict] = []
+    jargon_count: dict[str, int] = {}
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    txt = para.text.strip()
+                    if not txt:
+                        continue
+                    lower = txt.lower()
+                    for word in _JARGON_WORDS:
+                        if re.search(r"\b" + re.escape(word) + r"\b", lower):
+                            hits.append({"slide_n": s.slide_number, "text": txt[:160], "word": word})
+                            jargon_count[word] = jargon_count.get(word, 0) + 1
+
+    top_jargon = sorted(jargon_count.items(), key=lambda x: -x[1])[:10]
+    return {
+        "hits": hits[:40],
+        "total": len(hits),
+        "top_jargon": [{"word": w, "count": c} for w, c in top_jargon],
+    }
+
+
+# ── Story Arc Visualizer ──────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/story-arc")
+async def story_arc(doc_id: str):
+    """AI assigns a story arc stage to each slide (hook/setup/conflict/resolution/cta)."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides_text = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = " ".join(p.text.strip() for p in sh.text_frame.paragraphs if p.text.strip())
+                if t:
+                    parts.append(t)
+        slides_text.append({"slide_n": s.slide_number, "text": " | ".join(parts)[:200]})
+
+    if not slides_text:
+        return {"arc": []}
+
+    sample = "\n".join(f"Slide {s['slide_n']}: {s['text']}" for s in slides_text[:20])
+    prompt = (
+        "Assign each slide a story arc stage. Stages: hook, context, problem, solution, evidence, objection, resolution, cta, other.\n"
+        "Return JSON: {\"arc\": [{\"slide_n\": int, \"stage\": string, \"label\": string}]}\n"
+        "label is a 1-4 word human-readable summary of the slide's role.\n\n"
+        f"Slides:\n{sample}"
+    )
+    arc: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        arc = json.loads(raw).get("arc", arc)
+    except Exception as exc:
+        log.warning("story-arc parse failed: %s", exc)
+
+    return {"arc": arc}
+
+
+# ── Filler Word Counter ───────────────────────────────────────────────────────
+
+_FILLER_WORDS = [
+    "basically", "essentially", "actually", "literally", "obviously", "clearly",
+    "just", "really", "very", "quite", "simply", "in order to", "due to the fact",
+    "it is important to note", "needless to say", "as you know", "going forward",
+    "at the end of the day", "to be honest", "the fact of the matter",
+]
+
+@app.get("/api/docs/{doc_id}/filler-words")
+def filler_words(doc_id: str):
+    """Count filler and weak words used throughout the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    hits: list[dict] = []
+    count_map: dict[str, int] = {}
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    txt = para.text.strip()
+                    if not txt:
+                        continue
+                    lower = txt.lower()
+                    for filler in _FILLER_WORDS:
+                        if re.search(r"\b" + re.escape(filler) + r"\b", lower):
+                            hits.append({"slide_n": s.slide_number, "text": txt[:160], "word": filler})
+                            count_map[filler] = count_map.get(filler, 0) + 1
+
+    top = sorted(count_map.items(), key=lambda x: -x[1])[:10]
+    return {
+        "hits": hits[:40],
+        "total": len(hits),
+        "top_fillers": [{"word": w, "count": c} for w, c in top],
+    }
+
+
+# ── Acronym Explainer ─────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/acronym-explainer")
+async def acronym_explainer(doc_id: str):
+    """AI identifies all acronyms in the deck and explains what they mean."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    # collect all caps tokens
+    acronym_re = re.compile(r"\b[A-Z]{2,6}\b")
+    found: dict[str, list[int]] = {}
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    for match in acronym_re.finditer(para.text):
+                        word = match.group(0)
+                        found.setdefault(word, []).append(s.slide_number)
+
+    if not found:
+        return {"acronyms": []}
+
+    unique = list(found.keys())[:25]
+    prompt = (
+        "For each of the following acronyms used in a business presentation, provide its full meaning (or 'Unknown' if obscure). "
+        "Return JSON: {\"acronyms\": [{\"acronym\": string, \"meaning\": string, \"category\": string}]}\n"
+        "category is one of: technical, business, medical, legal, general, unknown.\n\n"
+        f"Acronyms: {', '.join(unique)}"
+    )
+    explained: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        parsed = json.loads(raw)
+        items = parsed.get("acronyms", [])
+        for item in items:
+            acr = item.get("acronym", "")
+            item["slides"] = sorted(set(found.get(acr, [])))
+        explained = items
+    except Exception as exc:
+        log.warning("acronym-explainer parse failed: %s", exc)
+        explained = [{"acronym": a, "meaning": "Unknown", "category": "unknown", "slides": sorted(set(found[a]))} for a in unique]
+
+    return {"acronyms": explained}
+
+
+# ── Weak Verb Highlighter ─────────────────────────────────────────────────────
+
+_WEAK_VERBS = [
+    "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did",
+    "get", "got", "make", "made", "put", "set",
+    "give", "gave", "take", "took", "come", "go",
+    "think", "know", "see", "try",
+]
+
+@app.get("/api/docs/{doc_id}/weak-verbs")
+def weak_verbs(doc_id: str):
+    """Find sentences starting with or dominated by weak verbs."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    hits: list[dict] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    txt = para.text.strip()
+                    if not txt or len(txt) < 8:
+                        continue
+                    first_word = txt.split()[0].lower().rstrip(".,!?:")
+                    if first_word in _WEAK_VERBS:
+                        hits.append({
+                            "slide_n": s.slide_number,
+                            "text": txt[:180],
+                            "weak_verb": first_word,
+                        })
+
+    return {"hits": hits[:40], "total": len(hits)}
+
+
+# ── Bullet Point Analyzer ─────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/bullet-analysis")
+def bullet_analysis(doc_id: str):
+    """Analyze bullet point usage: count, depth, avg length, and flag very long bullets."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    total_bullets = 0
+    long_bullets: list[dict] = []
+    depth_counts: dict[int, int] = {}
+    word_counts: list[int] = []
+
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    txt = para.text.strip()
+                    if not txt:
+                        continue
+                    level = getattr(para, "level", 0) or 0
+                    total_bullets += 1
+                    depth_counts[level] = depth_counts.get(level, 0) + 1
+                    wc = len(txt.split())
+                    word_counts.append(wc)
+                    if wc > 18:
+                        long_bullets.append({
+                            "slide_n": s.slide_number,
+                            "text": txt[:200],
+                            "words": wc,
+                            "level": level,
+                        })
+
+    avg_words = round(sum(word_counts) / len(word_counts), 1) if word_counts else 0
+    max_depth = max(depth_counts.keys(), default=0)
+
+    verdicts = []
+    if avg_words > 15:
+        verdicts.append("Bullets are too long on average — aim for 6–10 words.")
+    if avg_words < 3:
+        verdicts.append("Bullets are very short — consider adding more context.")
+    if max_depth >= 3:
+        verdicts.append("Deep nesting (3+ levels) detected — simplify hierarchy.")
+    if not verdicts:
+        verdicts.append("Bullet structure looks good.")
+
+    return {
+        "total_bullets": total_bullets,
+        "avg_words": avg_words,
+        "max_depth": max_depth,
+        "depth_distribution": depth_counts,
+        "long_bullets": long_bullets[:15],
+        "verdicts": verdicts,
+    }
+
+
+# ── Presentation Timer Estimator (per-slide) ─────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/timer-estimate")
+def timer_estimate(doc_id: str, wpm: int = 130):
+    """Estimate speaking time per slide based on text word count and notes."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides_est: list[dict] = []
+    total_words = 0
+    for s in doc.slides:
+        body_words = 0
+        notes_words = 0
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    wc = len(para.text.split())
+                    if getattr(sh, "is_notes", False):
+                        notes_words += wc
+                    else:
+                        body_words += wc
+        # use notes if available (speaker reads from notes), else body text
+        effective_words = notes_words if notes_words > 0 else body_words
+        # minimum 20 seconds per slide for transitions/pauses
+        secs = max(20, round(effective_words / wpm * 60))
+        total_words += effective_words
+        slides_est.append({
+            "slide_n": s.slide_number,
+            "body_words": body_words,
+            "notes_words": notes_words,
+            "seconds": secs,
+            "mm_ss": f"{secs // 60}:{secs % 60:02d}",
+        })
+
+    total_secs = sum(x["seconds"] for x in slides_est)
+    return {
+        "slides": slides_est,
+        "total_seconds": total_secs,
+        "total_mm_ss": f"{total_secs // 60}:{total_secs % 60:02d}",
+        "total_words": total_words,
+        "wpm": wpm,
+    }
+
+
+# ── Color Usage Report ────────────────────────────────────────────────────────
+
+def _rgb_to_hex(r: int, g: int, b: int) -> str:
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+@app.get("/api/docs/{doc_id}/color-report")
+def color_report(doc_id: str):
+    """Report all colors used across the deck (text, background, shapes)."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    from collections import Counter
+    color_counter: Counter = Counter()
+
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    for run in para.runs:
+                        fc = getattr(run.font, "color", None)
+                        if fc and hasattr(fc, "rgb") and fc.rgb is not None:
+                            try:
+                                rgb = fc.rgb
+                                color_counter[_rgb_to_hex(rgb[0], rgb[1], rgb[2])] += 1
+                            except Exception:
+                                pass
+            fill = getattr(sh, "fill", None)
+            if fill:
+                try:
+                    from pptx.util import Pt
+                    fg = getattr(fill, "fore_color", None)
+                    if fg and hasattr(fg, "rgb") and fg.rgb is not None:
+                        rgb = fg.rgb
+                        color_counter[_rgb_to_hex(rgb[0], rgb[1], rgb[2])] += 1
+                except Exception:
+                    pass
+
+    top_colors = [{"hex": c, "count": n} for c, n in color_counter.most_common(20)]
+    return {
+        "colors": top_colors,
+        "unique_count": len(color_counter),
+        "total_uses": sum(color_counter.values()),
+    }
+
+
+# ── Whitespace Analyzer ───────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/whitespace-analysis")
+def whitespace_analysis(doc_id: str):
+    """Estimate how much whitespace (empty area) each slide has."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    from pptx.util import Inches
+    slides_out: list[dict] = []
+    for s in doc.slides:
+        try:
+            slide_w = doc.slide_width.inches
+            slide_h = doc.slide_height.inches
+        except Exception:
+            slide_w, slide_h = 13.333, 7.5
+        slide_area = slide_w * slide_h
+
+        occupied = 0.0
+        for sh in s.shapes:
+            try:
+                w = sh.width.inches if sh.width else 0
+                h = sh.height.inches if sh.height else 0
+                occupied += w * h
+            except Exception:
+                pass
+
+        occupied = min(occupied, slide_area)
+        whitespace_pct = round((1 - occupied / slide_area) * 100) if slide_area > 0 else 0
+        slides_out.append({
+            "slide_n": s.slide_number,
+            "whitespace_pct": whitespace_pct,
+            "occupied_pct": 100 - whitespace_pct,
+        })
+
+    avg_ws = round(sum(s["whitespace_pct"] for s in slides_out) / len(slides_out)) if slides_out else 0
+    crowded = [s for s in slides_out if s["whitespace_pct"] < 20]
+    empty_heavy = [s for s in slides_out if s["whitespace_pct"] > 80]
+
+    return {
+        "slides": slides_out,
+        "avg_whitespace_pct": avg_ws,
+        "crowded": crowded,
+        "empty_heavy": empty_heavy,
+    }
+
+
+# ── Font Pairing Suggester ────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/font-pairing")
+async def font_pairing(doc_id: str):
+    """AI suggests harmonious font pairings based on fonts already in the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    current_fonts: set[str] = set()
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    for run in para.runs:
+                        fn = getattr(run.font, "name", None)
+                        if fn:
+                            current_fonts.add(fn)
+
+    fonts_list = ", ".join(sorted(current_fonts)[:6]) or "unknown fonts"
+    prompt = (
+        f"The presentation currently uses these fonts: {fonts_list}.\n"
+        "Suggest 3 harmonious font pairing combinations for the deck, each with a heading font and a body font. "
+        "Return JSON: {\"pairings\": [{\"heading\": string, \"body\": string, \"reason\": string}]}"
+    )
+    pairings: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        pairings = json.loads(raw).get("pairings", pairings)
+    except Exception as exc:
+        log.warning("font-pairing parse failed: %s", exc)
+
+    return {"current_fonts": sorted(current_fonts), "pairings": pairings}
+
+
+# ── Section Summary Generator ─────────────────────────────────────────────────
+
+class SectionSummaryReq(BaseModel):
+    slide_range: list[int] = []
+
+@app.post("/api/docs/{doc_id}/section-summary")
+async def section_summary(doc_id: str, body: SectionSummaryReq):
+    """AI generates a summary paragraph for a range of slides (or whole deck)."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    target = set(body.slide_range) if body.slide_range else {s.slide_number for s in doc.slides}
+
+    texts = []
+    for s in doc.slides:
+        if s.slide_number not in target:
+            continue
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = " ".join(p.text.strip() for p in sh.text_frame.paragraphs if p.text.strip())
+                if t:
+                    parts.append(t)
+        if parts:
+            texts.append(f"Slide {s.slide_number}: " + " | ".join(parts)[:200])
+
+    if not texts:
+        return {"summary": "No content found for the requested slides.", "bullets": []}
+
+    sample = "\n".join(texts[:15])
+    slide_desc = f"slides {min(target)}–{max(target)}" if body.slide_range else "the entire deck"
+    prompt = (
+        f"Write a concise executive summary for {slide_desc} of a presentation.\n"
+        "Return JSON: {\"summary\": string, \"bullets\": [string, ...]}\n"
+        "summary: 2-3 sentences. bullets: 3-4 key takeaways.\n\n"
+        f"Content:\n{sample}"
+    )
+    summary_text = ""
+    bullets: list[str] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        parsed = json.loads(raw)
+        summary_text = parsed.get("summary", "")
+        bullets       = parsed.get("bullets", bullets)
+    except Exception as exc:
+        log.warning("section-summary parse failed: %s", exc)
+
+    return {"summary": summary_text, "bullets": bullets, "slide_count": len(texts)}
+
+
+# ── First Impression Score ────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/first-impression")
+async def first_impression(doc_id: str):
+    """AI critiques the opening slide and gives a first-impression score."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    if not doc.slides:
+        return {"score": 0, "verdict": "No slides found.", "strengths": [], "improvements": []}
+
+    first_slide = doc.slides[0]
+    texts = []
+    for sh in first_slide.shapes:
+        if sh.text_frame:
+            t = " ".join(p.text.strip() for p in sh.text_frame.paragraphs if p.text.strip())
+            if t:
+                texts.append(t)
+
+    slide_text = " | ".join(texts) or "(empty slide)"
+    prompt = (
+        "You are a presentation coach. Critique the opening slide of a presentation.\n"
+        f"Opening slide content: \"{slide_text[:400]}\"\n"
+        "Return JSON: {\"score\": int (1-10), \"verdict\": string, \"strengths\": [string,...], \"improvements\": [string,...]}\n"
+        "score: 1=poor, 10=excellent first impression. verdict: 1 sentence. strengths: up to 3. improvements: up to 3."
+    )
+    score = 5
+    verdict = ""
+    strengths: list[str] = []
+    improvements: list[str] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        parsed = json.loads(raw)
+        score        = parsed.get("score", score)
+        verdict      = parsed.get("verdict", verdict)
+        strengths    = parsed.get("strengths", strengths)
+        improvements = parsed.get("improvements", improvements)
+    except Exception as exc:
+        log.warning("first-impression parse failed: %s", exc)
+
+    return {"score": score, "verdict": verdict, "strengths": strengths, "improvements": improvements}
+
+
+# ── CTA Strength Analyzer ─────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/cta-strength")
+async def cta_strength(doc_id: str):
+    """AI finds and rates the call-to-action slides in the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    # Get last 3 slides as likely CTA zone
+    candidates = doc.slides[-3:] if len(doc.slides) >= 3 else doc.slides
+    slide_texts = []
+    for s in candidates:
+        texts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = " ".join(p.text.strip() for p in sh.text_frame.paragraphs if p.text.strip())
+                if t:
+                    texts.append(t)
+        if texts:
+            slide_texts.append({"slide_n": s.slide_number, "text": " | ".join(texts)[:300]})
+
+    if not slide_texts:
+        return {"ctas": [], "overall_strength": 0, "recommendation": "No CTA content found."}
+
+    sample = "\n".join(f"Slide {s['slide_n']}: {s['text']}" for s in slide_texts)
+    prompt = (
+        "Analyze these closing/CTA slides from a presentation and rate each one's call-to-action strength.\n"
+        "Return JSON: {\"ctas\": [{\"slide_n\": int, \"strength\": int (1-10), \"cta_text\": string, \"feedback\": string}], "
+        "\"overall_strength\": int (1-10), \"recommendation\": string}\n\n"
+        f"Slides:\n{sample}"
+    )
+    ctas: list[dict] = []
+    overall_strength = 5
+    recommendation = ""
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        parsed = json.loads(raw)
+        ctas             = parsed.get("ctas", ctas)
+        overall_strength = parsed.get("overall_strength", overall_strength)
+        recommendation   = parsed.get("recommendation", recommendation)
+    except Exception as exc:
+        log.warning("cta-strength parse failed: %s", exc)
+
+    return {"ctas": ctas, "overall_strength": overall_strength, "recommendation": recommendation}
+
+
+# ── Keyword Density Map ───────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/keyword-density")
+def keyword_density(doc_id: str, top_n: int = 15):
+    """Compute keyword density for the whole deck and per-slide breakdowns."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    from collections import Counter
+    stop_words = {
+        "the","a","an","is","are","was","were","and","or","but","in","on","at","to","of",
+        "for","with","by","from","as","it","this","that","be","been","have","has","had",
+        "not","no","can","will","would","could","should","we","our","us","you","your","i",
+        "my","they","their","he","she","its","do","does","did","so","if","than","then",
+        "each","all","more","one","two","three","also","very","new","may",
+    }
+
+    global_counts: Counter = Counter()
+    per_slide: list[dict] = []
+
+    for s in doc.slides:
+        slide_words: list[str] = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    for w in re.findall(r"[a-zA-Z]{3,}", para.text.lower()):
+                        if w not in stop_words:
+                            slide_words.append(w)
+        slide_counter = Counter(slide_words)
+        global_counts.update(slide_words)
+        top_in_slide = [{"word": w, "count": c} for w, c in slide_counter.most_common(5)]
+        per_slide.append({"slide_n": s.slide_number, "top": top_in_slide})
+
+    top_global = [{"word": w, "count": c} for w, c in global_counts.most_common(top_n)]
+    return {"global_top": top_global, "per_slide": per_slide, "total_unique": len(global_counts)}
+
+
+# ── Repetition Heatmap ────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/repetition-heatmap")
+def repetition_heatmap(doc_id: str):
+    """For each slide compute a repetition score (0-100) based on how many words appear elsewhere."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    from collections import Counter
+    stop_words = {
+        "the","a","an","is","are","was","and","or","but","in","on","at","to","of","for",
+        "with","by","from","as","it","this","that","be","been","have","has","had","not",
+    }
+
+    # Build word → list of slide_n map
+    word_slides: dict[str, set[int]] = {}
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    for w in re.findall(r"[a-zA-Z]{4,}", para.text.lower()):
+                        if w not in stop_words:
+                            word_slides.setdefault(w, set()).add(s.slide_number)
+
+    # For each slide, score = pct of its words that appear on 2+ other slides
+    slides_out: list[dict] = []
+    for s in doc.slides:
+        words_in_slide: list[str] = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    for w in re.findall(r"[a-zA-Z]{4,}", para.text.lower()):
+                        if w not in stop_words:
+                            words_in_slide.append(w)
+        if not words_in_slide:
+            slides_out.append({"slide_n": s.slide_number, "repetition_score": 0, "repeated_words": []})
+            continue
+        repeated = [w for w in words_in_slide if len(word_slides.get(w, set())) >= 2]
+        score = round(len(set(repeated)) / max(len(set(words_in_slide)), 1) * 100)
+        top_rep = Counter(repeated).most_common(5)
+        slides_out.append({
+            "slide_n": s.slide_number,
+            "repetition_score": score,
+            "repeated_words": [w for w, _ in top_rep],
+        })
+
+    avg_score = round(sum(s["repetition_score"] for s in slides_out) / max(len(slides_out), 1))
+    return {"slides": slides_out, "avg_repetition": avg_score}
+
+
+# ── Claim Checker ─────────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/claim-checker")
+async def claim_checker(doc_id: str):
+    """AI finds and flags unsubstantiated claims or assertions that need citations."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = " ".join(p.text.strip() for p in sh.text_frame.paragraphs if p.text.strip())
+                if t:
+                    parts.append(t)
+        if parts:
+            texts.append({"slide_n": s.slide_number, "text": " | ".join(parts)[:200]})
+
+    if not texts:
+        return {"claims": [], "total": 0}
+
+    sample = "\n".join(f"Slide {t['slide_n']}: {t['text']}" for t in texts[:15])
+    prompt = (
+        "Review this presentation content and identify unsubstantiated claims, statistics without sources, "
+        "or assertions that should be backed up with evidence.\n"
+        "Return JSON: {\"claims\": [{\"slide_n\": int, \"claim\": string, \"concern\": string, \"severity\": \"low\"|\"medium\"|\"high\"}]}\n"
+        "Limit to the most important 10 claims. severity: high=major factual assertion, medium=could use data, low=minor.\n\n"
+        f"Content:\n{sample}"
+    )
+    claims: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        claims = json.loads(raw).get("claims", claims)
+    except Exception as exc:
+        log.warning("claim-checker parse failed: %s", exc)
+
+    return {"claims": claims, "total": len(claims)}
+
+
+# ── Discussion Questions Generator ────────────────────────────────────────────
+
+class DiscussionQuestionsReq(BaseModel):
+    count: int = 5
+
+@app.post("/api/docs/{doc_id}/discussion-questions")
+async def discussion_questions(doc_id: str, body: DiscussionQuestionsReq):
+    """AI generates open-ended discussion questions for the whole deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts = []
+    for s in doc.slides[:10]:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = " ".join(p.text.strip() for p in sh.text_frame.paragraphs if p.text.strip())
+                if t:
+                    parts.append(t)
+        if parts:
+            texts.append(" | ".join(parts)[:150])
+
+    if not texts:
+        return {"questions": []}
+
+    sample = "\n".join(texts)
+    prompt = (
+        f"Generate {body.count} thought-provoking open-ended discussion questions for a group reviewing this presentation.\n"
+        "Questions should encourage critical thinking and debate.\n"
+        "Return JSON: {\"questions\": [string, ...]}\n\n"
+        f"Presentation content (sample):\n{sample}"
+    )
+    questions: list[str] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        questions = json.loads(raw).get("questions", questions)
+    except Exception as exc:
+        log.warning("discussion-questions parse failed: %s", exc)
+
+    return {"questions": questions}
+
+
+# ── Vocabulary Level Checker ──────────────────────────────────────────────────
+
+def _count_syllables(word: str) -> int:
+    word = word.lower().rstrip(".,!?;:")
+    count = len(re.findall(r"[aeiou]+", word))
+    if word.endswith("e") and count > 1:
+        count -= 1
+    return max(1, count)
+
+@app.get("/api/docs/{doc_id}/vocabulary-level")
+def vocabulary_level(doc_id: str):
+    """Compute vocabulary complexity metrics (Flesch-Kincaid approximation)."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    sentences: list[str] = []
+    total_words: list[str] = []
+    total_syllables = 0
+
+    sentence_re = re.compile(r"[.!?]+")
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    txt = para.text.strip()
+                    if not txt:
+                        continue
+                    # split into sentences
+                    parts = [p.strip() for p in sentence_re.split(txt) if p.strip()]
+                    sentences.extend(parts)
+                    for w in re.findall(r"[a-zA-Z]+", txt):
+                        total_words.append(w.lower())
+                        total_syllables += _count_syllables(w)
+
+    if not total_words:
+        return {"fk_grade": 0, "level": "N/A", "avg_syllables_per_word": 0, "complex_words_pct": 0}
+
+    avg_words_per_sentence = len(total_words) / max(len(sentences), 1)
+    avg_syllables_per_word = total_syllables / len(total_words)
+    complex_words = [w for w in total_words if _count_syllables(w) >= 3]
+    complex_pct = round(len(complex_words) / len(total_words) * 100, 1)
+
+    fk_grade = round(0.39 * avg_words_per_sentence + 11.8 * avg_syllables_per_word - 15.59, 1)
+    fk_grade = max(0, min(fk_grade, 20))
+
+    if fk_grade <= 6:
+        level = "Elementary"
+    elif fk_grade <= 9:
+        level = "Middle School"
+    elif fk_grade <= 12:
+        level = "High School"
+    elif fk_grade <= 16:
+        level = "College"
+    else:
+        level = "Graduate"
+
+    return {
+        "fk_grade": fk_grade,
+        "level": level,
+        "avg_syllables_per_word": round(avg_syllables_per_word, 2),
+        "complex_words_pct": complex_pct,
+        "total_words": len(total_words),
+        "total_sentences": len(sentences),
+    }
+
+
+# ── Deck Completeness Report ──────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/completeness-report")
+def completeness_report(doc_id: str):
+    """Score how complete and production-ready the deck is across multiple dimensions."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    dimensions: list[dict] = []
+    slide_count = len(doc.slides)
+
+    # 1. Content coverage
+    has_intro = False
+    has_conclusion = False
+    if slide_count > 0:
+        first_words = ""
+        last_words = ""
+        for sh in doc.slides[0].shapes:
+            if sh.text_frame:
+                first_words += sh.text_frame.text.lower()
+        for sh in doc.slides[-1].shapes:
+            if sh.text_frame:
+                last_words += sh.text_frame.text.lower()
+        intro_kw = ["introduction", "overview", "agenda", "about", "welcome", "today"]
+        conc_kw  = ["conclusion", "summary", "next steps", "takeaway", "questions", "thank"]
+        has_intro     = any(w in first_words for w in intro_kw)
+        has_conclusion = any(w in last_words for w in conc_kw)
+
+    dimensions.append({
+        "name": "Structure",
+        "score": (50 if has_intro else 0) + (50 if has_conclusion else 0),
+        "detail": ("Has intro & conclusion" if has_intro and has_conclusion
+                   else "Missing " + ("intro" if not has_intro else "conclusion")),
+    })
+
+    # 2. Speaker notes coverage
+    with_notes = sum(1 for s in doc.slides if any(
+        sh.text_frame and any(p.text.strip() for p in sh.text_frame.paragraphs)
+        for sh in s.shapes if getattr(sh, "is_notes", False)
+    ))
+    notes_pct = round(with_notes / max(slide_count, 1) * 100)
+    dimensions.append({
+        "name": "Speaker Notes",
+        "score": notes_pct,
+        "detail": f"{with_notes}/{slide_count} slides have notes",
+    })
+
+    # 3. Visual density (not all-text)
+    text_only_slides = 0
+    for s in doc.slides:
+        has_image = any(getattr(sh, "shape_type", None) == 13 for sh in s.shapes)
+        if not has_image:
+            text_only_slides += 1
+    visual_score = round((1 - text_only_slides / max(slide_count, 1)) * 100)
+    dimensions.append({
+        "name": "Visuals",
+        "score": visual_score,
+        "detail": f"{slide_count - text_only_slides} slides have images",
+    })
+
+    # 4. Word count per slide (not empty, not overloaded)
+    word_scores = []
+    for s in doc.slides:
+        wc = sum(len(p.text.split()) for sh in s.shapes if sh.text_frame for p in sh.text_frame.paragraphs)
+        if 5 <= wc <= 60:
+            word_scores.append(100)
+        elif wc < 5:
+            word_scores.append(30)
+        else:
+            word_scores.append(50)
+    content_score = round(sum(word_scores) / max(len(word_scores), 1))
+    dimensions.append({
+        "name": "Content Balance",
+        "score": content_score,
+        "detail": "Word count per slide assessed",
+    })
+
+    overall = round(sum(d["score"] for d in dimensions) / len(dimensions))
+    label = "Production Ready" if overall >= 80 else "Needs Work" if overall >= 50 else "Draft"
+
+    return {"overall": overall, "label": label, "dimensions": dimensions}
+
+
+# ── Visual Hierarchy Checker ──────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/visual-hierarchy")
+def visual_hierarchy(doc_id: str):
+    """Check whether each slide has clear heading → body text hierarchy."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    issues: list[dict] = []
+    for s in doc.slides:
+        levels: list[int] = []
+        font_sizes: list[float] = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    if para.text.strip():
+                        level = getattr(para, "level", 0) or 0
+                        levels.append(level)
+                        # try to get font size
+                        try:
+                            for run in para.runs:
+                                sz = getattr(run.font, "size", None)
+                                if sz:
+                                    from pptx.util import Pt
+                                    font_sizes.append(sz.pt)
+                        except Exception:
+                            pass
+
+        if not levels:
+            continue
+
+        max_level = max(levels)
+        unique_levels = len(set(levels))
+
+        slide_issues = []
+        if unique_levels == 1 and len(levels) > 3:
+            slide_issues.append("All text at same indent level — no visual hierarchy")
+        if font_sizes and len(set(round(f) for f in font_sizes)) == 1 and len(font_sizes) > 2:
+            slide_issues.append("All text same font size — no size variation")
+        if max_level >= 4:
+            slide_issues.append(f"Very deep nesting (level {max_level}) — hard to scan")
+
+        if slide_issues:
+            issues.append({"slide_n": s.slide_number, "issues": slide_issues})
+
+    return {"issues": issues, "total": len(issues), "slides_checked": len(doc.slides)}
+
+
+# ── Sentiment Arc ─────────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/sentiment-arc")
+async def sentiment_arc(doc_id: str):
+    """AI assigns a sentiment score (-1 to 1) to each slide to show emotional progression."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides_text = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = " ".join(p.text.strip() for p in sh.text_frame.paragraphs if p.text.strip())
+                if t:
+                    parts.append(t)
+        slides_text.append({"slide_n": s.slide_number, "text": " | ".join(parts)[:150]})
+
+    if not slides_text:
+        return {"arc": []}
+
+    sample = "\n".join(f"Slide {s['slide_n']}: {s['text']}" for s in slides_text[:20])
+    prompt = (
+        "Analyze the sentiment of each slide in this presentation on a scale from -1 (very negative) to 1 (very positive).\n"
+        "Return JSON: {\"arc\": [{\"slide_n\": int, \"sentiment\": float, \"label\": string}]}\n"
+        "label: one word like 'hopeful', 'alarming', 'neutral', 'inspiring', 'challenging', etc.\n\n"
+        f"Slides:\n{sample}"
+    )
+    arc: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        arc = json.loads(raw).get("arc", arc)
+    except Exception as exc:
+        log.warning("sentiment-arc parse failed: %s", exc)
+
+    avg = round(sum(s.get("sentiment", 0) for s in arc) / max(len(arc), 1), 2)
+    return {"arc": arc, "avg_sentiment": avg}
+
+
+# ── AI Tagline Variations ─────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/tagline-variations")
+async def tagline_variations(doc_id: str):
+    """AI generates 5+ deck title/tagline variations with different tones."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts = []
+    for s in doc.slides[:3]:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = " ".join(p.text.strip() for p in sh.text_frame.paragraphs if p.text.strip())
+                if t:
+                    texts.append(t[:120])
+    context = " | ".join(texts[:3]) or "presentation"
+    prompt = (
+        f"Based on this presentation context: \"{context}\"\n"
+        "Generate 6 title/tagline variations for this deck in different tones: "
+        "professional, inspirational, urgent, playful, technical, executive.\n"
+        "Return JSON: {\"variations\": [{\"tone\": string, \"title\": string, \"tagline\": string}]}"
+    )
+    variations: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        variations = json.loads(raw).get("variations", variations)
+    except Exception as exc:
+        log.warning("tagline-variations parse failed: %s", exc)
+
+    return {"variations": variations}
+
+
+# ── Slide Length Normalizer ───────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slide-length-check")
+def slide_length_check(doc_id: str):
+    """Find slides that are significantly longer or shorter than the deck average."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slide_words: list[dict] = []
+    for s in doc.slides:
+        wc = sum(len(p.text.split()) for sh in s.shapes if sh.text_frame for p in sh.text_frame.paragraphs)
+        slide_words.append({"slide_n": s.slide_number, "word_count": wc})
+
+    if not slide_words:
+        return {"slides": [], "avg_words": 0, "outliers": []}
+
+    avg = sum(x["word_count"] for x in slide_words) / len(slide_words)
+    std = (sum((x["word_count"] - avg) ** 2 for x in slide_words) / len(slide_words)) ** 0.5
+
+    for s in slide_words:
+        deviation = (s["word_count"] - avg) / max(std, 1)
+        s["z_score"] = round(deviation, 2)
+        s["status"] = "long" if deviation > 1.5 else "short" if deviation < -1.5 else "normal"
+
+    outliers = [s for s in slide_words if s["status"] != "normal"]
+    return {
+        "slides": slide_words,
+        "avg_words": round(avg, 1),
+        "std_words": round(std, 1),
+        "outliers": outliers,
+    }
+
+
+# ── Slide Density Heatmap ─────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/density-heatmap")
+def density_heatmap(doc_id: str):
+    """Multi-dimensional density heatmap: words, shapes, images, bullets per slide."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    rows: list[dict] = []
+    for s in doc.slides:
+        words   = 0
+        shapes  = 0
+        images  = 0
+        bullets = 0
+
+        for sh in s.shapes:
+            shapes += 1
+            if sh.shape_type == 13:
+                images += 1
+            elif sh.text_frame:
+                for p in sh.text_frame.paragraphs:
+                    wc = len(p.text.split())
+                    words += wc
+                    if p.level > 0 and wc > 0:
+                        bullets += 1
+
+        total_score = words // 5 + shapes * 2 + bullets * 2 + images * 3
+        rows.append({
+            "slide_n": s.slide_number,
+            "words":   words,
+            "shapes":  shapes,
+            "images":  images,
+            "bullets": bullets,
+            "density": min(total_score, 100),
+        })
+
+    max_density = max((r["density"] for r in rows), default=1)
+    for r in rows:
+        r["pct"] = round(r["density"] / max_density * 100, 1)
+
+    avg_density = round(sum(r["density"] for r in rows) / max(len(rows), 1), 1)
+    return {"slides": rows, "avg_density": avg_density, "max_density": max_density}
+
+
+# ── Presentation DNA ──────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/presentation-dna")
+async def presentation_dna(doc_id: str):
+    """AI extracts the unique 'DNA' of the presentation: style, personality, and signature."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts: list[str] = []
+    for s in doc.slides[:12]:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        texts.append(" | ".join(parts)[:200])
+
+    context = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(texts) if t)
+    prompt = (
+        "Analyze this presentation and identify its unique 'DNA' — what makes it distinctive.\n\n"
+        f"{context}\n\n"
+        "Identify: communication style, personality, signature phrases, strengths, blind spots.\n"
+        "Return JSON: {\"style\": string, \"personality\": string, \"signature_phrases\": [string], "
+        "\"strengths\": [string], \"blind_spots\": [string], \"archetype\": string}"
+    )
+    result: dict = {"style": "", "personality": "", "signature_phrases": [], "strengths": [], "blind_spots": [], "archetype": ""}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("presentation-dna parse failed: %s", exc)
+
+    return result
+
+
+# ── Speaker Confidence Tips ───────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/speaker-tips")
+async def speaker_tips(doc_id: str):
+    """AI generates speaker confidence tips for each slide."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slide_texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        slide_texts.append(" | ".join(parts)[:150])
+
+    chunks = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(slide_texts) if t)
+    prompt = (
+        "You are a professional speaking coach. For each slide below, give a brief "
+        "speaker confidence tip — something the presenter should do or remember.\n\n"
+        f"{chunks}\n\n"
+        "Keep each tip under 20 words. Focus on delivery, not content.\n"
+        "Return JSON: {\"tips\": [{\"slide_n\": number, \"tip\": string, \"technique\": string}]}"
+    )
+    tips: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        tips = json.loads(raw).get("tips", tips)
+    except Exception as exc:
+        log.warning("speaker-tips parse failed: %s", exc)
+
+    return {"tips": tips}
+
+
+# ── Objection Handler ─────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/objection-handler")
+async def objection_handler(doc_id: str):
+    """AI anticipates objections audience members might raise and prepares responses."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        texts.append(" | ".join(parts)[:200])
+
+    context = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(texts) if t)
+    prompt = (
+        "Anticipate the top objections a skeptical audience might raise after seeing this deck.\n\n"
+        f"{context}\n\n"
+        "For each objection, provide slide, the objection, and a strong rebuttal.\n"
+        "Return JSON: {\"objections\": [{\"slide_n\": number, \"objection\": string, "
+        "\"rebuttal\": string, \"severity\": \"easy|medium|tough\"}]}"
+    )
+    objections: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        objections = json.loads(raw).get("objections", objections)
+    except Exception as exc:
+        log.warning("objection-handler parse failed: %s", exc)
+
+    return {"objections": objections}
+
+
+# ── Urgency Detector ──────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/urgency-detector")
+def urgency_detector(doc_id: str):
+    """Find language that creates urgency, scarcity, or time pressure."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    urgency_patterns = [
+        (r"\blimited\s+time\b",      "time pressure"),
+        (r"\bact\s+now\b",           "call to action"),
+        (r"\bdon't\s+miss\b",        "FOMO"),
+        (r"\btoday\s+only\b",        "scarcity"),
+        (r"\bdeadline\b",            "deadline"),
+        (r"\burgent(?:ly)?\b",       "urgency"),
+        (r"\bimmediately\b",         "immediacy"),
+        (r"\bbefore\s+it'?s?\s+too\s+late\b", "fear"),
+        (r"\bnow\s+or\s+never\b",    "FOMO"),
+        (r"\bwindow\s+of\s+opportunity\b", "opportunity"),
+        (r"\bcritical\s+moment\b",   "urgency"),
+        (r"\btime\s+is\s+running\s+out\b", "time pressure"),
+        (r"\bQ[1-4]\s+20\d{2}\b",    "deadline"),
+        (r"\bby\s+end\s+of\s+(?:year|quarter|month)\b", "deadline"),
+    ]
+
+    results: list[dict] = []
+    for s in doc.slides:
+        hits = []
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for p in sh.text_frame.paragraphs:
+                text = p.text.strip()
+                if not text:
+                    continue
+                for pat, category in urgency_patterns:
+                    if re.search(pat, text, re.IGNORECASE):
+                        hits.append({"text": text[:200], "category": category})
+                        break
+        if hits:
+            results.append({"slide_n": s.slide_number, "hits": hits})
+
+    return {"slides": results, "total": sum(len(s["hits"]) for s in results)}
+
+
+# ── Question Count ────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/question-count")
+def question_count(doc_id: str):
+    """Count and categorize questions asked across slides."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    results: list[dict] = []
+    for s in doc.slides:
+        questions: list[str] = []
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for p in sh.text_frame.paragraphs:
+                text = p.text.strip()
+                if text.endswith("?"):
+                    questions.append(text[:200])
+                elif re.search(r"\?\s*$", text):
+                    questions.append(text[:200])
+        if questions:
+            results.append({"slide_n": s.slide_number, "questions": questions})
+
+    total = sum(len(s["questions"]) for s in results)
+    return {"slides": results, "total": total}
+
+
+# ── Value Proposition Finder ──────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/value-proposition")
+async def value_proposition(doc_id: str):
+    """AI identifies and evaluates the value proposition statements in the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        texts.append(" | ".join(parts)[:200])
+
+    context = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(texts) if t)
+    prompt = (
+        "Review this presentation and identify value proposition statements — "
+        "sentences or phrases that explain the benefit to the audience or customer.\n\n"
+        f"{context}\n\n"
+        "For each value proposition found, note which slide, rate its strength (1-10), "
+        "and suggest how to make it stronger.\n"
+        "Return JSON: {\"propositions\": [{\"slide_n\": number, \"statement\": string, "
+        "\"strength\": number, \"suggestion\": string}]}"
+    )
+    propositions: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        propositions = json.loads(raw).get("propositions", propositions)
+    except Exception as exc:
+        log.warning("value-proposition parse failed: %s", exc)
+
+    avg_strength = round(sum(p.get("strength", 0) for p in propositions) / max(len(propositions), 1), 1)
+    return {"propositions": propositions, "avg_strength": avg_strength}
+
+
+# ── Topic Coverage Map ────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/topic-coverage")
+async def topic_coverage(doc_id: str):
+    """AI maps which topics are covered, over-covered, or missing from the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        texts.append(" | ".join(parts)[:200])
+
+    context = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(texts) if t)
+    prompt = (
+        "Analyze this presentation and create a topic coverage map.\n\n"
+        f"{context}\n\n"
+        "Identify:\n"
+        "1. Main topics covered (with which slides)\n"
+        "2. Topics that receive too much attention (over-covered)\n"
+        "3. Topics that seem missing given the deck's purpose\n"
+        "Return JSON: {\"covered\": [{\"topic\": string, \"slides\": [number]}], "
+        "\"over_covered\": [string], \"missing\": [string]}"
+    )
+    result: dict = {"covered": [], "over_covered": [], "missing": []}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("topic-coverage parse failed: %s", exc)
+
+    return result
+
+
+# ── Numeric Consistency Check ────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/numeric-consistency")
+def numeric_consistency(doc_id: str):
+    """Find numbers that appear in multiple slides and flag inconsistencies."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    number_map: dict[str, list[dict]] = {}
+
+    for s in doc.slides:
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for p in sh.text_frame.paragraphs:
+                text = p.text.strip()
+                for m in re.finditer(r"\b(\d+(?:[.,]\d+)?(?:%|x|M|K|B)?)\b", text):
+                    val = m.group(0)
+                    ctx = text[:100]
+                    number_map.setdefault(val, []).append({
+                        "slide_n": s.slide_number,
+                        "context": ctx,
+                    })
+
+    conflicts: list[dict] = []
+    for val, occurrences in number_map.items():
+        slides_seen = list({o["slide_n"] for o in occurrences})
+        if len(slides_seen) >= 2:
+            ctxs = list({o["context"] for o in occurrences})
+            if len(ctxs) >= 2 and len(ctxs[0]) > 10:
+                conflicts.append({
+                    "value":       val,
+                    "slides":      slides_seen,
+                    "contexts":    ctxs[:3],
+                    "appearances": len(occurrences),
+                })
+
+    conflicts.sort(key=lambda c: c["appearances"], reverse=True)
+    return {"numbers": conflicts[:30], "total_flagged": len(conflicts)}
+
+
+# ── Title Uniqueness Check ────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/title-uniqueness")
+def title_uniqueness(doc_id: str):
+    """Check whether slide titles are unique or duplicated across the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    title_map: dict[str, list[int]] = {}
+
+    for s in doc.slides:
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            ph_type = getattr(getattr(sh, "placeholder_format", None), "type", None)
+            if ph_type in (1, 13):
+                title = sh.text_frame.text.strip()
+                if title:
+                    key = title.lower()
+                    title_map.setdefault(key, []).append(s.slide_number)
+
+    duplicates = [
+        {"title": title, "slides": slides}
+        for title, slides in title_map.items()
+        if len(slides) > 1
+    ]
+    unique_count = sum(1 for slides in title_map.values() if len(slides) == 1)
+    return {"duplicates": duplicates, "unique": unique_count, "total": len(title_map)}
+
+
+# ── Deck Punchline ────────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/deck-punchline")
+async def deck_punchline(doc_id: str):
+    """AI distills the deck's core message into one memorable sentence."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts: list[str] = []
+    for s in doc.slides[:15]:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        texts.append(" | ".join(parts)[:200])
+
+    context = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(texts) if t)
+    prompt = (
+        "You are a presentation strategist. After reading this presentation, "
+        "distill its single most important message into:\n"
+        "1. A one-sentence punchline (memorable, sharp, 15 words max)\n"
+        "2. A one-paragraph takeaway (3-4 sentences)\n"
+        "3. Three key proof points that support the punchline\n\n"
+        f"{context}\n\n"
+        "Return JSON: {\"punchline\": string, \"takeaway\": string, \"proof_points\": [string]}"
+    )
+    result: dict = {"punchline": "", "takeaway": "", "proof_points": []}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("deck-punchline parse failed: %s", exc)
+
+    return result
+
+
+# ── Opening Statistics ────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/opening-stats")
+def opening_stats(doc_id: str):
+    """Analyze the first 3 slides for key statistics and attention-grabbing numbers."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    opening_slides = doc.slides[:3] if len(doc.slides) >= 3 else doc.slides
+    stats_found: list[dict] = []
+
+    for s in opening_slides:
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for p in sh.text_frame.paragraphs:
+                text = p.text.strip()
+                if not text:
+                    continue
+                numbers = re.findall(r"\b\d+(?:[.,]\d+)?(?:%|x|M|K|B|m|k)?\b", text)
+                if numbers:
+                    stats_found.append({
+                        "slide_n":  s.slide_number,
+                        "text":     text[:200],
+                        "numbers":  numbers[:5],
+                        "is_stat":  bool(re.search(r"\d+%|\$[\d,]+|\d+x|\d+M|\d+B", text)),
+                    })
+
+    return {
+        "stats": stats_found,
+        "total": len(stats_found),
+        "has_hook_stat": any(s["is_stat"] for s in stats_found),
+    }
+
+
+# ── Speaker Density Score ─────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/speaker-density")
+def speaker_density(doc_id: str):
+    """Compare text on slide vs text in notes — identify speaker-heavy vs. slide-heavy slides."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    results: list[dict] = []
+    for s in doc.slides:
+        slide_words = sum(
+            len(p.text.split())
+            for sh in s.shapes if sh.text_frame
+            for p in sh.text_frame.paragraphs
+        )
+        notes_words = 0
+        if s.notes_slide and s.notes_slide.notes_text_frame:
+            notes_words = len(s.notes_slide.notes_text_frame.text.split())
+
+        total = slide_words + notes_words or 1
+        notes_ratio = round(notes_words / total, 2)
+        label = (
+            "speaker-heavy" if notes_ratio >= 0.6
+            else "slide-heavy" if notes_ratio <= 0.1 and slide_words > 20
+            else "balanced"
+        )
+        results.append({
+            "slide_n":      s.slide_number,
+            "slide_words":  slide_words,
+            "notes_words":  notes_words,
+            "notes_ratio":  notes_ratio,
+            "label":        label,
+        })
+
+    avg_notes_ratio = round(sum(r["notes_ratio"] for r in results) / max(len(results), 1), 2)
+    return {"slides": results, "avg_notes_ratio": avg_notes_ratio}
+
+
+# ── Acronym Map ───────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/acronym-map")
+def acronym_map(doc_id: str):
+    """Find all capital-letter acronyms and map which slides use them."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    acronym_slides: dict[str, list[int]] = {}
+
+    for s in doc.slides:
+        seen: set[str] = set()
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for p in sh.text_frame.paragraphs:
+                for match in re.finditer(r"\b[A-Z]{2,6}\b", p.text):
+                    acr = match.group(0)
+                    if acr not in seen:
+                        seen.add(acr)
+                        acronym_slides.setdefault(acr, [])
+                        if s.slide_number not in acronym_slides[acr]:
+                            acronym_slides[acr].append(s.slide_number)
+
+    entries = [
+        {"acronym": acr, "slides": slides, "count": len(slides)}
+        for acr, slides in sorted(acronym_slides.items())
+    ]
+    entries.sort(key=lambda e: e["count"], reverse=True)
+
+    return {"acronyms": entries, "total_unique": len(entries)}
+
+
+# ── Promise Tracker ───────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/promise-tracker")
+def promise_tracker(doc_id: str):
+    """Find future-tense promises and commitments in the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    promise_patterns = [
+        r"\bwill\s+\w+",
+        r"\bgoing\s+to\s+\w+",
+        r"\bplan(?:s|ned)?\s+to\b",
+        r"\bcommit(?:ted|ting)?\s+to\b",
+        r"\bpromise[sd]?\b",
+        r"\bguarantee[sd]?\b",
+        r"\bensure[sd]?\b",
+        r"\bdeliver(?:ed|ing)?\b",
+        r"\bby\s+(?:Q[1-4]|20\d{2}|January|February|March|April|May|June|July|August|September|October|November|December)\b",
+    ]
+
+    results: list[dict] = []
+    for s in doc.slides:
+        hits: list[str] = []
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for p in sh.text_frame.paragraphs:
+                text = p.text.strip()
+                if not text:
+                    continue
+                for pat in promise_patterns:
+                    if re.search(pat, text, re.IGNORECASE):
+                        hits.append(text[:150])
+                        break
+        if hits:
+            results.append({"slide_n": s.slide_number, "promises": hits[:5]})
+
+    return {"slides": results, "total": sum(len(s["promises"]) for s in results)}
+
+
+# ── Slide Repetition Score ────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slide-repetition")
+def slide_repetition(doc_id: str):
+    """Measure how repetitive each slide's vocabulary is relative to the deck as a whole."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    def _words(slide) -> list[str]:
+        wds: list[str] = []
+        for sh in slide.shapes:
+            if sh.text_frame:
+                for p in sh.text_frame.paragraphs:
+                    for w in p.text.lower().split():
+                        w2 = re.sub(r"[^a-z]", "", w)
+                        if len(w2) > 3:
+                            wds.append(w2)
+        return wds
+
+    all_words_list = [_words(s) for s in doc.slides]
+    global_freq: dict[str, int] = {}
+    for wl in all_words_list:
+        for w in wl:
+            global_freq[w] = global_freq.get(w, 0) + 1
+
+    common_threshold = max(len(doc.slides) // 2, 2)
+    common_words = {w for w, c in global_freq.items() if c >= common_threshold}
+
+    results: list[dict] = []
+    for i, s in enumerate(doc.slides):
+        wl = all_words_list[i]
+        if not wl:
+            results.append({"slide_n": s.slide_number, "repetition_pct": 0, "label": "low", "repeated_words": []})
+            continue
+        repeated = [w for w in wl if w in common_words]
+        pct = round(len(repeated) / len(wl) * 100, 1)
+        label = "high" if pct >= 50 else "medium" if pct >= 25 else "low"
+        results.append({
+            "slide_n":       s.slide_number,
+            "repetition_pct": pct,
+            "label":         label,
+            "repeated_words": list(set(repeated))[:6],
+        })
+
+    avg_rep = round(sum(r["repetition_pct"] for r in results) / max(len(results), 1), 1)
+    return {"slides": results, "avg_repetition_pct": avg_rep}
+
+
+# ── Competitive Language Detector ────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/competitive-language")
+def competitive_language(doc_id: str):
+    """Find competitive or comparative language across slides."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    patterns = [
+        (r"\bbetter than\b",         "comparison"),
+        (r"\bunlike\s+(?:our\s+)?competitors?\b", "competitor reference"),
+        (r"\bcompetitors?\b",        "competitor reference"),
+        (r"\bmarket leader\b",       "market claim"),
+        (r"\bbest[\s-]in[\s-]class\b","superlative"),
+        (r"\b#1\b|\bnumber\s+one\b", "superlative"),
+        (r"\bunique\b",              "uniqueness claim"),
+        (r"\bonly\s+(?:we|our)\b",   "exclusivity claim"),
+        (r"\bno\s+one\s+else\b",     "exclusivity claim"),
+        (r"\bleading\b",             "market claim"),
+        (r"\bfastest\b|\blargest\b|\bsmallest\b", "superlative"),
+    ]
+
+    results: list[dict] = []
+    for s in doc.slides:
+        hits = []
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for p in sh.text_frame.paragraphs:
+                text = p.text.strip()
+                if not text:
+                    continue
+                for pat, category in patterns:
+                    if re.search(pat, text, re.IGNORECASE):
+                        hits.append({"text": text[:200], "category": category})
+                        break
+        if hits:
+            results.append({"slide_n": s.slide_number, "hits": hits})
+
+    return {"slides": results, "total": sum(len(s["hits"]) for s in results)}
+
+
+# ── Metaphor Density ──────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/metaphor-density")
+async def metaphor_density(doc_id: str):
+    """AI identifies metaphors and figurative language per slide."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slide_texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        slide_texts.append(" | ".join(parts)[:200])
+
+    chunks = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(slide_texts) if t)
+    prompt = (
+        "Identify metaphors and figurative language in these presentation slides.\n\n"
+        f"{chunks}\n\n"
+        "For each metaphor found, note which slide and the exact phrase.\n"
+        "Return JSON: {\"metaphors\": [{\"slide_n\": number, \"phrase\": string, "
+        "\"type\": \"metaphor|simile|personification|hyperbole|other\"}]}"
+    )
+    metaphors: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        metaphors = json.loads(raw).get("metaphors", metaphors)
+    except Exception as exc:
+        log.warning("metaphor-density parse failed: %s", exc)
+
+    by_slide: dict = {}
+    for m in metaphors:
+        n = m.get("slide_n", 0)
+        by_slide.setdefault(n, []).append(m)
+
+    return {"metaphors": metaphors, "total": len(metaphors), "slides_with_metaphors": len(by_slide)}
+
+
+# ── Slide Impact Ranking ──────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/impact-ranking")
+async def impact_ranking(doc_id: str):
+    """AI ranks every slide by potential audience impact."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slide_texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        slide_texts.append(" | ".join(parts)[:200])
+
+    chunks = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(slide_texts) if t)
+    prompt = (
+        "Rank each presentation slide by its potential impact on the audience. "
+        "Consider: memorability, insight density, emotional resonance, clarity.\n\n"
+        f"{chunks}\n\n"
+        "Return JSON: {\"rankings\": [{\"slide_n\": number, \"rank\": number, "
+        "\"impact_score\": number, \"reason\": string}]}"
+    )
+    rankings: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        rankings = json.loads(raw).get("rankings", rankings)
+    except Exception as exc:
+        log.warning("impact-ranking parse failed: %s", exc)
+
+    rankings.sort(key=lambda r: r.get("rank", 999))
+    return {"rankings": rankings}
+
+
+# ── Content Balance Report ────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/content-balance")
+def content_balance(doc_id: str):
+    """Analyze balance of text vs visual (image) content across the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    from pptx.util import Pt
+
+    slides_report: list[dict] = []
+    for s in doc.slides:
+        text_shapes  = 0
+        image_shapes = 0
+        chart_shapes = 0
+        total_words  = 0
+
+        for sh in s.shapes:
+            if sh.shape_type == 13:
+                image_shapes += 1
+            elif sh.has_chart:
+                chart_shapes += 1
+            elif sh.has_text_frame:
+                text_shapes += 1
+                total_words += len(sh.text_frame.text.split())
+
+        total = text_shapes + image_shapes + chart_shapes or 1
+        text_pct  = round(text_shapes  / total * 100, 1)
+        image_pct = round(image_shapes / total * 100, 1)
+        chart_pct = round(chart_shapes / total * 100, 1)
+
+        balance = "balanced" if 20 <= text_pct <= 80 else "text-heavy" if text_pct > 80 else "visual-heavy"
+
+        slides_report.append({
+            "slide_n":    s.slide_number,
+            "text_pct":   text_pct,
+            "image_pct":  image_pct,
+            "chart_pct":  chart_pct,
+            "total_words": total_words,
+            "balance":    balance,
+        })
+
+    avg_text  = round(sum(r["text_pct"]  for r in slides_report) / max(len(slides_report), 1), 1)
+    avg_image = round(sum(r["image_pct"] for r in slides_report) / max(len(slides_report), 1), 1)
+    return {"slides": slides_report, "avg_text_pct": avg_text, "avg_image_pct": avg_image}
+
+
+# ── Buzzword Density ──────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/buzzword-density")
+def buzzword_density(doc_id: str):
+    """Count buzzwords per slide and flag high-density slides."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    buzzwords = {
+        "synergy", "leverage", "paradigm", "disruptive", "scalable", "agile",
+        "holistic", "blockchain", "ai", "machine learning", "big data", "cloud",
+        "digital transformation", "innovation", "ecosystem", "pivot", "unicorn",
+        "gamechanger", "data-driven", "value proposition", "growth hacking",
+        "thought leader", "move the needle", "circle back", "boil the ocean",
+        "low-hanging fruit", "deep dive", "bandwidth", "runway", "b2b", "b2c",
+        "kpi", "roi", "mrr", "arr", "churn", "product-market fit", "north star",
+    }
+
+    results: list[dict] = []
+    for s in doc.slides:
+        all_text = ""
+        for sh in s.shapes:
+            if sh.text_frame:
+                all_text += " " + sh.text_frame.text.lower()
+
+        found: list[str] = []
+        for bw in buzzwords:
+            if bw in all_text:
+                found.append(bw)
+
+        total_words = len(all_text.split())
+        density = round(len(found) / max(total_words / 10, 1), 2)
+        label = "high" if len(found) >= 4 else "medium" if len(found) >= 2 else "low"
+
+        results.append({
+            "slide_n":   s.slide_number,
+            "buzzwords": found[:10],
+            "count":     len(found),
+            "density":   density,
+            "label":     label,
+        })
+
+    total_bw = sum(r["count"] for r in results)
+    return {"slides": results, "total_buzzwords": total_bw}
+
+
+# ── Slide Intent Map ──────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slide-intent")
+async def slide_intent(doc_id: str):
+    """AI assigns a communicative intent to each slide."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slide_texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        slide_texts.append(" | ".join(parts)[:200])
+
+    chunks = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(slide_texts) if t)
+    prompt = (
+        "You are a communications expert. For each slide below, identify its primary communicative intent.\n\n"
+        f"{chunks}\n\n"
+        "Intents: inform, persuade, inspire, demonstrate, summarize, introduce, transition, conclude, call-to-action, engage.\n"
+        "Return JSON: {\"slides\": [{\"slide_n\": number, \"intent\": string, \"confidence\": \"high|medium|low\"}]}"
+    )
+    slides: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        slides = json.loads(raw).get("slides", slides)
+    except Exception as exc:
+        log.warning("slide-intent parse failed: %s", exc)
+
+    intent_counts: dict = {}
+    for s in slides:
+        intent = s.get("intent", "unknown")
+        intent_counts[intent] = intent_counts.get(intent, 0) + 1
+
+    return {"slides": slides, "intent_distribution": intent_counts}
+
+
+# ── Narrative Gaps ────────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/narrative-gaps")
+async def narrative_gaps(doc_id: str):
+    """AI detects gaps in the narrative flow of the presentation."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slide_texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        slide_texts.append(" | ".join(parts)[:200])
+
+    chunks = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(slide_texts) if t)
+    prompt = (
+        "You are a storytelling expert reviewing a presentation. Identify narrative gaps — "
+        "missing transitions, unexplained jumps, unresolved threads, or missing context.\n\n"
+        f"{chunks}\n\n"
+        "Return JSON: {\"gaps\": [{\"location\": string, \"description\": string, "
+        "\"suggestion\": string}]}"
+    )
+    gaps: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        gaps = json.loads(raw).get("gaps", gaps)
+    except Exception as exc:
+        log.warning("narrative-gaps parse failed: %s", exc)
+
+    return {"gaps": gaps}
+
+
+# ── Evidence Audit ────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/evidence-audit")
+def evidence_audit(doc_id: str):
+    """Find claims made without supporting evidence (numbers, citations, sources)."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    evidence_patterns = [
+        r"\b\d+%\b",
+        r"\b\d{4}\b",
+        r"\$[\d,]+",
+        r"\b\d+x\b",
+        r"\bsource[d]?\b",
+        r"\baccording to\b",
+        r"\bstudy\b",
+        r"\bdata\b",
+        r"\bresearch\b",
+        r"\breport\b",
+        r"\bsurvey\b",
+    ]
+
+    claim_words = {"will", "can", "increase", "decrease", "improve", "reduce", "save",
+                   "generate", "grow", "achieve", "deliver", "ensure", "guarantee"}
+
+    results: list[dict] = []
+    for s in doc.slides:
+        slide_has_evidence = False
+        claim_text: list[str] = []
+
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for p in sh.text_frame.paragraphs:
+                text = p.text.strip()
+                if not text:
+                    continue
+                has_evidence = any(re.search(pat, text, re.IGNORECASE) for pat in evidence_patterns)
+                if has_evidence:
+                    slide_has_evidence = True
+                words = set(re.sub(r"[^a-z ]", "", text.lower()).split())
+                if words & claim_words and not has_evidence:
+                    claim_text.append(text[:150])
+
+        if claim_text:
+            results.append({
+                "slide_n":           s.slide_number,
+                "has_evidence":      slide_has_evidence,
+                "unsupported_claims": claim_text[:3],
+            })
+
+    return {"slides": results, "total_unsupported": len(results)}
+
+
+# ── Analogy Finder ────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/analogy-finder")
+def analogy_finder(doc_id: str):
+    """Find analogy patterns: 'like', 'as if', 'similar to', 'just as' etc. across slides."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    patterns = [
+        r"\blike\s+\w",
+        r"\bas\s+(?:if|though|a|an)\b",
+        r"\bsimilar\s+to\b",
+        r"\bjust\s+as\b",
+        r"\bcompar(?:ed?|able)\s+to\b",
+        r"\banalog(?:y|ous)\b",
+        r"\bthink\s+of\s+it\s+as\b",
+        r"\bimagine\b",
+    ]
+
+    found: list[dict] = []
+    for s in doc.slides:
+        slide_hits = []
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for p in sh.text_frame.paragraphs:
+                text = p.text.strip()
+                if not text:
+                    continue
+                for pat in patterns:
+                    if re.search(pat, text, re.IGNORECASE):
+                        match = re.search(pat, text, re.IGNORECASE)
+                        slide_hits.append({
+                            "text":    text[:200],
+                            "pattern": match.group(0).strip() if match else "",
+                        })
+                        break
+        if slide_hits:
+            found.append({
+                "slide_n": s.slide_number,
+                "hits":    slide_hits,
+            })
+
+    return {"slides": found, "total": sum(len(s["hits"]) for s in found)}
+
+
+# ── Action Verbs Audit ────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/action-verbs")
+def action_verbs(doc_id: str):
+    """Detect slides with strong action verbs vs. weak/nominalized language."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    strong_verbs = {
+        "accelerate", "achieve", "build", "capture", "create", "deliver", "deploy",
+        "design", "drive", "eliminate", "enable", "enhance", "execute", "expand",
+        "generate", "grow", "implement", "improve", "increase", "launch", "lead",
+        "leverage", "maximize", "optimize", "produce", "reduce", "scale", "secure",
+        "ship", "simplify", "streamline", "transform", "unlock", "validate",
+    }
+
+    weak_nouns = {
+        "utilization", "implementation", "optimization", "facilitation", "enablement",
+        "alignment", "synergy", "leverage", "bandwidth", "visibility", "stakeholder",
+        "actionable", "methodology", "framework", "paradigm", "ecosystem",
+    }
+
+    results: list[dict] = []
+    for s in doc.slides:
+        all_text = ""
+        for sh in s.shapes:
+            if sh.text_frame:
+                all_text += " " + sh.text_frame.text
+
+        words = [re.sub(r"[^a-z]", "", w.lower()) for w in all_text.split()]
+        found_strong = [w for w in words if w in strong_verbs]
+        found_weak   = [w for w in words if w in weak_nouns]
+        rating = "strong" if len(found_strong) >= 2 and len(found_weak) == 0 else \
+                 "weak" if len(found_strong) == 0 and len(found_weak) > 0 else "mixed"
+
+        results.append({
+            "slide_n":      s.slide_number,
+            "strong_verbs": list(set(found_strong))[:6],
+            "weak_words":   list(set(found_weak))[:6],
+            "rating":       rating,
+        })
+
+    return {"slides": results}
+
+
+# ── Emotional Payoff ──────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/emotional-payoff")
+async def emotional_payoff(doc_id: str):
+    """AI identifies which slides deliver the strongest emotional payoff."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        texts.append(" | ".join(parts)[:200])
+
+    chunks = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(texts) if t)
+    prompt = (
+        "Analyze each slide for emotional payoff — the moment where the audience feels "
+        "a strong emotional response (inspiration, urgency, relief, excitement, etc.).\n\n"
+        f"{chunks}\n\n"
+        "Rate each slide's emotional payoff 1-10 and identify the emotion.\n"
+        "Return JSON: {\"slides\": [{\"slide_n\": number, \"score\": number, "
+        "\"emotion\": string, \"reason\": string}]}"
+    )
+    slides: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        slides = json.loads(raw).get("slides", slides)
+    except Exception as exc:
+        log.warning("emotional-payoff parse failed: %s", exc)
+
+    top = sorted(slides, key=lambda x: x.get("score", 0), reverse=True)[:3]
+    return {"slides": slides, "top_slides": top}
+
+
+# ── Clarity Score ─────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/clarity-score")
+def clarity_score(doc_id: str):
+    """Score each slide for clarity: short sentences, no jargon, clear structure."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    jargon_words = {
+        "synergy", "leverage", "paradigm", "disruptive", "scalable", "robust",
+        "holistic", "agile", "bandwidth", "cadence", "ecosystem", "stakeholder",
+        "deliverable", "actionable", "ideation", "boil the ocean", "circle back",
+        "deep dive", "low-hanging fruit", "move the needle", "pivot", "runway",
+    }
+
+    results: list[dict] = []
+    for s in doc.slides:
+        all_words: list[str] = []
+        sentence_lengths: list[int] = []
+        jargon_found: list[str] = []
+
+        for sh in s.shapes:
+            if sh.text_frame:
+                for p in sh.text_frame.paragraphs:
+                    text = p.text.strip()
+                    if not text:
+                        continue
+                    words = text.split()
+                    all_words.extend(words)
+                    for sent in re.split(r"[.!?]+", text):
+                        wc = len(sent.split())
+                        if wc > 0:
+                            sentence_lengths.append(wc)
+                    for w in words:
+                        w2 = re.sub(r"[^a-z]", "", w.lower())
+                        if w2 in jargon_words:
+                            jargon_found.append(w2)
+
+        avg_sent = sum(sentence_lengths) / max(len(sentence_lengths), 1)
+        jargon_penalty = min(len(set(jargon_found)) * 8, 30)
+        sentence_penalty = max(0, int(avg_sent - 15) * 2)
+        score = max(0, 100 - jargon_penalty - sentence_penalty)
+        label = "clear" if score >= 75 else "moderate" if score >= 50 else "unclear"
+
+        results.append({
+            "slide_n":     s.slide_number,
+            "score":       score,
+            "label":       label,
+            "avg_sent_len": round(avg_sent, 1),
+            "jargon":      list(set(jargon_found))[:5],
+        })
+
+    avg = round(sum(r["score"] for r in results) / max(len(results), 1), 1)
+    return {"slides": results, "avg_clarity": avg}
+
+
+# ── Slide Complexity Index ────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/complexity-index")
+def complexity_index(doc_id: str):
+    """Compute a composite complexity score per slide: words + shapes + nesting + fonts."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    results: list[dict] = []
+    for s in doc.slides:
+        words       = 0
+        shapes      = len(s.shapes)
+        max_level   = 0
+        fonts: set  = set()
+
+        for sh in s.shapes:
+            if sh.text_frame:
+                for p in sh.text_frame.paragraphs:
+                    words += len(p.text.split())
+                    if p.level > max_level:
+                        max_level = p.level
+                    for run in p.runs:
+                        if run.font and run.font.name:
+                            fonts.add(run.font.name)
+
+        score = (
+            min(int(words / 5), 30)     # up to 30 for text volume
+            + min(shapes * 2, 25)        # up to 25 for shape count
+            + max_level * 5              # nesting depth
+            + min(len(fonts) * 5, 20)    # font variety
+        )
+        label = "high" if score >= 50 else "medium" if score >= 25 else "low"
+
+        results.append({
+            "slide_n":   s.slide_number,
+            "score":     min(score, 100),
+            "label":     label,
+            "words":     words,
+            "shapes":    shapes,
+            "nesting":   max_level,
+            "fonts":     len(fonts),
+        })
+
+    avg = round(sum(r["score"] for r in results) / max(len(results), 1), 1)
+    return {"slides": results, "avg_complexity": avg}
+
+
+# ── Quote Extractor ───────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/quote-extractor")
+def quote_extractor(doc_id: str):
+    """Find quoted text and attributed quotes across all slides."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    found: list[dict] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for p in sh.text_frame.paragraphs:
+                text = p.text.strip()
+                if not text:
+                    continue
+                has_quote = (
+                    (text.startswith('"') and text.endswith('"'))
+                    or (text.startswith('“') and text.endswith('”'))
+                    or (text.startswith("'") and text.endswith("'"))
+                    or re.search(r'["“”]', text)
+                )
+                if has_quote:
+                    found.append({
+                        "slide_n": s.slide_number,
+                        "text":    text[:300],
+                        "attributed": bool(re.search(r"[-–—]\s*\w", text)),
+                    })
+                    break
+
+    return {"quotes": found, "total": len(found)}
+
+
+# ── Presentation Risks ────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/presentation-risks")
+async def presentation_risks(doc_id: str):
+    """AI identifies potential risks or red flags in the presentation content."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        texts.append(" | ".join(parts)[:200])
+
+    chunks = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(texts) if t)
+    prompt = (
+        "You are a presentation risk analyst. Review this presentation and identify potential risks "
+        "or red flags that could undermine its effectiveness or reception:\n\n"
+        f"{chunks}\n\n"
+        "Look for: unsupported claims, potential legal issues, offensive language, "
+        "unrealistic promises, confusing messaging, missing context, or logical gaps.\n"
+        "Return JSON: {\"risks\": [{\"slide_n\": number, \"category\": string, "
+        "\"description\": string, \"severity\": \"low|medium|high\"}]}"
+    )
+    risks: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        risks = json.loads(raw).get("risks", risks)
+    except Exception as exc:
+        log.warning("presentation-risks parse failed: %s", exc)
+
+    return {"risks": risks}
+
+
+# ── Audience Fit Score ────────────────────────────────────────────────────────
+
+class AudienceFitReq(BaseModel):
+    audience: str = "general business"
+
+@app.post("/api/docs/{doc_id}/audience-fit")
+async def audience_fit(doc_id: str, body: AudienceFitReq):
+    """AI scores how well the deck content fits a specified target audience."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts: list[str] = []
+    for s in doc.slides[:10]:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        texts.append(" | ".join(parts)[:200])
+
+    context = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(texts) if t)
+    prompt = (
+        f"You are a presentation strategist. Evaluate this deck for a \"{body.audience}\" audience.\n\n"
+        f"{context}\n\n"
+        "Score fit from 1-10. Consider: vocabulary level, assumed knowledge, relevance, tone.\n"
+        "Return JSON: {\"score\": number, \"grade\": \"A/B/C/D/F\", \"summary\": string, "
+        "\"strong_points\": [string], \"gaps\": [string]}"
+    )
+    result: dict = {"score": 0, "grade": "N/A", "summary": "", "strong_points": [], "gaps": []}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("audience-fit parse failed: %s", exc)
+
+    return result
+
+
+# ── Redundant Slide Detector ─────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/redundant-slides")
+def redundant_slides(doc_id: str):
+    """Find slides whose content significantly overlaps with other slides."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    def _words(slide) -> set:
+        words: set[str] = set()
+        for sh in slide.shapes:
+            if sh.text_frame:
+                for p in sh.text_frame.paragraphs:
+                    for w in p.text.lower().split():
+                        w2 = re.sub(r"[^a-z]", "", w)
+                        if len(w2) > 3:
+                            words.add(w2)
+        return words
+
+    slide_word_sets = [(_s.slide_number, _words(_s)) for _s in doc.slides]
+    pairs: list[dict] = []
+
+    for i in range(len(slide_word_sets)):
+        for j in range(i + 1, len(slide_word_sets)):
+            n1, s1 = slide_word_sets[i]
+            n2, s2 = slide_word_sets[j]
+            overlap = len(s1 & s2)
+            denom   = len(s1 | s2) or 1
+            score   = round(overlap / denom, 3)
+            if score >= 0.35:
+                pairs.append({
+                    "slide_a":      n1,
+                    "slide_b":      n2,
+                    "similarity":   score,
+                    "shared_words": sorted(s1 & s2)[:10],
+                    "severity":     "high" if score >= 0.6 else "medium",
+                })
+
+    pairs.sort(key=lambda p: p["similarity"], reverse=True)
+    return {"pairs": pairs, "total": len(pairs)}
+
+
+# ── Tone Shift Alert ──────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/tone-shift")
+async def tone_shift(doc_id: str):
+    """AI detects unexpected tone changes between consecutive slides."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slide_texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        slide_texts.append(" ".join(parts)[:300])
+
+    chunks = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(slide_texts) if t)
+    prompt = (
+        "You are a presentation analyst. Review these slides and identify where the tone "
+        "shifts unexpectedly (e.g., suddenly becomes casual, aggressive, overly technical, "
+        "or emotional).\n\n"
+        f"{chunks}\n\n"
+        "Return JSON: {\"shifts\": [{\"before_slide\": number, \"after_slide\": number, "
+        "\"from_tone\": string, \"to_tone\": string, \"description\": string}]}"
+    )
+    shifts: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        shifts = json.loads(raw).get("shifts", shifts)
+    except Exception as exc:
+        log.warning("tone-shift parse failed: %s", exc)
+
+    return {"shifts": shifts}
+
+
+# ── Persuasion Framework ──────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/persuasion-framework")
+async def persuasion_framework(doc_id: str):
+    """AI maps deck content to Ethos/Pathos/Logos persuasion framework."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slide_texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        slide_texts.append(" ".join(parts)[:200])
+
+    chunks = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(slide_texts) if t)
+    prompt = (
+        "You are a rhetoric expert. Analyze this presentation for use of Ethos (credibility), "
+        "Pathos (emotion), and Logos (logic/data) persuasion techniques.\n\n"
+        f"{chunks}\n\n"
+        "For each slide, label its primary persuasion type. Also give overall percentages.\n"
+        "Return JSON: {\"slides\": [{\"slide_n\": number, \"mode\": \"ethos|pathos|logos|mixed\", "
+        "\"note\": string}], \"ethos_pct\": number, \"pathos_pct\": number, \"logos_pct\": number, "
+        "\"recommendation\": string}"
+    )
+    result: dict = {"slides": [], "ethos_pct": 0, "pathos_pct": 0, "logos_pct": 0, "recommendation": ""}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("persuasion-framework parse failed: %s", exc)
+
+    return result
+
+
+# ── Slide Confidence Score ────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/confidence-scores")
+def confidence_scores(doc_id: str):
+    """Score each slide's content confidence: title presence, body depth, bullets vs prose."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    results: list[dict] = []
+    for s in doc.slides:
+        has_title = False
+        body_words = 0
+        bullet_count = 0
+        shape_count  = 0
+
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            shape_count += 1
+            txt = sh.text_frame.text.strip()
+            if not txt:
+                continue
+            ph_type = getattr(getattr(sh, "placeholder_format", None), "type", None)
+            is_title = ph_type in (1, 13) or (sh.has_text_frame and len(txt) < 80 and "\n" not in txt)
+            if is_title:
+                has_title = True
+            else:
+                for p in sh.text_frame.paragraphs:
+                    words = len(p.text.split())
+                    body_words += words
+                    if p.level > 0 and words > 0:
+                        bullet_count += 1
+
+        title_score = 30 if has_title else 0
+        depth_score = min(int(body_words / 3), 40)
+        variety_score = 15 if bullet_count > 0 and body_words > 10 else 10 if body_words > 0 else 0
+        shape_score = min(shape_count * 3, 15)
+        total = title_score + depth_score + variety_score + shape_score
+        grade = "A" if total >= 80 else "B" if total >= 60 else "C" if total >= 40 else "D"
+
+        results.append({
+            "slide_n":     s.slide_number,
+            "score":       min(total, 100),
+            "grade":       grade,
+            "has_title":   has_title,
+            "body_words":  body_words,
+            "bullets":     bullet_count,
+        })
+
+    avg_score = round(sum(r["score"] for r in results) / max(len(results), 1), 1)
+    return {"slides": results, "avg_score": avg_score}
+
+
+# ── Transition Pacing ─────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/transition-pacing")
+def transition_pacing(doc_id: str):
+    """Score slide-to-slide topic continuity and flag abrupt transitions."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    def _slide_words(slide) -> set:
+        words: set[str] = set()
+        for sh in slide.shapes:
+            if sh.text_frame:
+                for p in sh.text_frame.paragraphs:
+                    for w in p.text.lower().split():
+                        w2 = re.sub(r"[^a-z]", "", w)
+                        if len(w2) > 3:
+                            words.add(w2)
+        return words
+
+    slides_words = [_slide_words(s) for s in doc.slides]
+    transitions: list[dict] = []
+
+    for i in range(len(slides_words) - 1):
+        a, b = slides_words[i], slides_words[i + 1]
+        overlap = len(a & b)
+        denom   = len(a | b) or 1
+        score   = round(overlap / denom, 3)
+        label   = "smooth" if score >= 0.15 else "moderate" if score >= 0.05 else "abrupt"
+        transitions.append({
+            "from_slide": i + 1,
+            "to_slide":   i + 2,
+            "jaccard":    score,
+            "label":      label,
+            "shared_words": sorted(a & b)[:8],
+        })
+
+    abrupt_count = sum(1 for t in transitions if t["label"] == "abrupt")
+    avg_score = round(sum(t["jaccard"] for t in transitions) / max(len(transitions), 1), 3)
+
+    return {
+        "transitions": transitions,
+        "avg_continuity": avg_score,
+        "abrupt_count": abrupt_count,
+    }
+
+
+# ── Hook Strength ─────────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/hook-strength")
+async def hook_strength(doc_id: str):
+    """AI rates the opening 1-3 slides as a presentation hook."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    opening_slides = doc.slides[:3] if len(doc.slides) >= 3 else doc.slides
+    texts: list[str] = []
+    for s in opening_slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        texts.append(" | ".join(parts))
+
+    combined = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(texts))
+    prompt = (
+        "You are a presentation coach. Evaluate the following opening slide(s) as a hook "
+        "that captures audience attention.\n\n"
+        f"{combined}\n\n"
+        "Rate the hook on a scale of 1-10 and give feedback on: clarity, intrigue, relevance.\n"
+        "Return JSON: {\"score\": number, \"grade\": \"A/B/C/D/F\", \"summary\": string, "
+        "\"strengths\": [string], \"improvements\": [string]}"
+    )
+    result: dict = {"score": 0, "grade": "N/A", "summary": "", "strengths": [], "improvements": []}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("hook-strength parse failed: %s", exc)
+
+    return result
+
+
+# ── Data Density ──────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/data-density")
+def data_density(doc_id: str):
+    """Score each slide by data density: numbers, percentages, bullet items."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    results: list[dict] = []
+    for s in doc.slides:
+        all_text = ""
+        bullet_count = 0
+        for sh in s.shapes:
+            if sh.text_frame:
+                for p in sh.text_frame.paragraphs:
+                    t = p.text.strip()
+                    if t:
+                        all_text += " " + t
+                        if p.level > 0:
+                            bullet_count += 1
+
+        number_count = len(re.findall(r"\b\d+(?:[.,]\d+)?%?\b", all_text))
+        pct_count    = len(re.findall(r"\d+%", all_text))
+        total_words  = len(all_text.split())
+        raw_score    = number_count * 2 + bullet_count + pct_count
+        density_pct  = round(min((raw_score / max(total_words, 1)) * 100, 100), 1)
+        label = "high" if density_pct >= 20 else "medium" if density_pct >= 8 else "low"
+
+        results.append({
+            "slide_n":      s.slide_number,
+            "numbers":      number_count,
+            "percentages":  pct_count,
+            "bullets":      bullet_count,
+            "total_words":  total_words,
+            "density_pct":  density_pct,
+            "label":        label,
+        })
+
+    avg_density = round(sum(r["density_pct"] for r in results) / max(len(results), 1), 1)
+    high_slides = [r for r in results if r["label"] == "high"]
+
+    return {
+        "slides": results,
+        "avg_density": avg_density,
+        "high_count": len(high_slides),
+    }
+
+
+# ── Closing Impact ────────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/closing-impact")
+async def closing_impact(doc_id: str):
+    """AI rates the final 1-3 slides for closing effectiveness."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    closing_slides = doc.slides[-3:] if len(doc.slides) >= 3 else doc.slides
+    texts: list[str] = []
+    for s in closing_slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        n = len(doc.slides) - len(closing_slides) + len(texts) + 1
+        texts.append(f"Slide {n}: " + " | ".join(parts))
+
+    combined = "\n".join(texts)
+    prompt = (
+        "You are a presentation coach. Evaluate the following closing slide(s) for their "
+        "effectiveness as a presentation conclusion.\n\n"
+        f"{combined}\n\n"
+        "Rate the closing on a scale of 1-10. Evaluate: call-to-action clarity, memorability, "
+        "emotional resonance, next-steps.\n"
+        "Return JSON: {\"score\": number, \"grade\": \"A/B/C/D/F\", \"summary\": string, "
+        "\"strengths\": [string], \"improvements\": [string]}"
+    )
+    result: dict = {"score": 0, "grade": "N/A", "summary": "", "strengths": [], "improvements": []}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("closing-impact parse failed: %s", exc)
+
+    return result
+
+
+# ── Slide Questions ───────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slide-questions")
+def slide_questions(doc_id: str):
+    """Generate 1–2 comprehension/discussion questions per slide from its content."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    import re as _re
+
+    rows: list[dict] = []
+    for s in doc.slides:
+        words: list[str] = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                words.extend(sh.text_frame.text.split())
+        text = " ".join(words)[:300]
+        # simple heuristic: turn key phrases into questions
+        questions: list[str] = []
+        # find nouns/topics after "is", "are", "can", "how", "why"
+        sentences = _re.split(r"[.!?;]", text)
+        for sent in sentences:
+            sent = sent.strip()
+            if len(sent) > 10:
+                q = f"What does '{sent[:60]}…' mean for your audience?" if len(sent) > 60 else f"What does '{sent}' mean for your audience?"
+                questions.append(q)
+                if len(questions) >= 2:
+                    break
+        if not questions:
+            questions = ["What is the key takeaway from this slide?"]
+        rows.append({"slide_n": s.slide_number, "questions": questions})
+
+    return {"slides": rows}
+
+
+# ── Deck Manifesto ────────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/deck-manifesto")
+async def deck_manifesto(doc_id: str):
+    """AI writes a one-page manifesto distilling the deck's core philosophy."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        texts.append(" | ".join(parts)[:200])
+
+    context = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(texts) if t)
+    prompt = (
+        "Based on this presentation, write a short manifesto (3–5 punchy declarations) "
+        "that captures the core philosophy and beliefs behind this deck.\n\n"
+        f"{context}\n\n"
+        "Each declaration should be bold, memorable, and action-oriented.\n"
+        "Return JSON: {\"title\": string, \"declarations\": [string], \"closing_line\": string}"
+    )
+    result: dict = {"title": "", "declarations": [], "closing_line": ""}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("deck-manifesto parse failed: %s", exc)
+
+    return result
+
+
+# ── Bullet Brevity ────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/bullet-brevity")
+def bullet_brevity(doc_id: str):
+    """Flag bullets that exceed a recommended word count threshold."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    THRESHOLD = 15  # words per bullet considered too long
+    flagged: list[dict] = []
+    total_bullets = 0
+
+    for s in doc.slides:
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for p in sh.text_frame.paragraphs:
+                text = p.text.strip()
+                if not text:
+                    continue
+                if p.level > 0 or text.startswith(("•", "-", "*", "–", "▪")):
+                    total_bullets += 1
+                    words = len(text.split())
+                    if words > THRESHOLD:
+                        flagged.append({
+                            "slide_n":   s.slide_number,
+                            "text":      text[:150],
+                            "word_count": words,
+                            "excess":    words - THRESHOLD,
+                        })
+
+    flagged.sort(key=lambda x: x["word_count"], reverse=True)
+    return {
+        "flagged":       flagged[:40],
+        "total_bullets": total_bullets,
+        "total_flagged": len(flagged),
+        "threshold":     THRESHOLD,
+    }
+
+
+# ── Insight Extractor ─────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/insight-extractor")
+async def insight_extractor(doc_id: str):
+    """AI extracts the most quotable insights and memorable takeaways from the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        texts.append(" | ".join(parts)[:200])
+
+    context = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(texts) if t)
+    prompt = (
+        "Extract the top insights and most quotable lines from this presentation.\n\n"
+        f"{context}\n\n"
+        "Focus on: surprising statistics, bold claims, memorable phrases, "
+        "actionable takeaways, and thought-provoking statements.\n"
+        "Return JSON: {\"insights\": [{\"slide_n\": number, \"quote\": string, "
+        "\"category\": \"stat|claim|action|metaphor|quote\", \"impact\": number}]}\n"
+        "Impact is 1-10. Return up to 10 insights."
+    )
+    insights: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        insights = json.loads(raw).get("insights", insights)
+    except Exception as exc:
+        log.warning("insight-extractor parse failed: %s", exc)
+
+    insights.sort(key=lambda x: x.get("impact", 0), reverse=True)
+    return {"insights": insights}
+
+
+# ── Slide Transitions Info ────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slide-transitions")
+def slide_transitions_info(doc_id: str):
+    """List which slides have explicit transition effects vs. none."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    from pptx.oxml.ns import qn as _qn
+
+    rows: list[dict] = []
+    for s in doc.slides:
+        slide_xml = s._element
+        trans_els = slide_xml.findall(f".//{_qn('p:transition')}")
+        has_transition = len(trans_els) > 0
+        trans_type = "none"
+        if has_transition and trans_els:
+            el = trans_els[0]
+            children = list(el)
+            trans_type = children[0].tag.split("}")[-1] if children else "fade"
+            spd = el.get("spd", "")
+            if spd:
+                trans_type += f" ({spd})"
+        rows.append({
+            "slide_n":        s.slide_number,
+            "has_transition": has_transition,
+            "type":           trans_type,
+        })
+
+    slides_with    = sum(1 for r in rows if r["has_transition"])
+    slides_without = len(rows) - slides_with
+    return {"slides": rows, "with_transition": slides_with, "without_transition": slides_without}
+
+
+# ── Story Gap Filler ──────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/story-gap-filler")
+async def story_gap_filler(doc_id: str):
+    """AI identifies narrative gaps between slides and suggests bridging content."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    titles: list[str] = []
+    for s in doc.slides:
+        title = ""
+        for sh in s.shapes:
+            ph_type = getattr(getattr(sh, "placeholder_format", None), "type", None)
+            if ph_type in (1, 13) and sh.text_frame:
+                title = sh.text_frame.text.strip()
+                break
+        if not title:
+            for sh in s.shapes:
+                if sh.text_frame:
+                    title = sh.text_frame.text.strip()[:60]
+                    break
+        titles.append(f"Slide {s.slide_number}: {title}" if title else f"Slide {s.slide_number}: (no title)")
+
+    slides_summary = "\n".join(titles)
+    prompt = (
+        "Analyze this list of slide titles and identify where the narrative flow has gaps "
+        "or abrupt transitions between topics.\n\n"
+        f"{slides_summary}\n\n"
+        "For each gap, suggest a brief bridging slide or transition sentence.\n"
+        "Return JSON: {\"gaps\": [{\"between\": [slide_n_before, slide_n_after], "
+        "\"description\": string, \"suggestion\": string}]}"
+    )
+    gaps: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        gaps = json.loads(raw).get("gaps", gaps)
+    except Exception as exc:
+        log.warning("story-gap-filler parse failed: %s", exc)
+
+    return {"gaps": gaps}
+
+
+# ── Image-Text Ratio ──────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/image-text-ratio")
+def image_text_ratio(doc_id: str):
+    """Estimate the image vs text balance per slide based on shape areas."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    rows: list[dict] = []
+    for s in doc.slides:
+        text_area  = 0.0
+        image_area = 0.0
+        total_words = 0
+
+        for sh in s.shapes:
+            w = sh.width  or 0
+            h = sh.height or 0
+            area = (w / 914400.0) * (h / 914400.0)
+
+            if sh.shape_type == 13:
+                image_area += area
+            elif sh.text_frame:
+                text_area += area
+                total_words += len(sh.text_frame.text.split())
+
+        total = text_area + image_area
+        image_pct = round(image_area / total * 100, 1) if total > 0 else 0.0
+        text_pct  = round(text_area  / total * 100, 1) if total > 0 else 0.0
+        balance   = "image-heavy" if image_pct > 60 else "text-heavy" if text_pct > 75 else "balanced"
+
+        rows.append({
+            "slide_n":     s.slide_number,
+            "image_pct":   image_pct,
+            "text_pct":    text_pct,
+            "total_words": total_words,
+            "balance":     balance,
+        })
+
+    return {"slides": rows}
+
+
+# ── Metaphor Suggester ────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/metaphor-suggester")
+async def metaphor_suggester(doc_id: str):
+    """AI suggests creative metaphors and analogies to strengthen key points."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        texts.append(" | ".join(parts)[:200])
+
+    context = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(texts) if t)
+    prompt = (
+        "Suggest creative metaphors and analogies to strengthen the key points in this deck.\n\n"
+        f"{context}\n\n"
+        "Focus on slides that make abstract or complex claims. "
+        "Return JSON: {\"suggestions\": [{\"slide_n\": number, \"point\": string, "
+        "\"metaphor\": string, \"domain\": string}]}\n"
+        "Domain = the field the metaphor is drawn from (e.g. 'sports', 'nature', 'architecture')."
+    )
+    suggestions: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        suggestions = json.loads(raw).get("suggestions", suggestions)
+    except Exception as exc:
+        log.warning("metaphor-suggester parse failed: %s", exc)
+
+    return {"suggestions": suggestions}
+
+
+# ── Emoji Usage ───────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/emoji-usage")
+def emoji_usage(doc_id: str):
+    """Find all emoji characters used across the deck and map them to slides."""
+    import unicodedata as _ud
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    emoji_map: dict[str, list[int]] = {}
+
+    for s in doc.slides:
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for ch in sh.text_frame.text:
+                cp = ord(ch)
+                # Emoji ranges: miscellaneous, dingbats, supplemental symbols, emoticons
+                if (0x1F600 <= cp <= 0x1F64F or
+                    0x1F300 <= cp <= 0x1F5FF or
+                    0x1F680 <= cp <= 0x1F6FF or
+                    0x1F700 <= cp <= 0x1F77F or
+                    0x2600  <= cp <= 0x26FF  or
+                    0x2700  <= cp <= 0x27BF):
+                    emoji_map.setdefault(ch, [])
+                    if s.slide_number not in emoji_map[ch]:
+                        emoji_map[ch].append(s.slide_number)
+
+    entries = [{"emoji": e, "slides": slides, "count": len(slides)}
+               for e, slides in emoji_map.items()]
+    entries.sort(key=lambda x: x["count"], reverse=True)
+
+    return {"emojis": entries, "total_unique": len(entries)}
+
+
+# ── Slide Mood Board ──────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slide-mood-board")
+async def slide_mood_board(doc_id: str):
+    """AI suggests visual mood and aesthetic direction per slide section."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    titles: list[str] = []
+    for s in doc.slides:
+        title = ""
+        for sh in s.shapes:
+            if sh.text_frame:
+                title = sh.text_frame.text.strip()[:80]
+                break
+        titles.append(f"Slide {s.slide_number}: {title}")
+
+    context = "\n".join(titles)
+    prompt = (
+        "For each slide or section of this presentation, suggest a visual mood board direction.\n\n"
+        f"{context}\n\n"
+        "Describe the ideal: color palette mood, imagery style, typography feel, and overall aesthetic.\n"
+        "Return JSON: {\"slides\": [{\"slide_n\": number, \"mood\": string, "
+        "\"palette\": string, \"imagery\": string, \"feel\": string}]}"
+    )
+    slides: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        slides = json.loads(raw).get("slides", slides)
+    except Exception as exc:
+        log.warning("slide-mood-board parse failed: %s", exc)
+
+    return {"slides": slides}
+
+
+# ── Long Sentences ────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/long-sentences")
+def long_sentences(doc_id: str):
+    """Flag sentences in text boxes that exceed a word count threshold."""
+    import re as _re
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    THRESHOLD = 25
+    flagged: list[dict] = []
+
+    for s in doc.slides:
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            text = sh.text_frame.text
+            sentences = _re.split(r"(?<=[.!?])\s+", text)
+            for sent in sentences:
+                sent = sent.strip()
+                if not sent:
+                    continue
+                words = len(sent.split())
+                if words > THRESHOLD:
+                    flagged.append({
+                        "slide_n":    s.slide_number,
+                        "sentence":   sent[:200],
+                        "word_count": words,
+                        "excess":     words - THRESHOLD,
+                    })
+
+    flagged.sort(key=lambda x: x["word_count"], reverse=True)
+    return {"flagged": flagged[:40], "total_flagged": len(flagged), "threshold": THRESHOLD}
+
+
+# ── Deck Elevator Pitch ───────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/deck-elevator-pitch")
+async def deck_elevator_pitch(doc_id: str):
+    """AI writes a punchy 30-second elevator pitch from the deck's content."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        texts.append(" | ".join(parts)[:200])
+
+    context = "\n".join(f"Slide {i+1}: {t}" for i, t in enumerate(texts) if t)
+    prompt = (
+        "Write a 30-second elevator pitch (60–80 words) based on this presentation.\n\n"
+        f"{context}\n\n"
+        "The pitch should be punchy, memorable, and capture the core value proposition.\n"
+        "Then provide 3 variations: formal, casual, and bold.\n"
+        "Return JSON: {\"main\": string, \"formal\": string, \"casual\": string, \"bold\": string}"
+    )
+    result: dict = {"main": "", "formal": "", "casual": "", "bold": ""}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("deck-elevator-pitch parse failed: %s", exc)
+
+    return result
+
+
+# ── Header/Footer Check ───────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/header-footer-check")
+def header_footer_check(doc_id: str):
+    """Check consistency of header/footer-like text repeated across slides."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    # Collect text from very-top and very-bottom shapes (by y position)
+    slide_h_emu = 6858000  # 7.5 inches in EMU
+    top_texts: dict[str, list[int]]    = {}
+    bottom_texts: dict[str, list[int]] = {}
+
+    for s in doc.slides:
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            text = sh.text_frame.text.strip()
+            if not text or len(text) > 200:
+                continue
+            top = sh.top or 0
+            # top 10% of slide = header, bottom 10% = footer
+            if top < slide_h_emu * 0.1:
+                key = text.lower()[:80]
+                top_texts.setdefault(key, []).append(s.slide_number)
+            elif top > slide_h_emu * 0.85:
+                key = text.lower()[:80]
+                bottom_texts.setdefault(key, []).append(s.slide_number)
+
+    headers = [{"text": k, "slides": v} for k, v in top_texts.items() if len(v) >= 2]
+    footers = [{"text": k, "slides": v} for k, v in bottom_texts.items() if len(v) >= 2]
+    headers.sort(key=lambda x: len(x["slides"]), reverse=True)
+    footers.sort(key=lambda x: len(x["slides"]), reverse=True)
+
+    return {"headers": headers[:10], "footers": footers[:10],
+            "header_count": len(headers), "footer_count": len(footers)}
+
+
+# ── Section Intros ────────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/section-intros")
+async def section_intros(doc_id: str):
+    """AI writes engaging one-sentence intros for each section of the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    titles: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            ph_type = getattr(getattr(sh, "placeholder_format", None), "type", None)
+            if ph_type in (1, 13) and sh.text_frame:
+                titles.append(f"Slide {s.slide_number}: {sh.text_frame.text.strip()[:80]}")
+                break
+        else:
+            titles.append(f"Slide {s.slide_number}: (untitled)")
+
+    context = "\n".join(titles)
+    prompt = (
+        "Based on these slide titles, write a short engaging intro sentence (1–2 sentences) "
+        "for each major section transition. Identify section boundaries (where the topic shifts).\n\n"
+        f"{context}\n\n"
+        "Return JSON: {\"sections\": [{\"slide_n\": number, \"title\": string, \"intro\": string}]}\n"
+        "Only include slides that represent section starts."
+    )
+    sections: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        sections = json.loads(raw).get("sections", sections)
+    except Exception as exc:
+        log.warning("section-intros parse failed: %s", exc)
+
+    return {"sections": sections}
+
+
+# ── Text Alignment Audit ──────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/text-alignment-audit")
+def text_alignment_audit(doc_id: str):
+    """Map text alignment (left/center/right/justify) across all text shapes."""
+    from pptx.enum.text import PP_ALIGN
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    alignment_names = {
+        PP_ALIGN.LEFT:     "left",
+        PP_ALIGN.CENTER:   "center",
+        PP_ALIGN.RIGHT:    "right",
+        PP_ALIGN.JUSTIFY:  "justify",
+        PP_ALIGN.DISTRIBUTE: "distribute",
+        None:              "default",
+    }
+
+    tally: dict[str, int]      = {}
+    per_slide: list[dict]       = []
+
+    for s in doc.slides:
+        slide_tallies: dict[str, int] = {}
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for p in sh.text_frame.paragraphs:
+                align = alignment_names.get(p.alignment, "unknown")
+                tally[align]       = tally.get(align, 0) + 1
+                slide_tallies[align] = slide_tallies.get(align, 0) + 1
+        if slide_tallies:
+            dominant = max(slide_tallies, key=lambda k: slide_tallies[k])
+            per_slide.append({"slide_n": s.slide_number, "dominant": dominant, **slide_tallies})
+
+    return {"global_tally": tally, "per_slide": per_slide}
+
+
+# ── Reframe Suggestions ───────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/reframe-suggestions")
+async def reframe_suggestions(doc_id: str):
+    """AI rewrites negative or weak statements as positive, confident ones."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    texts.append(f"Slide {s.slide_number}: {t[:200]}")
+
+    context = "\n".join(texts)
+    prompt = (
+        "Find statements in this presentation that are negative, passive, or weak-sounding.\n\n"
+        f"{context}\n\n"
+        "For each one, suggest a confident, positive reframe.\n"
+        "Return JSON: {\"suggestions\": [{\"slide_n\": number, \"original\": string, "
+        "\"reframe\": string, \"reason\": string}]}"
+    )
+    suggestions: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        suggestions = json.loads(raw).get("suggestions", suggestions)
+    except Exception as exc:
+        log.warning("reframe-suggestions parse failed: %s", exc)
+
+    return {"suggestions": suggestions}
+
+
+# ── Passive Constructions ─────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/passive-constructions")
+def passive_constructions(doc_id: str):
+    """Detect passive voice constructions across slide text."""
+    import re as _re
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    # Common passive patterns: "was/were/is/are/been/being + past participle"
+    passive_re = _re.compile(
+        r"\b(was|were|is|are|been|being|be)\s+(\w+ed|built|done|made|taken|given|"
+        r"found|known|shown|seen|set|led|kept|held|run|put|cut|let|hit|read)\b",
+        _re.IGNORECASE,
+    )
+
+    flagged: list[dict] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for p in sh.text_frame.paragraphs:
+                text = p.text.strip()
+                if not text:
+                    continue
+                matches = passive_re.findall(text)
+                if matches:
+                    flagged.append({
+                        "slide_n":     s.slide_number,
+                        "text":        text[:150],
+                        "matches":     [" ".join(m) for m in matches[:3]],
+                        "match_count": len(matches),
+                    })
+
+    flagged.sort(key=lambda x: x["match_count"], reverse=True)
+    return {"flagged": flagged[:40], "total_flagged": len(flagged)}
+
+
+# ── Slide Taglines ────────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slide-tagline")
+async def slide_tagline(doc_id: str):
+    """AI writes a memorable one-line tagline for each slide."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        texts.append(f"Slide {s.slide_number}: " + " | ".join(parts)[:200])
+
+    context = "\n".join(texts)
+    prompt = (
+        "Write a memorable, punchy one-line tagline for each slide of this presentation.\n\n"
+        f"{context}\n\n"
+        "Each tagline should be under 10 words, pithy, and capture the slide's essence.\n"
+        "Return JSON: {\"taglines\": [{\"slide_n\": number, \"tagline\": string}]}"
+    )
+    taglines: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        taglines = json.loads(raw).get("taglines", taglines)
+    except Exception as exc:
+        log.warning("slide-tagline parse failed: %s", exc)
+
+    return {"taglines": taglines}
+
+
+# ── Punctuation Audit ─────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/punctuation-audit")
+def punctuation_audit(doc_id: str):
+    """Audit terminal punctuation consistency on bullet points and titles."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    with_period    = 0
+    without_period = 0
+    mixed_slides: list[int] = []
+
+    for s in doc.slides:
+        s_with    = 0
+        s_without = 0
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for p in sh.text_frame.paragraphs:
+                text = p.text.strip()
+                if not text or len(text) < 5:
+                    continue
+                if text.endswith((".", "!", "?")):
+                    s_with    += 1
+                    with_period += 1
+                elif not text.endswith((":", ";")):
+                    s_without += 1
+                    without_period += 1
+        if s_with > 0 and s_without > 0:
+            mixed_slides.append(s.slide_number)
+
+    total = with_period + without_period
+    dominant = "with_period" if with_period >= without_period else "without_period"
+    return {
+        "with_period":    with_period,
+        "without_period": without_period,
+        "total":          total,
+        "dominant_style": dominant,
+        "mixed_slides":   mixed_slides,
+        "consistency_pct": round(max(with_period, without_period) / total * 100, 1) if total > 0 else 100.0,
+    }
+
+
+# ── Authority Signals ─────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/authority-signals")
+async def authority_signals(doc_id: str):
+    """AI finds credibility signals (stats, testimonials, certifications) and rates them."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        texts.append(f"Slide {s.slide_number}: " + " | ".join(parts)[:200])
+
+    context = "\n".join(texts)
+    prompt = (
+        "Identify all authority and credibility signals in this presentation.\n\n"
+        f"{context}\n\n"
+        "Look for: statistics, testimonials, awards, certifications, case studies, "
+        "partnerships, media mentions, years in business, team credentials.\n"
+        "Return JSON: {\"signals\": [{\"slide_n\": number, \"signal\": string, "
+        "\"type\": string, \"strength\": number}]}\n"
+        "Strength is 1-10. Type = stat|testimonial|award|case_study|credential|partnership|media."
+    )
+    signals: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        signals = json.loads(raw).get("signals", signals)
+    except Exception as exc:
+        log.warning("authority-signals parse failed: %s", exc)
+
+    signals.sort(key=lambda x: x.get("strength", 0), reverse=True)
+    return {"signals": signals}
+
+
+# ── Shape Inventory ───────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/shape-inventory")
+def shape_inventory(doc_id: str):
+    """Count and categorize all shapes across the entire deck."""
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    type_names = {
+        1:  "auto_shape",
+        2:  "callout",
+        3:  "chart",
+        4:  "comment",
+        5:  "freeform",
+        6:  "group",
+        7:  "embedded_ole",
+        8:  "linked_ole",
+        9:  "linked_picture",
+        10: "media",
+        11: "ole_control",
+        12: "picture",
+        13: "picture",
+        14: "placeholder",
+        15: "table",
+        16: "text_box",
+        17: "canvas",
+        18: "diagram",
+        19: "line",
+        20: "ink",
+        21: "smart_art",
+        22: "web_video",
+    }
+
+    tally: dict[str, int]    = {}
+    per_slide: list[dict]     = []
+
+    for s in doc.slides:
+        slide_tally: dict[str, int] = {}
+        for sh in s.shapes:
+            st = int(sh.shape_type)
+            name = type_names.get(st, f"type_{st}")
+            tally[name]       = tally.get(name, 0) + 1
+            slide_tally[name] = slide_tally.get(name, 0) + 1
+        per_slide.append({"slide_n": s.slide_number, "count": sum(slide_tally.values()), **slide_tally})
+
+    total = sum(tally.values())
+    return {"tally": tally, "per_slide": per_slide, "total_shapes": total}
+
+
+# ── Assumption Checker ────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/assumption-checker")
+async def assumption_checker(doc_id: str):
+    """AI finds unstated assumptions made in the deck that could alienate audiences."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        texts.append(f"Slide {s.slide_number}: " + " | ".join(parts)[:200])
+
+    context = "\n".join(texts)
+    prompt = (
+        "Find unstated assumptions in this presentation that could confuse or alienate audiences.\n\n"
+        f"{context}\n\n"
+        "Look for: assumed knowledge, assumed agreement with premises, cultural assumptions, "
+        "business jargon treated as universal, or logical leaps.\n"
+        "Return JSON: {\"assumptions\": [{\"slide_n\": number, \"assumption\": string, "
+        "\"risk\": \"low|medium|high\", \"suggestion\": string}]}"
+    )
+    assumptions: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        assumptions = json.loads(raw).get("assumptions", assumptions)
+    except Exception as exc:
+        log.warning("assumption-checker parse failed: %s", exc)
+
+    return {"assumptions": assumptions}
+
+
+# ── Font Size Distribution ────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/font-size-distribution")
+def font_size_distribution(doc_id: str):
+    """Build a histogram of font sizes used across all text in the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    size_map: dict[int, int] = {}
+    zero_runs = 0
+
+    for s in doc.slides:
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for p in sh.text_frame.paragraphs:
+                for run in p.runs:
+                    sz = run.font.size
+                    if sz is None:
+                        zero_runs += 1
+                        continue
+                    pt = round(sz / 12700)  # EMU to points
+                    if pt > 0:
+                        size_map[pt] = size_map.get(pt, 0) + 1
+
+    sorted_sizes = sorted(size_map.items())
+    total = sum(size_map.values())
+    distribution = [{"pt": pt, "count": count, "pct": round(count / total * 100, 1) if total > 0 else 0}
+                    for pt, count in sorted_sizes]
+
+    most_common = max(size_map, key=lambda k: size_map[k]) if size_map else 0
+    return {"distribution": distribution, "most_common_pt": most_common,
+            "unique_sizes": len(size_map), "total_runs": total + zero_runs}
+
+
+# ── Key Message Extractor ─────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/key-message-extractor")
+async def key_message_extractor(doc_id: str):
+    """AI identifies the 3 most important messages the deck communicates."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        texts.append(f"Slide {s.slide_number}: " + " | ".join(parts)[:200])
+
+    context = "\n".join(texts)
+    prompt = (
+        "Identify the 3 most important messages this presentation is trying to communicate.\n\n"
+        f"{context}\n\n"
+        "Focus on the core ideas the audience should walk away believing or understanding.\n"
+        "Return JSON: {\"messages\": [{\"rank\": number, \"message\": string, "
+        "\"evidence_slides\": [number], \"confidence\": number}]}\n"
+        "Confidence is 1-10. Rank 1 is most important."
+    )
+    messages: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        messages = json.loads(raw).get("messages", messages)
+    except Exception as exc:
+        log.warning("key-message-extractor parse failed: %s", exc)
+
+    return {"messages": messages}
+
+
+# ── Text Color Audit ──────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/text-color-audit")
+def text_color_audit(doc_id: str):
+    """Find distinct text colors used across the deck and which slides use them."""
+    from pptx.dml.color import RGBColor
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    color_map: dict[str, list[int]] = {}
+
+    for s in doc.slides:
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for p in sh.text_frame.paragraphs:
+                for run in p.runs:
+                    try:
+                        rgb = run.font.color.rgb
+                        if rgb is None:
+                            continue
+                        hex_color = str(rgb)
+                        if s.slide_number not in color_map.get(hex_color, []):
+                            color_map.setdefault(hex_color, []).append(s.slide_number)
+                    except Exception:
+                        pass
+
+    colors = [{"hex": f"#{h}", "slides": slides, "count": len(slides)}
+              for h, slides in color_map.items()]
+    colors.sort(key=lambda x: x["count"], reverse=True)
+    return {"colors": colors[:30], "total_unique": len(colors)}
+
+
+# ── Competitive Positioning ───────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/competitive-positioning")
+async def competitive_positioning(doc_id: str):
+    """AI analyzes how the deck positions against competitors or alternatives."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        texts.append(f"Slide {s.slide_number}: " + " | ".join(parts)[:200])
+
+    context = "\n".join(texts)
+    prompt = (
+        "Analyze the competitive positioning in this presentation.\n\n"
+        f"{context}\n\n"
+        "Identify:\n"
+        "1. How does the presenter differentiate from competitors?\n"
+        "2. What unique advantages are claimed?\n"
+        "3. What competitors or alternatives are mentioned (explicitly or implicitly)?\n"
+        "4. What is the positioning strategy?\n"
+        "Return JSON: {\"positioning_strategy\": string, \"differentiators\": [string], "
+        "\"competitors_mentioned\": [string], \"gaps\": [string], \"strength_score\": number}\n"
+        "Strength score 1-10 indicates how effective the competitive positioning is."
+    )
+    result: dict = {"positioning_strategy": "", "differentiators": [],
+                    "competitors_mentioned": [], "gaps": [], "strength_score": 0}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("competitive-positioning parse failed: %s", exc)
+
+    return result
+
+
+# ── Empty Notes Finder ────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/empty-notes-finder")
+def empty_notes_finder(doc_id: str):
+    """Find slides that have no speaker notes."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    no_notes: list[int] = []
+    has_notes: list[int] = []
+
+    for s in doc.slides:
+        try:
+            notes = s.notes_slide.notes_text_frame.text.strip()
+        except Exception:
+            notes = ""
+        if notes:
+            has_notes.append(s.slide_number)
+        else:
+            no_notes.append(s.slide_number)
+
+    return {
+        "no_notes":   no_notes,
+        "has_notes":  has_notes,
+        "total":      len(doc.slides),
+        "coverage_pct": round(len(has_notes) / len(doc.slides) * 100, 1) if doc.slides else 0.0,
+    }
+
+
+# ── Deck Quiz Generator ───────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/deck-quiz-generator")
+async def deck_quiz_generator(doc_id: str):
+    """AI generates a 5-question multiple-choice quiz based on the deck's content."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        texts.append(f"Slide {s.slide_number}: " + " | ".join(parts)[:200])
+
+    context = "\n".join(texts)
+    prompt = (
+        "Generate a 5-question multiple-choice quiz to test comprehension of this presentation.\n\n"
+        f"{context}\n\n"
+        "Each question should have 4 answer choices with one correct answer.\n"
+        "Return JSON: {\"questions\": [{\"q\": number, \"question\": string, "
+        "\"choices\": [string], \"answer\": number, \"explanation\": string}]}\n"
+        "Answer is the 0-based index of the correct choice."
+    )
+    questions: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        questions = json.loads(raw).get("questions", questions)
+    except Exception as exc:
+        log.warning("deck-quiz-generator parse failed: %s", exc)
+
+    return {"questions": questions}
+
+
+# ── Slide Symmetry ────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slide-symmetry")
+def slide_symmetry(doc_id: str):
+    """Check whether left/right content placement is roughly balanced per slide."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    # Slide width in EMU (standard widescreen = 9144000 or 12192000)
+    try:
+        slide_w = doc.slide_width or 9144000
+    except Exception:
+        slide_w = 9144000
+
+    half = slide_w / 2
+    rows: list[dict] = []
+
+    for s in doc.slides:
+        left_area  = 0.0
+        right_area = 0.0
+        for sh in s.shapes:
+            w = sh.width  or 0
+            h = sh.height or 0
+            x = sh.left   or 0
+            area = (w / 914400.0) * (h / 914400.0)
+            center_x = x + w / 2
+            if center_x < half:
+                left_area  += area
+            else:
+                right_area += area
+
+        total = left_area + right_area
+        left_pct  = round(left_area  / total * 100, 1) if total > 0 else 50.0
+        right_pct = round(right_area / total * 100, 1) if total > 0 else 50.0
+        diff      = abs(left_pct - right_pct)
+        balance   = "balanced" if diff < 20 else "left-heavy" if left_pct > right_pct else "right-heavy"
+
+        rows.append({
+            "slide_n":    s.slide_number,
+            "left_pct":   left_pct,
+            "right_pct":  right_pct,
+            "balance":    balance,
+            "diff":       round(diff, 1),
+        })
+
+    imbalanced = [r for r in rows if r["balance"] != "balanced"]
+    return {"slides": rows, "imbalanced_count": len(imbalanced)}
+
+
+# ── Objection Map ─────────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/objection-map")
+async def objection_map(doc_id: str):
+    """AI groups objections by theme into a visual map."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    texts: list[str] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        texts.append(f"Slide {s.slide_number}: " + " | ".join(parts)[:200])
+
+    context = "\n".join(texts)
+    prompt = (
+        "Generate a thematic objection map for this presentation.\n\n"
+        f"{context}\n\n"
+        "Group potential audience objections into 3-5 theme clusters.\n"
+        "Return JSON: {\"themes\": [{\"name\": string, \"objections\": [string], "
+        "\"severity\": \"low|medium|high\", \"suggested_response\": string}]}"
+    )
+    themes: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        themes = json.loads(raw).get("themes", themes)
+    except Exception as exc:
+        log.warning("objection-map parse failed: %s", exc)
+
+    return {"themes": themes}
+
+
+# ── Text Density Per Word ─────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/text-density-per-word")
+def text_density_per_word(doc_id: str):
+    """Average words per text shape, total words, and text-heavy slides."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    per_slide: list[dict] = []
+    HIGH_THRESHOLD = 50  # words per shape considered high-density
+
+    for s in doc.slides:
+        shapes_with_text = 0
+        total_words      = 0
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            words = len(sh.text_frame.text.split())
+            if words > 0:
+                shapes_with_text += 1
+                total_words      += words
+        avg = round(total_words / shapes_with_text, 1) if shapes_with_text > 0 else 0.0
+        per_slide.append({
+            "slide_n":       s.slide_number,
+            "total_words":   total_words,
+            "text_shapes":   shapes_with_text,
+            "avg_per_shape": avg,
+            "dense":         avg > HIGH_THRESHOLD,
+        })
+
+    grand_total = sum(r["total_words"]  for r in per_slide)
+    grand_shapes= sum(r["text_shapes"]  for r in per_slide)
+    grand_avg   = round(grand_total / grand_shapes, 1) if grand_shapes > 0 else 0.0
+    dense_slides = [r["slide_n"] for r in per_slide if r["dense"]]
+
+    return {
+        "per_slide":        per_slide,
+        "global_avg":       grand_avg,
+        "total_words":      grand_total,
+        "dense_slides":     dense_slides,
+        "threshold":        HIGH_THRESHOLD,
+    }
+
+
+# ── Slide Story Beats ─────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slide-story-beats")
+async def slide_story_beats(doc_id: str):
+    """AI identifies narrative story beats (setup, conflict, resolution) across the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    titles: list[str] = []
+    for s in doc.slides:
+        title = ""
+        for sh in s.shapes:
+            if sh.text_frame:
+                title = sh.text_frame.text.strip()[:80]
+                break
+        titles.append(f"Slide {s.slide_number}: {title}")
+
+    context = "\n".join(titles)
+    prompt = (
+        "Analyze this presentation as a story and identify the narrative beats.\n\n"
+        f"{context}\n\n"
+        "Label each slide with its story beat role:\n"
+        "setup, problem, evidence, pivot, solution, benefit, proof, objection, close, cta, context\n"
+        "Return JSON: {\"beats\": [{\"slide_n\": number, \"beat\": string, \"description\": string}]}"
+    )
+    beats: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        beats = json.loads(raw).get("beats", beats)
+    except Exception as exc:
+        log.warning("slide-story-beats parse failed: %s", exc)
+
+    return {"beats": beats}
+
+
+# ── Placeholder Text Finder ───────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/placeholder-text-finder")
+async def placeholder_text_finder(doc_id: str):
+    """Scan slides for placeholder/lorem-ipsum text that was never replaced."""
+    import re as _re
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    PATTERNS = [
+        r"\blorem\b", r"ipsum", r"click to (add|edit|type|enter)",
+        r"\btbd\b", r"\btba\b", r"enter text here", r"type here",
+        r"\bplaceholder\b", r"\[.*?\]", r"<.*?>",
+    ]
+    compiled = [_re.compile(p, _re.IGNORECASE) for p in PATTERNS]
+
+    hits: list[dict] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            text = sh.text_frame.text.strip()
+            if not text:
+                continue
+            matched = [p.pattern for p in compiled if p.search(text)]
+            if matched:
+                hits.append({
+                    "slide_n": s.slide_number,
+                    "text":    text[:120],
+                    "pattern": matched[0],
+                })
+
+    return {"hits": hits, "total": len(hits)}
+
+
+# ── Audience Journey Map ───────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/audience-journey-map")
+async def audience_journey_map(doc_id: str):
+    """AI maps the emotional journey of the audience slide-by-slide."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides_text: list[str] = []
+    for s in doc.slides:
+        texts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    texts.append(t[:80])
+        slides_text.append(f"Slide {s.slide_number}: {' | '.join(texts[:3])}")
+
+    context = "\n".join(slides_text)
+    prompt = (
+        "Map the emotional journey of the audience as they move through this presentation.\n\n"
+        f"{context}\n\n"
+        "For each slide, predict the audience's dominant emotion and intensity (1-10).\n"
+        "Emotions: curious, confused, skeptical, engaged, excited, concerned, relieved, convinced, inspired, bored\n"
+        "Return JSON: {\"journey\": [{\"slide_n\": number, \"emotion\": string, \"intensity\": number, \"description\": string}]}"
+    )
+    journey: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=900,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        journey = json.loads(raw).get("journey", journey)
+    except Exception as exc:
+        log.warning("audience-journey-map parse failed: %s", exc)
+
+    return {"journey": journey}
+
+
+# ── Link Density ──────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/link-density")
+async def link_density(doc_id: str):
+    """Count hyperlinks per slide and flag slides with many links."""
+    from pptx.oxml.ns import qn as _qn
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    per_slide: list[dict] = []
+    for s in doc.slides:
+        links: list[str] = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    for run in para.runs:
+                        rpr = run._r.find(_qn("a:rPr"))
+                        if rpr is not None:
+                            hl = rpr.find(_qn("a:hlinkClick"))
+                            if hl is not None:
+                                url = hl.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id", "")
+                                links.append(url)
+        per_slide.append({
+            "slide_n":    s.slide_number,
+            "link_count": len(links),
+        })
+
+    total = sum(r["link_count"] for r in per_slide)
+    max_links = max((r["link_count"] for r in per_slide), default=0)
+    return {"per_slide": per_slide, "total_links": total, "max_on_slide": max_links}
+
+
+# ── Presentation Summary Bullets ──────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/presentation-summary-bullets")
+async def presentation_summary_bullets(doc_id: str):
+    """AI generates a 5-bullet executive summary of the entire deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(t[:150])
+
+    context = "\n".join(all_text[:80])
+    prompt = (
+        "Read this presentation content and write a concise 5-bullet executive summary "
+        "that captures the key points, main argument, and call to action.\n\n"
+        f"{context}\n\n"
+        "Return JSON: {\"bullets\": [\"bullet 1\", \"bullet 2\", \"bullet 3\", \"bullet 4\", \"bullet 5\"]}"
+    )
+    bullets: list[str] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        bullets = json.loads(raw).get("bullets", bullets)
+    except Exception as exc:
+        log.warning("presentation-summary-bullets parse failed: %s", exc)
+
+    return {"bullets": bullets}
+
+
+# ── Color Contrast Audit ──────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/color-contrast-audit")
+async def color_contrast_audit(doc_id: str):
+    """Estimate text/background color pairs and flag low contrast slides."""
+    from pptx.util import Pt as _Pt
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    def _luma(rgb: tuple) -> float:
+        r, g, b = [c / 255.0 for c in rgb]
+        def _lin(c: float) -> float:
+            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+        return 0.2126 * _lin(r) + 0.7152 * _lin(g) + 0.0722 * _lin(b)
+
+    def _contrast(a: tuple, b: tuple) -> float:
+        la, lb = _luma(a), _luma(b)
+        hi, lo = max(la, lb), min(la, lb)
+        return (hi + 0.05) / (lo + 0.05)
+
+    results: list[dict] = []
+    for s in doc.slides:
+        slide_issues = 0
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            try:
+                fill = sh.fill
+                if fill.type is not None:
+                    bg_rgb = fill.fore_color.rgb
+                    bg = (bg_rgb.red, bg_rgb.green, bg_rgb.blue)
+                else:
+                    bg = (255, 255, 255)
+            except Exception:
+                bg = (255, 255, 255)
+            for para in sh.text_frame.paragraphs:
+                for run in para.runs:
+                    try:
+                        tc = run.font.color.rgb
+                        fg = (tc.red, tc.green, tc.blue)
+                        ratio = _contrast(fg, bg)
+                        if ratio < 4.5:
+                            slide_issues += 1
+                    except Exception:
+                        pass
+        results.append({"slide_n": s.slide_number, "low_contrast_runs": slide_issues})
+
+    flagged = [r["slide_n"] for r in results if r["low_contrast_runs"] > 0]
+    return {"per_slide": results, "flagged_slides": flagged, "flagged_count": len(flagged)}
+
+
+# ── Deck Personality ──────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/deck-personality")
+async def deck_personality(doc_id: str):
+    """AI assigns a personality archetype and tone profile to the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(t[:100])
+
+    context = "\n".join(all_text[:60])
+    prompt = (
+        "Analyze this presentation's writing style and assign it a personality archetype.\n\n"
+        f"{context}\n\n"
+        "Archetypes: authoritative, approachable, visionary, analytical, inspirational, urgent, educational, conversational, bold, subtle\n"
+        "Return JSON: {\"archetype\": string, \"tone_words\": [string, string, string], "
+        "\"strengths\": [string, string], \"risks\": [string, string], \"recommendation\": string}"
+    )
+    result: dict = {}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("deck-personality parse failed: %s", exc)
+
+    return result
+
+
+# ── Title Length Audit ────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/title-length-audit")
+async def title_length_audit(doc_id: str):
+    """Measure title character counts and flag missing or overly long titles."""
+    from pptx.enum.text import PP_ALIGN as _PP_ALIGN  # noqa
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    MAX_IDEAL = 60
+    results: list[dict] = []
+    for s in doc.slides:
+        title = ""
+        for sh in s.shapes:
+            if sh.text_frame and sh.has_text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    title = t[:120]
+                    break
+        char_count = len(title)
+        status = "missing" if not title else ("long" if char_count > MAX_IDEAL else "ok")
+        results.append({
+            "slide_n":    s.slide_number,
+            "title":      title,
+            "char_count": char_count,
+            "status":     status,
+        })
+
+    flagged = [r["slide_n"] for r in results if r["status"] != "ok"]
+    return {"slides": results, "flagged_count": len(flagged), "ideal_max": MAX_IDEAL}
+
+
+# ── Call-to-Action Finder ─────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/call-to-action-finder")
+async def call_to_action_finder(doc_id: str):
+    """AI identifies and evaluates call-to-action elements across the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides_text: list[str] = []
+    for s in doc.slides:
+        texts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    texts.append(t[:80])
+        slides_text.append(f"Slide {s.slide_number}: {' | '.join(texts[:3])}")
+
+    context = "\n".join(slides_text)
+    prompt = (
+        "Identify all call-to-action (CTA) elements in this presentation.\n\n"
+        f"{context}\n\n"
+        "For each CTA found, evaluate its clarity and strength.\n"
+        "Clarity: clear | vague | missing\n"
+        "Strength: strong | moderate | weak\n"
+        "Return JSON: {\"ctas\": [{\"slide_n\": number, \"text\": string, \"clarity\": string, "
+        "\"strength\": string, \"suggestion\": string}], \"overall_cta_score\": number (1-10)}"
+    )
+    ctas: list[dict] = []
+    score = 0
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        parsed = json.loads(raw)
+        ctas  = parsed.get("ctas", ctas)
+        score = parsed.get("overall_cta_score", score)
+    except Exception as exc:
+        log.warning("call-to-action-finder parse failed: %s", exc)
+
+    return {"ctas": ctas, "overall_cta_score": score}
+
+
+# ── Slide Word Count Histogram ────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slide-word-count-histogram")
+async def slide_word_count_histogram(doc_id: str):
+    """Bucket slides by word count and return histogram data."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    BUCKETS = [(0, 10), (11, 30), (31, 60), (61, 100), (101, 200), (201, 99999)]
+    LABELS  = ["0-10", "11-30", "31-60", "61-100", "101-200", "200+"]
+
+    per_slide: list[dict] = []
+    for s in doc.slides:
+        wc = sum(len(sh.text_frame.text.split()) for sh in s.shapes if sh.text_frame)
+        per_slide.append({"slide_n": s.slide_number, "word_count": wc})
+
+    counts = [0] * len(BUCKETS)
+    for r in per_slide:
+        wc = r["word_count"]
+        for i, (lo, hi) in enumerate(BUCKETS):
+            if lo <= wc <= hi:
+                counts[i] += 1
+                break
+
+    histogram = [{"label": LABELS[i], "count": counts[i]} for i in range(len(BUCKETS))]
+    total_words = sum(r["word_count"] for r in per_slide)
+    avg_words   = round(total_words / len(per_slide), 1) if per_slide else 0.0
+
+    return {
+        "per_slide":   per_slide,
+        "histogram":   histogram,
+        "total_words": total_words,
+        "avg_words":   avg_words,
+    }
+
+
+# ── Rhetorical Device Finder ──────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/rhetorical-device-finder")
+async def rhetorical_device_finder(doc_id: str):
+    """AI identifies rhetorical devices used across the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(t[:120])
+
+    context = "\n".join(all_text[:60])
+    prompt = (
+        "Identify rhetorical devices used in this presentation.\n\n"
+        f"{context}\n\n"
+        "Look for: anaphora, tricolon, antithesis, alliteration, metaphor, rhetorical question, "
+        "hyperbole, personification, parallelism, ethos, pathos, logos.\n"
+        "Return JSON: {\"devices\": [{\"device\": string, \"example\": string, \"slide_hint\": string, "
+        "\"effect\": string}], \"missing_devices\": [string], \"overall_rhetoric_score\": number (1-10)}"
+    )
+    devices: list[dict] = []
+    missing: list[str] = []
+    score = 0
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        parsed  = json.loads(raw)
+        devices = parsed.get("devices", devices)
+        missing = parsed.get("missing_devices", missing)
+        score   = parsed.get("overall_rhetoric_score", score)
+    except Exception as exc:
+        log.warning("rhetorical-device-finder parse failed: %s", exc)
+
+    return {"devices": devices, "missing_devices": missing, "overall_rhetoric_score": score}
+
+
+# ── Shape Z-Order Audit ────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/shape-z-order-audit")
+async def shape_z_order_audit(doc_id: str):
+    """Detect slides with many overlapping shapes that may cause visual clutter."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    results: list[dict] = []
+    for s in doc.slides:
+        shapes_info = []
+        for sh in s.shapes:
+            try:
+                l, t = sh.left or 0, sh.top or 0
+                w, h = sh.width or 0, sh.height or 0
+                shapes_info.append({"l": l, "t": t, "r": l + w, "b": t + h})
+            except Exception:
+                pass
+
+        overlaps = 0
+        n = len(shapes_info)
+        for i in range(n):
+            for j in range(i + 1, n):
+                a, b = shapes_info[i], shapes_info[j]
+                if a["l"] < b["r"] and a["r"] > b["l"] and a["t"] < b["b"] and a["b"] > b["t"]:
+                    overlaps += 1
+
+        results.append({
+            "slide_n":      s.slide_number,
+            "shape_count":  n,
+            "overlap_pairs": overlaps,
+        })
+
+    flagged = [r["slide_n"] for r in results if r["overlap_pairs"] > 3]
+    return {"slides": results, "flagged_slides": flagged, "flagged_count": len(flagged)}
+
+
+# ── Competitive Gap Analyzer ──────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/competitive-gap-analyzer")
+async def competitive_gap_analyzer(doc_id: str):
+    """AI identifies gaps vs. a typical best-in-class competitor deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(t[:100])
+
+    context = "\n".join(all_text[:60])
+    prompt = (
+        "Compare this presentation against a best-in-class competitor deck in the same domain.\n\n"
+        f"{context}\n\n"
+        "Identify gaps — things a top competitor would include that this deck is missing or weak on.\n"
+        "Return JSON: {\"gaps\": [{\"area\": string, \"severity\": \"high\"|\"medium\"|\"low\", "
+        "\"what_competitor_does\": string, \"recommendation\": string}], "
+        "\"competitive_score\": number (1-10), \"summary\": string}"
+    )
+    gaps: list[dict] = []
+    comp_score = 0
+    summary = ""
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        parsed     = json.loads(raw)
+        gaps       = parsed.get("gaps", gaps)
+        comp_score = parsed.get("competitive_score", comp_score)
+        summary    = parsed.get("summary", summary)
+    except Exception as exc:
+        log.warning("competitive-gap-analyzer parse failed: %s", exc)
+
+    return {"gaps": gaps, "competitive_score": comp_score, "summary": summary}
+
+
+# ── Bullet Count Per Slide ────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/bullet-count-per-slide")
+async def bullet_count_per_slide(doc_id: str):
+    """Count bullet points per slide and flag slides exceeding the ideal limit."""
+    IDEAL_MAX = 5
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    results: list[dict] = []
+    for s in doc.slides:
+        bullet_count = 0
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for para in sh.text_frame.paragraphs:
+                pf = para._p.find("{http://schemas.openxmlformats.org/drawingml/2006/main}pPr")
+                if pf is not None:
+                    indent = pf.get("indent") or pf.get("marL")
+                    if indent:
+                        bullet_count += 1
+                        continue
+                if para.level > 0:
+                    bullet_count += 1
+        results.append({
+            "slide_n":      s.slide_number,
+            "bullet_count": bullet_count,
+            "over_limit":   bullet_count > IDEAL_MAX,
+        })
+
+    flagged = [r["slide_n"] for r in results if r["over_limit"]]
+    total   = sum(r["bullet_count"] for r in results)
+    return {"slides": results, "flagged_slides": flagged, "total_bullets": total, "ideal_max": IDEAL_MAX}
+
+
+# ── Slide Hook Analyzer ────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slide-hook-analyzer")
+async def slide_hook_analyzer(doc_id: str):
+    """AI evaluates how compelling the opening hook of each slide is."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides_text: list[str] = []
+    for s in doc.slides:
+        texts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    texts.append(t[:100])
+        slides_text.append(f"Slide {s.slide_number}: {' | '.join(texts[:2])}")
+
+    context = "\n".join(slides_text)
+    prompt = (
+        "Analyze the opening hook of each slide — the first impression that grabs attention.\n\n"
+        f"{context}\n\n"
+        "Rate each slide's hook on: strength (1-10) and type "
+        "(question, statistic, anecdote, statement, visual_cue, missing).\n"
+        "Return JSON: {\"hooks\": [{\"slide_n\": number, \"hook_type\": string, "
+        "\"strength\": number, \"improvement\": string}]}"
+    )
+    hooks: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        hooks = json.loads(raw).get("hooks", hooks)
+    except Exception as exc:
+        log.warning("slide-hook-analyzer parse failed: %s", exc)
+
+    return {"hooks": hooks}
+
+
+# ── Image Caption Checker ─────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/image-caption-checker")
+async def image_caption_checker(doc_id: str):
+    """Detect image shapes without adjacent caption text on the same slide."""
+    from pptx.enum.shapes import MSO_SHAPE_TYPE as _MSO
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    results: list[dict] = []
+    for s in doc.slides:
+        image_count  = 0
+        caption_text = ""
+        for sh in s.shapes:
+            if sh.shape_type == 13:  # picture
+                image_count += 1
+            elif sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t and len(t) < 200:
+                    caption_text += t + " "
+        has_caption = bool(caption_text.strip()) if image_count > 0 else None
+        if image_count > 0:
+            results.append({
+                "slide_n":     s.slide_number,
+                "image_count": image_count,
+                "has_caption": has_caption,
+                "caption_text": caption_text.strip()[:80],
+            })
+
+    missing_captions = [r["slide_n"] for r in results if not r["has_caption"]]
+    return {
+        "slides_with_images": results,
+        "missing_captions":   missing_captions,
+        "total_image_slides": len(results),
+    }
+
+
+# ── Data Story Checker ────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/data-story-checker")
+async def data_story_checker(doc_id: str):
+    """AI checks if data/chart slides tell a clear story vs. just showing numbers."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    DATA_KEYWORDS = ["%" , "chart", "graph", "revenue", "growth", "$", "million", "billion",
+                     "increase", "decrease", "vs", "versus", "Q1", "Q2", "Q3", "Q4", "YoY"]
+
+    data_slides: list[str] = []
+    for s in doc.slides:
+        all_text = " ".join(sh.text_frame.text for sh in s.shapes if sh.text_frame)
+        if any(kw.lower() in all_text.lower() for kw in DATA_KEYWORDS):
+            data_slides.append(f"Slide {s.slide_number}: {all_text[:200]}")
+
+    if not data_slides:
+        return {"evaluations": [], "summary": "No data slides detected."}
+
+    context = "\n".join(data_slides)
+    prompt = (
+        "Evaluate each data/chart slide to determine if it tells a clear story or just shows raw numbers.\n\n"
+        f"{context}\n\n"
+        "For each, rate: story_clarity (1-10), data_type (chart/table/statistic/mixed), "
+        "tells_story (true/false), and give a one-sentence improvement suggestion.\n"
+        "Return JSON: {\"evaluations\": [{\"slide_n\": number, \"story_clarity\": number, "
+        "\"data_type\": string, \"tells_story\": boolean, \"suggestion\": string}], "
+        "\"summary\": string}"
+    )
+    evals: list[dict] = []
+    summary = ""
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        parsed  = json.loads(raw)
+        evals   = parsed.get("evaluations", evals)
+        summary = parsed.get("summary", summary)
+    except Exception as exc:
+        log.warning("data-story-checker parse failed: %s", exc)
+
+    return {"evaluations": evals, "summary": summary}
+
+
+# ── Slide Pacing Score ────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slide-pacing-score")
+async def slide_pacing_score(doc_id: str):
+    """Estimate slide pacing based on content density and slide count."""
+    WORDS_PER_MIN = 130
+    SLIDES_PER_MIN = 1.5
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    per_slide: list[dict] = []
+    for s in doc.slides:
+        wc = sum(len(sh.text_frame.text.split()) for sh in s.shapes if sh.text_frame)
+        reading_secs = round((wc / WORDS_PER_MIN) * 60, 1)
+        allotted_secs = round(60 / SLIDES_PER_MIN, 1)
+        ratio = round(reading_secs / allotted_secs, 2) if allotted_secs > 0 else 0
+        pacing = "fast" if ratio < 0.4 else ("slow" if ratio > 1.5 else "good")
+        per_slide.append({
+            "slide_n":       s.slide_number,
+            "word_count":    wc,
+            "reading_secs":  reading_secs,
+            "pacing":        pacing,
+            "density_ratio": ratio,
+        })
+
+    slide_count = len(per_slide)
+    est_mins = round(slide_count / SLIDES_PER_MIN, 1)
+    fast_count = sum(1 for r in per_slide if r["pacing"] == "fast")
+    slow_count = sum(1 for r in per_slide if r["pacing"] == "slow")
+
+    return {
+        "per_slide":   per_slide,
+        "est_duration_mins": est_mins,
+        "fast_slides": fast_count,
+        "slow_slides": slow_count,
+        "slide_count": slide_count,
+    }
+
+
+# ── Trust Signal Finder ───────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/trust-signal-finder")
+async def trust_signal_finder(doc_id: str):
+    """AI identifies trust signals (testimonials, certs, case studies, logos) in the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(t[:120])
+
+    context = "\n".join(all_text[:60])
+    prompt = (
+        "Identify trust signals in this presentation.\n\n"
+        f"{context}\n\n"
+        "Trust signal types: testimonial, case_study, certification, logo, statistic, award, partnership, guarantee\n"
+        "Return JSON: {\"signals\": [{\"type\": string, \"quote\": string, \"strength\": \"strong\"|\"moderate\"|\"weak\", "
+        "\"slide_hint\": string}], \"missing_types\": [string], \"trust_score\": number (1-10)}"
+    )
+    signals: list[dict] = []
+    missing: list[str] = []
+    trust_score = 0
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        parsed      = json.loads(raw)
+        signals     = parsed.get("signals", signals)
+        missing     = parsed.get("missing_types", missing)
+        trust_score = parsed.get("trust_score", trust_score)
+    except Exception as exc:
+        log.warning("trust-signal-finder parse failed: %s", exc)
+
+    return {"signals": signals, "missing_types": missing, "trust_score": trust_score}
+
+
+# ── Repeated Words Audit ──────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/repeated-words-audit")
+async def repeated_words_audit(doc_id: str):
+    """Find words repeated excessively across the entire deck."""
+    import re as _re
+    STOP_WORDS = {"the","a","an","and","or","but","in","on","at","to","for","of","with",
+                  "is","are","was","were","be","been","this","that","it","its","our","we",
+                  "you","your","their","have","has","will","can","not","by","from","as","so"}
+    MIN_COUNT = 5
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    word_counts: dict[str, int] = {}
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                words = _re.findall(r"[a-z]{4,}", sh.text_frame.text.lower())
+                for w in words:
+                    if w not in STOP_WORDS:
+                        word_counts[w] = word_counts.get(w, 0) + 1
+
+    repeated = sorted(
+        [{"word": w, "count": c} for w, c in word_counts.items() if c >= MIN_COUNT],
+        key=lambda x: x["count"],
+        reverse=True,
+    )[:30]
+
+    return {"repeated_words": repeated, "total_unique": len(word_counts), "min_threshold": MIN_COUNT}
+
+
+# ── Slide Transitions Advisor ─────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slide-transitions-advisor")
+async def slide_transitions_advisor(doc_id: str):
+    """AI recommends slide transition types based on the content flow."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides_text: list[str] = []
+    for s in doc.slides:
+        texts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    texts.append(t[:60])
+        slides_text.append(f"Slide {s.slide_number}: {' | '.join(texts[:2])}")
+
+    context = "\n".join(slides_text)
+    prompt = (
+        "Recommend a slide transition type for each slide based on its content and relationship to the next slide.\n\n"
+        f"{context}\n\n"
+        "Transition types: fade, push, cut, morph, zoom, reveal, wipe, none\n"
+        "For each transition between slides, explain the rationale in one sentence.\n"
+        "Return JSON: {\"transitions\": [{\"from_slide\": number, \"to_slide\": number, "
+        "\"type\": string, \"rationale\": string}]}"
+    )
+    transitions: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        transitions = json.loads(raw).get("transitions", transitions)
+    except Exception as exc:
+        log.warning("slide-transitions-advisor parse failed: %s", exc)
+
+    return {"transitions": transitions}
+
+
+# ── Slide Layout Type Audit ───────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slide-layout-type-audit")
+async def slide_layout_type_audit(doc_id: str):
+    """Classify each slide's layout type based on its shape composition."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    from pptx.util import Emu as _Emu
+    SLIDE_W = doc.slide_width or _Emu(9144000)
+    MID = SLIDE_W / 2
+
+    results: list[dict] = []
+    for s in doc.slides:
+        shapes = s.shapes
+        text_shapes  = [sh for sh in shapes if sh.text_frame and sh.text_frame.text.strip()]
+        image_shapes = [sh for sh in shapes if sh.shape_type == 13]
+        total = len(text_shapes) + len(image_shapes)
+
+        if total == 0:
+            layout = "blank"
+        elif len(image_shapes) >= 1 and len(text_shapes) == 0:
+            layout = "image_only"
+        elif len(image_shapes) >= 1 and len(text_shapes) >= 1:
+            layout = "image_text"
+        elif len(text_shapes) == 1:
+            layout = "title_only"
+        elif len(text_shapes) == 2:
+            layout = "title_content"
+        elif len(text_shapes) >= 3:
+            left  = sum(1 for sh in text_shapes if (sh.left or 0) < MID)
+            right = sum(1 for sh in text_shapes if (sh.left or 0) >= MID)
+            layout = "two_column" if abs(left - right) <= 1 else "multi_column"
+        else:
+            layout = "complex"
+
+        results.append({"slide_n": s.slide_number, "layout": layout})
+
+    from collections import Counter
+    dist = dict(Counter(r["layout"] for r in results))
+    return {"slides": results, "distribution": dist}
+
+
+# ── Opening & Closer Evaluator ────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/opening-closer-evaluator")
+async def opening_closer_evaluator(doc_id: str):
+    """AI evaluates the quality of the opening and closing slides."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides = list(doc.slides)
+    if not slides:
+        return {"opening": {}, "closing": {}}
+
+    def _text(s) -> str:
+        return "\n".join(sh.text_frame.text.strip() for sh in s.shapes if sh.text_frame)[:300]
+
+    opening_text = _text(slides[0])
+    closing_text = _text(slides[-1])
+    n = len(slides)
+
+    prompt = (
+        f"Evaluate this presentation's opening slide (Slide 1) and closing slide (Slide {n}).\n\n"
+        f"Opening slide:\n{opening_text}\n\n"
+        f"Closing slide:\n{closing_text}\n\n"
+        "Rate each on: impact (1-10), clarity (1-10), and give one strength and one improvement each.\n"
+        "Return JSON: {\"opening\": {\"impact\": number, \"clarity\": number, \"strength\": string, "
+        "\"improvement\": string, \"verdict\": string}, "
+        "\"closing\": {\"impact\": number, \"clarity\": number, \"strength\": string, "
+        "\"improvement\": string, \"verdict\": string}}"
+    )
+    result: dict = {"opening": {}, "closing": {}}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("opening-closer-evaluator parse failed: %s", exc)
+
+    return result
+
+
+# ── Acronym Finder ────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/acronym-finder")
+async def acronym_finder(doc_id: str):
+    """Scan for unexplained acronyms and abbreviations across the deck."""
+    import re as _re
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    ACRONYM_PAT = _re.compile(r"\b([A-Z]{2,6})\b")
+    found: dict[str, list[int]] = {}
+    for s in doc.slides:
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            text = sh.text_frame.text
+            for m in ACRONYM_PAT.finditer(text):
+                acr = m.group(1)
+                if acr not in found:
+                    found[acr] = []
+                if s.slide_number not in found[acr]:
+                    found[acr].append(s.slide_number)
+
+    acronyms = sorted(
+        [{"acronym": acr, "slides": slides, "count": len(slides)} for acr, slides in found.items()],
+        key=lambda x: x["count"],
+        reverse=True,
+    )[:30]
+
+    return {"acronyms": acronyms, "total_unique": len(found)}
+
+
+# ── Slide Complexity Ranker ───────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slide-complexity-ranker")
+async def slide_complexity_ranker(doc_id: str):
+    """AI ranks slides by visual+content complexity and suggests simplifications."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides_info: list[str] = []
+    for s in doc.slides:
+        wc     = sum(len(sh.text_frame.text.split()) for sh in s.shapes if sh.text_frame)
+        shapes = len(s.shapes)
+        imgs   = sum(1 for sh in s.shapes if sh.shape_type == 13)
+        slides_info.append(
+            f"Slide {s.slide_number}: {wc} words, {shapes} shapes, {imgs} images"
+        )
+
+    context = "\n".join(slides_info)
+    prompt = (
+        "Rank these slides by overall complexity (visual + content combined) from most to least complex.\n\n"
+        f"{context}\n\n"
+        "For the top 5 most complex slides, suggest one simplification each.\n"
+        "Return JSON: {\"ranked\": [{\"slide_n\": number, \"complexity_score\": number (1-10), "
+        "\"simplification\": string|null}]}"
+    )
+    ranked: list[dict] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        ranked = json.loads(raw).get("ranked", ranked)
+    except Exception as exc:
+        log.warning("slide-complexity-ranker parse failed: %s", exc)
+
+    return {"ranked": ranked}
+
+
+# ── Numbered List Consistency ─────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/numbered-list-consistency")
+async def numbered_list_consistency(doc_id: str):
+    """Check that numbered lists are sequential and consistent across slides."""
+    import re as _re
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    NUM_PAT = _re.compile(r"^(\d+)[.)]\s+")
+    issues: list[dict] = []
+
+    for s in doc.slides:
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            paras = [p.text.strip() for p in sh.text_frame.paragraphs if p.text.strip()]
+            nums: list[int] = []
+            for p in paras:
+                m = NUM_PAT.match(p)
+                if m:
+                    nums.append(int(m.group(1)))
+
+            if len(nums) >= 2:
+                for i in range(1, len(nums)):
+                    if nums[i] != nums[i - 1] + 1:
+                        issues.append({
+                            "slide_n": s.slide_number,
+                            "found":   nums,
+                            "issue":   f"Jump from {nums[i-1]} to {nums[i]}",
+                        })
+                        break
+
+    return {"issues": issues, "total_issues": len(issues)}
+
+
+# ── Persuasion Framework Detector ─────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/persuasion-framework-detector")
+async def persuasion_framework_detector(doc_id: str):
+    """AI detects persuasion frameworks (AIDA, PAS, FAB, etc.) in the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(t[:100])
+
+    context = "\n".join(all_text[:60])
+    prompt = (
+        "Analyze this presentation and detect which persuasion frameworks are present or implied.\n\n"
+        f"{context}\n\n"
+        "Frameworks to detect: AIDA (Attention Interest Desire Action), PAS (Problem Agitation Solution), "
+        "FAB (Features Advantages Benefits), SPIN (Situation Problem Implication Need-payoff), "
+        "Hero's Journey, Before-After-Bridge, Problem-Solution-Proof, StoryBrand\n"
+        "Return JSON: {\"detected\": [{\"framework\": string, \"confidence\": \"high\"|\"medium\"|\"low\", "
+        "\"evidence\": string, \"completeness\": number (1-10)}], "
+        "\"dominant_framework\": string, \"missing_elements\": [string]}"
+    )
+    detected: list[dict] = []
+    dominant = ""
+    missing: list[str] = []
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        parsed   = json.loads(raw)
+        detected = parsed.get("detected", detected)
+        dominant = parsed.get("dominant_framework", dominant)
+        missing  = parsed.get("missing_elements", missing)
+    except Exception as exc:
+        log.warning("persuasion-framework-detector parse failed: %s", exc)
+
+    return {"detected": detected, "dominant_framework": dominant, "missing_elements": missing}
+
+
+# ── Slide Aspect Ratio Check ──────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slide-aspect-ratio-check")
+async def slide_aspect_ratio_check(doc_id: str):
+    """Check if shapes/images extend beyond slide boundaries."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slide_w = doc.slide_width  or 9144000
+    slide_h = doc.slide_height or 5143500
+
+    out_of_bounds: list[dict] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            try:
+                l = sh.left  or 0; t = sh.top    or 0
+                w = sh.width or 0; h = sh.height  or 0
+                if l < 0 or t < 0 or (l + w) > slide_w or (t + h) > slide_h:
+                    out_of_bounds.append({
+                        "slide_n":    s.slide_number,
+                        "shape_name": sh.name,
+                        "issue":      "out_of_bounds",
+                    })
+            except Exception:
+                pass
+
+    flagged = list({r["slide_n"] for r in out_of_bounds})
+    return {
+        "issues":          out_of_bounds,
+        "flagged_slides":  flagged,
+        "total_issues":    len(out_of_bounds),
+        "slide_width_emu": slide_w,
+        "slide_height_emu": slide_h,
+    }
+
+
+# ── Value Proposition Extractor ───────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/value-proposition-extractor")
+async def value_proposition_extractor(doc_id: str):
+    """AI extracts and rates the core value proposition of the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(t[:100])
+
+    context = "\n".join(all_text[:60])
+    prompt = (
+        "Extract the core value proposition from this presentation.\n\n"
+        f"{context}\n\n"
+        "Return JSON: {\"value_proposition\": string, \"target_audience\": string, "
+        "\"primary_benefit\": string, \"differentiator\": string, "
+        "\"clarity_score\": number (1-10), \"strength_score\": number (1-10), "
+        "\"improvement\": string}"
+    )
+    result: dict = {}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("value-proposition-extractor parse failed: %s", exc)
+
+    return result
+
+
+# ── Chart Count Per Slide ─────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/chart-count-per-slide")
+async def chart_count_per_slide(doc_id: str):
+    """Count chart shapes per slide and return totals."""
+    from pptx.enum.shapes import MSO_SHAPE_TYPE as _MSO
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    results: list[dict] = []
+    for s in doc.slides:
+        chart_count = sum(1 for sh in s.shapes if sh.shape_type in (3, 8, 12))
+        results.append({"slide_n": s.slide_number, "chart_count": chart_count})
+
+    total = sum(r["chart_count"] for r in results)
+    slides_with = [r["slide_n"] for r in results if r["chart_count"] > 0]
+    return {"per_slide": results, "total_charts": total, "slides_with_charts": slides_with}
+
+
+# ── Narrative Arc Scorer ──────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/narrative-arc-scorer")
+async def narrative_arc_scorer(doc_id: str):
+    """AI scores how well the deck follows a cohesive narrative arc."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    titles: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()[:80]
+                if t:
+                    titles.append(f"Slide {s.slide_number}: {t}")
+                    break
+
+    context = "\n".join(titles)
+    prompt = (
+        "Evaluate how well this presentation follows a cohesive narrative arc.\n\n"
+        f"{context}\n\n"
+        "Rate the narrative on these dimensions (1-10 each): "
+        "setup (hook and context), conflict (problem or challenge), "
+        "development (building tension or evidence), resolution (solution or conclusion), "
+        "call_to_action (clear next steps).\n"
+        "Return JSON: {\"scores\": {\"setup\": number, \"conflict\": number, \"development\": number, "
+        "\"resolution\": number, \"call_to_action\": number}, \"overall\": number, "
+        "\"summary\": string, \"weakest_area\": string, \"suggestion\": string}"
+    )
+    result: dict = {}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("narrative-arc-scorer parse failed: %s", exc)
+
+    return result
+
+
+# ── Duplicate Slide Detector ──────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/duplicate-slide-detector")
+async def duplicate_slide_detector(doc_id: str):
+    """Detect slides with very similar text content."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    def _fingerprint(s) -> str:
+        words = set()
+        for sh in s.shapes:
+            if sh.text_frame:
+                words.update(sh.text_frame.text.lower().split())
+        return " ".join(sorted(words)[:30])
+
+    fingerprints: list[tuple] = []
+    for s in doc.slides:
+        fp = _fingerprint(s)
+        fingerprints.append((s.slide_number, fp))
+
+    groups: list[dict] = []
+    used: set[int] = set()
+    for i, (n_a, fp_a) in enumerate(fingerprints):
+        if n_a in used or not fp_a:
+            continue
+        similar = [n_a]
+        words_a = set(fp_a.split())
+        for n_b, fp_b in fingerprints[i + 1:]:
+            if n_b in used or not fp_b:
+                continue
+            words_b = set(fp_b.split())
+            if words_a and words_b:
+                overlap = len(words_a & words_b) / max(len(words_a), len(words_b))
+                if overlap > 0.7:
+                    similar.append(n_b)
+                    used.add(n_b)
+        if len(similar) > 1:
+            used.add(n_a)
+            groups.append({"slides": similar, "similarity": "high"})
+
+    return {"groups": groups, "total_duplicate_groups": len(groups)}
+
+
+# ── Slide Reorder Advisor ─────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slide-reorder-advisor")
+async def slide_reorder_advisor(doc_id: str):
+    """AI suggests an optimal slide reordering for better narrative flow."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides_text: list[str] = []
+    for s in doc.slides:
+        texts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    texts.append(t[:60])
+        slides_text.append(f"Slide {s.slide_number}: {' | '.join(texts[:2])}")
+
+    context = "\n".join(slides_text)
+    n = len(list(doc.slides))
+    prompt = (
+        f"Analyze these {n} slides and suggest an optimal reordering for better narrative flow.\n\n"
+        f"{context}\n\n"
+        "If the current order is already good, say so. Otherwise, suggest a reordered sequence "
+        "and explain the rationale briefly.\n"
+        "Return JSON: {\"suggested_order\": [number, ...], \"changes\": [{\"from\": number, \"to\": number, "
+        "\"reason\": string}], \"flow_score_before\": number (1-10), \"flow_score_after\": number (1-10), "
+        "\"summary\": string}"
+    )
+    result: dict = {}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("slide-reorder-advisor parse failed: %s", exc)
+
+    return result
+
+
+# ── Table Count Audit ─────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/table-count-audit")
+async def table_count_audit(doc_id: str):
+    """Count table shapes per slide and detect complex or empty tables."""
+    from pptx.enum.shapes import MSO_SHAPE_TYPE as _MSO
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    results: list[dict] = []
+    for s in doc.slides:
+        tables: list[dict] = []
+        for sh in s.shapes:
+            if sh.shape_type == 19:  # TABLE
+                try:
+                    rows = len(sh.table.rows)
+                    cols = len(sh.table.columns)
+                    all_text = " ".join(
+                        cell.text_frame.text.strip()
+                        for row in sh.table.rows
+                        for cell in row.cells
+                        if cell.text_frame
+                    )
+                    tables.append({
+                        "rows": rows,
+                        "cols": cols,
+                        "empty": not all_text.strip(),
+                        "complex": rows > 6 or cols > 5,
+                    })
+                except Exception:
+                    pass
+        results.append({
+            "slide_n":     s.slide_number,
+            "table_count": len(tables),
+            "tables":      tables,
+        })
+
+    total = sum(r["table_count"] for r in results)
+    flagged = [r["slide_n"] for r in results if any(t["complex"] or t["empty"] for t in r["tables"])]
+    return {"per_slide": results, "total_tables": total, "flagged_slides": flagged}
+
+
+# ── Emotional Tone Profiler ───────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/emotional-tone-profiler")
+async def emotional_tone_profiler(doc_id: str):
+    """AI profiles the emotional tone of each section of the presentation."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides_text: list[str] = []
+    for s in doc.slides:
+        texts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    texts.append(t[:80])
+        slides_text.append(f"Slide {s.slide_number}: {' | '.join(texts[:2])}")
+
+    context = "\n".join(slides_text)
+    prompt = (
+        "Profile the emotional tone of each slide in this presentation.\n\n"
+        f"{context}\n\n"
+        "Tone options: optimistic, urgent, empathetic, authoritative, neutral, anxious, inspiring, sobering\n"
+        "Return JSON: {\"profiles\": [{\"slide_n\": number, \"tone\": string, \"intensity\": number (1-10), "
+        "\"key_words\": [string, string]}], \"dominant_tone\": string, "
+        "\"tone_consistency\": number (1-10), \"recommendation\": string}"
+    )
+    result: dict = {"profiles": [], "dominant_tone": "", "tone_consistency": 0, "recommendation": ""}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("emotional-tone-profiler parse failed: %s", exc)
+
+    return result
+
+
+# ── Heading Hierarchy Check ───────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/heading-hierarchy-check")
+async def heading_hierarchy_check(doc_id: str):
+    """Detect inconsistent heading/font size hierarchy across slides."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slide_maxes: list[int] = []
+    for s in doc.slides:
+        max_pt = 0
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for para in sh.text_frame.paragraphs:
+                for run in para.runs:
+                    try:
+                        pt = int(run.font.size.pt) if run.font.size else 0
+                        if pt > max_pt:
+                            max_pt = pt
+                    except Exception:
+                        pass
+        slide_maxes.append(max_pt)
+
+    if not slide_maxes:
+        return {"issues": [], "consistent": True}
+
+    avg = sum(slide_maxes) / len(slide_maxes)
+    issues: list[dict] = []
+    for i, (s, mx) in enumerate(zip(doc.slides, slide_maxes)):
+        if mx > 0 and abs(mx - avg) > 10:
+            issues.append({
+                "slide_n":    s.slide_number,
+                "max_font_pt": mx,
+                "avg_pt":      round(avg, 1),
+                "delta":       round(mx - avg, 1),
+            })
+
+    return {"issues": issues, "avg_heading_pt": round(avg, 1), "consistent": len(issues) == 0}
+
+
+# ── Pitch Readiness Score ─────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/pitch-readiness-score")
+async def pitch_readiness_score(doc_id: str):
+    """AI gives an overall pitch readiness score with key gaps and strengths."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(t[:80])
+
+    context = "\n".join(all_text[:70])
+    slide_count = len(list(doc.slides))
+    prompt = (
+        f"Evaluate this {slide_count}-slide presentation for pitch readiness.\n\n"
+        f"{context}\n\n"
+        "Score overall readiness 1-10 and evaluate these dimensions (1-10 each): "
+        "clarity, storytelling, credibility, urgency, visual_quality_estimate.\n"
+        "Identify top 3 strengths and top 3 gaps.\n"
+        "Return JSON: {\"overall_score\": number, \"dimensions\": {\"clarity\": number, "
+        "\"storytelling\": number, \"credibility\": number, \"urgency\": number, "
+        "\"visual_quality_estimate\": number}, \"strengths\": [string, string, string], "
+        "\"gaps\": [string, string, string], \"verdict\": string}"
+    )
+    result: dict = {}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("pitch-readiness-score parse failed: %s", exc)
+
+    return result
+
+
+# ── Font Variety Audit ────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/font-variety-audit")
+async def font_variety_audit(doc_id: str):
+    """Count distinct font names per slide; flag slides with excessive variety."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    per_slide = []
+    all_fonts: set[str] = set()
+    for s in doc.slides:
+        fonts: set[str] = set()
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for para in sh.text_frame.paragraphs:
+                for run in para.runs:
+                    try:
+                        fn = run.font.name
+                        if fn:
+                            fonts.add(fn)
+                    except Exception:
+                        pass
+        all_fonts.update(fonts)
+        per_slide.append({
+            "slide_n": s.slide_number,
+            "fonts": sorted(fonts),
+            "font_count": len(fonts),
+            "flagged": len(fonts) > 3,
+        })
+
+    return {
+        "per_slide": per_slide,
+        "unique_fonts": sorted(all_fonts),
+        "total_unique": len(all_fonts),
+        "flagged_slides": [s["slide_n"] for s in per_slide if s["flagged"]],
+    }
+
+
+# ── Slide Metaphor Finder ─────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slide-metaphor-finder")
+async def slide_metaphor_finder(doc_id: str):
+    """AI finds metaphors and analogies used across slides."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    snippets: list[str] = []
+    for s in doc.slides:
+        texts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    texts.append(t[:120])
+        if texts:
+            snippets.append(f"Slide {s.slide_number}: {' | '.join(texts[:3])}")
+
+    context = "\n".join(snippets[:50])
+    prompt = (
+        "Identify all metaphors, similes, and analogies in these presentation slides.\n\n"
+        f"{context}\n\n"
+        "For each metaphor found, note which slide it appears on and what it compares.\n"
+        "Also give an overall summary of the metaphor strategy.\n"
+        "Return JSON: {\"metaphors\": [{\"slide_n\": number, \"text\": string, \"type\": \"metaphor\"|\"simile\"|\"analogy\", "
+        "\"what_it_compares\": string}], \"strategy_summary\": string, \"total\": number}"
+    )
+    result: dict = {"metaphors": [], "strategy_summary": "", "total": 0}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("slide-metaphor-finder parse failed: %s", exc)
+
+    return result
+
+
+# ── Empty Slide Detector ──────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/empty-slide-detector")
+async def empty_slide_detector(doc_id: str):
+    """Detect slides with no visible text content."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    per_slide = []
+    for s in doc.slides:
+        text_parts = []
+        shape_count = 0
+        for sh in s.shapes:
+            shape_count += 1
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    text_parts.append(t[:60])
+        has_image = any(sh.shape_type == 13 for sh in s.shapes)
+        has_chart = any(sh.shape_type in (3, 8, 12) for sh in s.shapes)
+        empty = len(text_parts) == 0 and not has_image and not has_chart
+        sparse = len(text_parts) == 1 and len(text_parts[0]) < 20
+        per_slide.append({
+            "slide_n": s.slide_number,
+            "text_count": len(text_parts),
+            "shape_count": shape_count,
+            "has_image": has_image,
+            "has_chart": has_chart,
+            "empty": empty,
+            "sparse": sparse and not empty,
+        })
+
+    empty_slides  = [s["slide_n"] for s in per_slide if s["empty"]]
+    sparse_slides = [s["slide_n"] for s in per_slide if s["sparse"]]
+    return {
+        "per_slide": per_slide,
+        "empty_slides": empty_slides,
+        "sparse_slides": sparse_slides,
+        "total_empty": len(empty_slides),
+        "total_sparse": len(sparse_slides),
+    }
+
+
+# ── Closing Strength Evaluator ────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/closing-strength-evaluator")
+async def closing_strength_evaluator(doc_id: str):
+    """AI rates the strength of the last 2 slides as a closing statement."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides = list(doc.slides)
+    closing_slides = slides[-2:] if len(slides) >= 2 else slides
+    closing_text: list[str] = []
+    for s in closing_slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    closing_text.append(f"Slide {s.slide_number}: {t[:150]}")
+
+    context = "\n".join(closing_text)
+    total = len(slides)
+    prompt = (
+        f"Evaluate the closing slides ({total - 1}-{total}) of this {total}-slide presentation.\n\n"
+        f"{context}\n\n"
+        "Rate the closing strength (1-10) and assess: memorability, call-to-action clarity, "
+        "emotional resonance, next-steps clarity.\n"
+        "Provide specific improvement suggestions.\n"
+        "Return JSON: {\"closing_score\": number, \"memorability\": number, "
+        "\"cta_clarity\": number, \"emotional_resonance\": number, \"next_steps_clarity\": number, "
+        "\"verdict\": string, \"suggestions\": [string]}"
+    )
+    result: dict = {}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("closing-strength-evaluator parse failed: %s", exc)
+
+    return result
+
+
+# ── Slide Title Uniqueness ────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slide-title-uniqueness")
+async def slide_title_uniqueness(doc_id: str):
+    """Check whether slide titles are unique or repeated across the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    from collections import defaultdict
+    title_map: dict[str, list[int]] = defaultdict(list)
+    per_slide = []
+    for s in doc.slides:
+        title = ""
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for para in sh.text_frame.paragraphs:
+                t = para.text.strip()
+                if t:
+                    title = t[:80]
+                    break
+            if title:
+                break
+        title_map[title].append(s.slide_number)
+        per_slide.append({"slide_n": s.slide_number, "title": title or "(no title)"})
+
+    duplicates = {t: slides for t, slides in title_map.items() if len(slides) > 1 and t}
+    flagged = {n for slides in duplicates.values() for n in slides}
+    for s in per_slide:
+        s["duplicate"] = s["slide_n"] in flagged
+
+    return {
+        "per_slide": per_slide,
+        "duplicate_titles": [{"title": t, "slides": ns} for t, ns in duplicates.items()],
+        "flagged_slides": sorted(flagged),
+        "total_duplicates": len(duplicates),
+    }
+
+
+# ── Opening Hook Rater ────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/opening-hook-rater")
+async def opening_hook_rater(doc_id: str):
+    """AI rates how strongly the first slide hooks the audience."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides = list(doc.slides)
+    opening_slides = slides[:2] if len(slides) >= 2 else slides
+    opening_text: list[str] = []
+    for s in opening_slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    opening_text.append(f"Slide {s.slide_number}: {t[:150]}")
+
+    context = "\n".join(opening_text)
+    prompt = (
+        "Evaluate the opening hook of this presentation's first slides.\n\n"
+        f"{context}\n\n"
+        "Rate the hook strength (1-10) and assess: curiosity_spark, clarity_of_promise, "
+        "audience_relevance, energy_level.\n"
+        "Identify what works well and what could improve.\n"
+        "Return JSON: {\"hook_score\": number, \"curiosity_spark\": number, "
+        "\"clarity_of_promise\": number, \"audience_relevance\": number, "
+        "\"energy_level\": number, \"verdict\": string, \"improvements\": [string]}"
+    )
+    result: dict = {}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("opening-hook-rater parse failed: %s", exc)
+
+    return result
+
+
+# ── Speaker Note Length Checker ───────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/speaker-note-length-checker")
+async def speaker_note_length_checker(doc_id: str):
+    """Check speaker note length per slide and flag too-short or too-long notes."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    per_slide = []
+    total_words = 0
+    slides_with_notes = 0
+    for s in doc.slides:
+        notes_text = ""
+        try:
+            notes_text = s.notes_slide.notes_text_frame.text.strip() if s.has_notes_slide else ""
+        except Exception:
+            pass
+        words = len(notes_text.split()) if notes_text else 0
+        total_words += words
+        if words > 0:
+            slides_with_notes += 1
+        per_slide.append({
+            "slide_n":   s.slide_number,
+            "word_count": words,
+            "too_short":  0 < words < 10,
+            "too_long":   words > 150,
+            "preview":    notes_text[:80] if notes_text else "",
+        })
+
+    slide_count = len(per_slide)
+    avg = round(total_words / slides_with_notes, 1) if slides_with_notes else 0
+    return {
+        "per_slide":  per_slide,
+        "no_notes":   [s["slide_n"] for s in per_slide if s["word_count"] == 0],
+        "too_short":  [s["slide_n"] for s in per_slide if s["too_short"]],
+        "too_long":   [s["slide_n"] for s in per_slide if s["too_long"]],
+        "avg_words":  avg,
+    }
+
+
+# ── Competitor Mention Finder ─────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/competitor-mention-finder")
+async def competitor_mention_finder(doc_id: str):
+    """AI identifies any competitor names or brand references in the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    snippets: list[str] = []
+    for s in doc.slides:
+        texts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    texts.append(t[:120])
+        if texts:
+            snippets.append(f"Slide {s.slide_number}: {' | '.join(texts[:3])}")
+
+    context = "\n".join(snippets[:50])
+    prompt = (
+        "Identify any competitor brand names, competing products, or competitor references "
+        "in these presentation slides.\n\n"
+        f"{context}\n\n"
+        "For each mention, note the slide, the competitor name, and context.\n"
+        "Assess the framing of each mention (positive/negative/neutral/comparative).\n"
+        "Return JSON: {\"mentions\": [{\"slide_n\": number, \"competitor\": string, "
+        "\"context\": string, \"framing\": \"positive\"|\"negative\"|\"neutral\"|\"comparative\"}], "
+        "\"total\": number, \"summary\": string}"
+    )
+    result: dict = {"mentions": [], "total": 0, "summary": ""}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("competitor-mention-finder parse failed: %s", exc)
+
+    return result
+
+
+# ── Slide Image Count ─────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slide-image-count")
+async def slide_image_count(doc_id: str):
+    """Count images per slide; flag slides with too many or no images."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    per_slide = []
+    for s in doc.slides:
+        imgs = [sh for sh in s.shapes if sh.shape_type == 13]
+        count = len(imgs)
+        per_slide.append({
+            "slide_n":     s.slide_number,
+            "image_count": count,
+            "none":        count == 0,
+            "many":        count > 3,
+        })
+
+    total = sum(s["image_count"] for s in per_slide)
+    return {
+        "per_slide":       per_slide,
+        "total_images":    total,
+        "no_image_slides": [s["slide_n"] for s in per_slide if s["none"]],
+        "many_image_slides": [s["slide_n"] for s in per_slide if s["many"]],
+    }
+
+
+# ── Presentation Tagline Generator ───────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/presentation-tagline-generator")
+async def presentation_tagline_generator(doc_id: str):
+    """AI generates 3 tagline options for the presentation."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(t[:80])
+
+    context = "\n".join(all_text[:40])
+    slide_count = len(list(doc.slides))
+    prompt = (
+        f"Based on this {slide_count}-slide presentation content, generate 3 distinct tagline options.\n\n"
+        f"{context}\n\n"
+        "Each tagline should be under 12 words, memorable, and capture the core message.\n"
+        "Vary the style: one punchy, one benefit-focused, one action-oriented.\n"
+        "Return JSON: {\"taglines\": [{\"text\": string, \"style\": \"punchy\"|\"benefit\"|\"action\", "
+        "\"rationale\": string}], \"core_message\": string}"
+    )
+    result: dict = {"taglines": [], "core_message": ""}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("presentation-tagline-generator parse failed: %s", exc)
+
+    return result
+
+
+# ── Long Sentence Detector ────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/long-sentence-detector")
+async def long_sentence_detector(doc_id: str):
+    """Detect sentences longer than 30 words in slide text."""
+    import re as _re
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    per_slide = []
+    for s in doc.slides:
+        long_sentences = []
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            full_text = sh.text_frame.text
+            sentences = _re.split(r'(?<=[.!?])\s+', full_text)
+            for sent in sentences:
+                sent = sent.strip()
+                words = len(sent.split())
+                if words > 30:
+                    long_sentences.append({"text": sent[:120], "word_count": words})
+        if long_sentences:
+            per_slide.append({
+                "slide_n": s.slide_number,
+                "long_sentences": long_sentences,
+                "count": len(long_sentences),
+            })
+
+    return {
+        "per_slide":    per_slide,
+        "flagged_slides": [s["slide_n"] for s in per_slide],
+        "total_long":   sum(s["count"] for s in per_slide),
+    }
+
+
+# ── Stakeholder Concern Mapper ────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/stakeholder-concern-mapper")
+async def stakeholder_concern_mapper(doc_id: str):
+    """AI maps likely stakeholder objections or concerns per slide."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    snippets: list[str] = []
+    for s in doc.slides:
+        texts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    texts.append(t[:100])
+        if texts:
+            snippets.append(f"Slide {s.slide_number}: {' | '.join(texts[:3])}")
+
+    context = "\n".join(snippets[:40])
+    prompt = (
+        "For each of these presentation slides, identify the most likely stakeholder concern "
+        "or objection a skeptical audience member might raise.\n\n"
+        f"{context}\n\n"
+        "For slides with no likely concern, note 'none'. Also provide 3 top overall concerns.\n"
+        "Return JSON: {\"per_slide\": [{\"slide_n\": number, \"concern\": string, "
+        "\"severity\": \"low\"|\"medium\"|\"high\"}], "
+        "\"top_concerns\": [string], \"overall_risk\": \"low\"|\"medium\"|\"high\"}"
+    )
+    result: dict = {"per_slide": [], "top_concerns": [], "overall_risk": "medium"}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("stakeholder-concern-mapper parse failed: %s", exc)
+
+    return result
+
+
+# ── Slide Color Palette ───────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slide-color-palette")
+async def slide_color_palette(doc_id: str):
+    """Extract the dominant fill colors used across all slides."""
+    from pptx.util import Pt
+    from pptx.dml.color import RGBColor
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    color_counts: dict[str, int] = {}
+    per_slide: list[dict] = []
+    for s in doc.slides:
+        slide_colors: set[str] = set()
+        for sh in s.shapes:
+            try:
+                fill = sh.fill
+                if fill.type is not None:
+                    rgb = fill.fore_color.rgb
+                    hex_c = str(rgb)
+                    slide_colors.add(hex_c)
+                    color_counts[hex_c] = color_counts.get(hex_c, 0) + 1
+            except Exception:
+                pass
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    for run in para.runs:
+                        try:
+                            fc = run.font.color.rgb
+                            hex_c = str(fc)
+                            slide_colors.add(hex_c)
+                            color_counts[hex_c] = color_counts.get(hex_c, 0) + 1
+                        except Exception:
+                            pass
+        per_slide.append({"slide_n": s.slide_number, "colors": sorted(slide_colors)})
+
+    top_colors = sorted(color_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+    return {
+        "per_slide":    per_slide,
+        "top_colors":   [{"hex": h, "count": c} for h, c in top_colors],
+        "total_unique": len(color_counts),
+    }
+
+
+# ── Content Density Scorer ────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/content-density-scorer")
+async def content_density_scorer(doc_id: str):
+    """AI rates each slide's content density (too sparse vs. too dense)."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    snippets: list[str] = []
+    for s in doc.slides:
+        texts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    texts.append(t[:100])
+        word_count = sum(len(t.split()) for t in texts)
+        shape_count = len(list(s.shapes))
+        snippets.append(f"Slide {s.slide_number}: {word_count} words, {shape_count} shapes. {' | '.join(texts[:2])}")
+
+    context = "\n".join(snippets[:40])
+    prompt = (
+        "Rate the content density of each slide in this presentation.\n\n"
+        f"{context}\n\n"
+        "Score each slide 1-10 for density (1=too sparse, 5=ideal, 10=too dense).\n"
+        "Flag slides that are over-crowded or under-utilized.\n"
+        "Return JSON: {\"per_slide\": [{\"slide_n\": number, \"density_score\": number, "
+        "\"label\": \"sparse\"|\"ideal\"|\"dense\"|\"overcrowded\"}], "
+        "\"avg_density\": number, \"recommendation\": string}"
+    )
+    result: dict = {"per_slide": [], "avg_density": 5, "recommendation": ""}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("content-density-scorer parse failed: %s", exc)
+
+    return result
+
+
+# ── Bullet Length Audit ───────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/bullet-length-audit")
+async def bullet_length_audit(doc_id: str):
+    """Flag bullet points with more than 15 words."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    per_slide = []
+    for s in doc.slides:
+        long_bullets: list[dict] = []
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for para in sh.text_frame.paragraphs:
+                text = para.text.strip()
+                words = len(text.split())
+                if words > 15:
+                    long_bullets.append({"text": text[:100], "word_count": words})
+        if long_bullets:
+            per_slide.append({
+                "slide_n":      s.slide_number,
+                "long_bullets": long_bullets,
+                "count":        len(long_bullets),
+            })
+
+    return {
+        "per_slide":      per_slide,
+        "flagged_slides": [s["slide_n"] for s in per_slide],
+        "total_long":     sum(s["count"] for s in per_slide),
+    }
+
+
+# ── Presentation Gap Filler ───────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/presentation-gap-filler")
+async def presentation_gap_filler(doc_id: str):
+    """AI suggests missing slides or topics to strengthen the deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(t[:80])
+
+    context = "\n".join(all_text[:50])
+    slide_count = len(list(doc.slides))
+    prompt = (
+        f"Review this {slide_count}-slide presentation and identify missing topics or slides "
+        f"that would strengthen it.\n\n{context}\n\n"
+        "Suggest up to 5 specific slides that are missing or could be added.\n"
+        "For each, explain why it's needed and what it should contain.\n"
+        "Return JSON: {\"missing_slides\": [{\"title\": string, \"purpose\": string, "
+        "\"suggested_position\": string, \"priority\": \"high\"|\"medium\"|\"low\"}], "
+        "\"summary\": string}"
+    )
+    result: dict = {"missing_slides": [], "summary": ""}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("presentation-gap-filler parse failed: %s", exc)
+
+    return result
+
+
+# ── Shape Count Per Slide ─────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/shape-count-per-slide")
+async def shape_count_per_slide(doc_id: str):
+    """Count total shapes (all types) per slide."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    per_slide = []
+    for s in doc.slides:
+        count = len(list(s.shapes))
+        per_slide.append({
+            "slide_n": s.slide_number,
+            "shape_count": count,
+            "flagged": count > 20,
+        })
+
+    total = sum(s["shape_count"] for s in per_slide)
+    avg   = round(total / len(per_slide), 1) if per_slide else 0
+    return {
+        "per_slide":      per_slide,
+        "avg_shapes":     avg,
+        "total_shapes":   total,
+        "complex_slides": [s["slide_n"] for s in per_slide if s["flagged"]],
+    }
+
+
+# ── Slide Title Improver ──────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slide-title-improver")
+async def slide_title_improver(doc_id: str):
+    """AI suggests stronger, clearer titles for each slide."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slides_info: list[str] = []
+    for s in doc.slides:
+        title = ""
+        body_preview = []
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for para in sh.text_frame.paragraphs:
+                t = para.text.strip()
+                if t:
+                    if not title:
+                        title = t[:60]
+                    else:
+                        body_preview.append(t[:50])
+        slides_info.append(f"Slide {s.slide_number}: title='{title or 'none'}' content='{' | '.join(body_preview[:2])}'")
+
+    context = "\n".join(slides_info[:40])
+    prompt = (
+        "Suggest improved slide titles for each of these slides. "
+        "Make them action-oriented, specific, and clear (under 10 words).\n\n"
+        f"{context}\n\n"
+        "For each slide, provide the current title and an improved version with a brief reason.\n"
+        "Return JSON: {\"slides\": [{\"slide_n\": number, \"current\": string, "
+        "\"improved\": string, \"reason\": string}]}"
+    )
+    result: dict = {"slides": []}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("slide-title-improver parse failed: %s", exc)
+
+    return result
+
+
+# ── Numeric Data Spotter ──────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/numeric-data-spotter")
+async def numeric_data_spotter(doc_id: str):
+    """Find slides that contain numbers, percentages, or statistics."""
+    import re as _re
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    per_slide = []
+    for s in doc.slides:
+        numbers: list[str] = []
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            full_text = sh.text_frame.text
+            found = _re.findall(r'\b\d[\d,]*\.?\d*\s*%?\b', full_text)
+            numbers.extend(found[:10])
+        per_slide.append({
+            "slide_n":  s.slide_number,
+            "numbers":  numbers[:8],
+            "count":    len(numbers),
+            "has_data": len(numbers) > 0,
+        })
+
+    return {
+        "per_slide":     per_slide,
+        "data_slides":   [s["slide_n"] for s in per_slide if s["has_data"]],
+        "total_numbers": sum(s["count"] for s in per_slide),
+    }
+
+
+# ── Objection Handler Generator ───────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/objection-handler-generator")
+async def objection_handler_generator(doc_id: str):
+    """AI generates Q&A pairs for anticipated audience objections."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(t[:80])
+
+    context = "\n".join(all_text[:50])
+    slide_count = len(list(doc.slides))
+    prompt = (
+        f"Based on this {slide_count}-slide presentation, generate 5 likely audience objections "
+        f"and strong responses to handle each one.\n\n{context}\n\n"
+        "Make the responses concise, persuasive, and specific to this content.\n"
+        "Return JSON: {\"qa_pairs\": [{\"objection\": string, \"response\": string, "
+        "\"confidence\": \"high\"|\"medium\"|\"low\"}]}"
+    )
+    result: dict = {"qa_pairs": []}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("objection-handler-generator parse failed: %s", exc)
+
+    return result
+
+
+# ── Text Case Audit ───────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/text-case-audit")
+async def text_case_audit(doc_id: str):
+    """Audit text casing across slides (ALL CAPS, Title Case, lowercase, mixed)."""
+    import re as _re
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    def classify(text: str) -> str:
+        if not text.strip():
+            return "empty"
+        if text.isupper():
+            return "ALL_CAPS"
+        if text.istitle():
+            return "Title_Case"
+        if text.islower():
+            return "lowercase"
+        return "Mixed"
+
+    per_slide = []
+    for s in doc.slides:
+        cases: dict[str, int] = {}
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for para in sh.text_frame.paragraphs:
+                t = para.text.strip()
+                if t:
+                    c = classify(t)
+                    cases[c] = cases.get(c, 0) + 1
+        dominant = max(cases, key=cases.get) if cases else "none"
+        inconsistent = len([k for k in cases if k not in ("Mixed", "empty")]) > 1
+        per_slide.append({
+            "slide_n":      s.slide_number,
+            "cases":        cases,
+            "dominant":     dominant,
+            "inconsistent": inconsistent,
+        })
+
+    return {
+        "per_slide":          per_slide,
+        "inconsistent_slides": [s["slide_n"] for s in per_slide if s["inconsistent"]],
+        "total_inconsistent":  sum(1 for s in per_slide if s["inconsistent"]),
+    }
+
+
+# ── Audience Persona Builder ──────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/audience-persona-builder")
+async def audience_persona_builder(doc_id: str):
+    """AI infers the target audience persona from presentation content."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(t[:80])
+
+    context = "\n".join(all_text[:50])
+    slide_count = len(list(doc.slides))
+    prompt = (
+        f"Based on this {slide_count}-slide presentation, infer the target audience persona.\n\n"
+        f"{context}\n\n"
+        "Describe: role/title, industry, seniority, main concerns, knowledge level, "
+        "and what they care most about.\n"
+        "Return JSON: {\"persona_name\": string, \"role\": string, \"industry\": string, "
+        "\"seniority\": string, \"main_concerns\": [string], \"knowledge_level\": string, "
+        "\"key_motivations\": [string], \"communication_style\": string}"
+    )
+    result: dict = {}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("audience-persona-builder parse failed: %s", exc)
+
+    return result
+
+
+# ── Slide Footnote Finder ─────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slide-footnote-finder")
+async def slide_footnote_finder(doc_id: str):
+    """Find very small text (≤8pt) that might be footnotes or fine print."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    per_slide = []
+    for s in doc.slides:
+        footnotes = []
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for para in sh.text_frame.paragraphs:
+                for run in para.runs:
+                    try:
+                        size_pt = run.font.size.pt if run.font.size else None
+                        if size_pt and size_pt <= 8:
+                            text = run.text.strip()
+                            if text:
+                                footnotes.append({"text": text[:80], "pt": int(size_pt)})
+                    except Exception:
+                        pass
+        if footnotes:
+            per_slide.append({
+                "slide_n":   s.slide_number,
+                "footnotes": footnotes,
+                "count":     len(footnotes),
+            })
+
+    return {
+        "per_slide":      per_slide,
+        "flagged_slides": [s["slide_n"] for s in per_slide],
+        "total_footnotes": sum(s["count"] for s in per_slide),
+    }
+
+
+# ── Deck Executive Summary ─────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/deck-executive-summary")
+async def deck_executive_summary(doc_id: str):
+    """AI writes a concise executive summary of the entire presentation."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(t[:80])
+
+    context = "\n".join(all_text[:60])
+    slide_count = len(list(doc.slides))
+    prompt = (
+        f"Write an executive summary for this {slide_count}-slide presentation.\n\n"
+        f"{context}\n\n"
+        "Provide: a one-sentence TL;DR, 3 key takeaways, and the primary call-to-action.\n"
+        "Write for a time-pressed C-suite reader.\n"
+        "Return JSON: {\"tldr\": string, \"key_takeaways\": [string, string, string], "
+        "\"call_to_action\": string, \"estimated_read_time\": string}"
+    )
+    result: dict = {}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("deck-executive-summary parse failed: %s", exc)
+
+    return result
+
+
+# ── Slide Hyperlink Audit ─────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slide-hyperlink-audit")
+async def slide_hyperlink_audit(doc_id: str):
+    """Find all hyperlinks embedded in slide shapes."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    per_slide = []
+    for s in doc.slides:
+        links: list[dict] = []
+        for sh in s.shapes:
+            try:
+                if sh.click_action and sh.click_action.hyperlink and sh.click_action.hyperlink.address:
+                    links.append({"url": sh.click_action.hyperlink.address, "label": sh.name})
+            except Exception:
+                pass
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    for run in para.runs:
+                        try:
+                            if run.hyperlink and run.hyperlink.address:
+                                links.append({"url": run.hyperlink.address, "label": run.text[:40]})
+                        except Exception:
+                            pass
+        if links:
+            per_slide.append({"slide_n": s.slide_number, "links": links, "count": len(links)})
+
+    return {
+        "per_slide":   per_slide,
+        "total_links": sum(s["count"] for s in per_slide),
+        "slide_count": len(per_slide),
+    }
+
+
+# ── Persuasion Intensity Rater ────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/persuasion-intensity-rater")
+async def persuasion_intensity_rater(doc_id: str):
+    """AI rates how persuasive each slide is on a scale of 1-10."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    snippets: list[str] = []
+    for s in doc.slides:
+        texts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    texts.append(t[:100])
+        if texts:
+            snippets.append(f"Slide {s.slide_number}: {' | '.join(texts[:2])}")
+
+    context = "\n".join(snippets[:40])
+    prompt = (
+        "Rate how persuasive each slide is on a scale of 1-10, "
+        "where 10 is maximally compelling.\n\n"
+        f"{context}\n\n"
+        "Consider: clarity of benefit, emotional appeal, specificity, urgency, and social proof.\n"
+        "Return JSON: {\"per_slide\": [{\"slide_n\": number, \"intensity\": number, "
+        "\"drivers\": [string]}], \"avg_intensity\": number, \"peak_slide\": number}"
+    )
+    result: dict = {"per_slide": [], "avg_intensity": 5, "peak_slide": 1}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("persuasion-intensity-rater parse failed: %s", exc)
+
+    return result
+
+
+# ── Consistent Iconography Check ──────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/consistent-iconography-check")
+async def consistent_iconography_check(doc_id: str):
+    """Check whether image/icon sizes are consistent across slides."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    from pptx.util import Emu
+
+    per_slide = []
+    all_sizes: list[int] = []
+    for s in doc.slides:
+        sizes = []
+        for sh in s.shapes:
+            if sh.shape_type == 13:
+                try:
+                    w = int(sh.width / 914400 * 72)
+                    h = int(sh.height / 914400 * 72)
+                    sizes.append({"w": w, "h": h})
+                    all_sizes.append(max(w, h))
+                except Exception:
+                    pass
+        per_slide.append({"slide_n": s.slide_number, "image_sizes": sizes, "count": len(sizes)})
+
+    if all_sizes:
+        avg  = sum(all_sizes) / len(all_sizes)
+        stddev = (sum((x - avg) ** 2 for x in all_sizes) / len(all_sizes)) ** 0.5
+        inconsistent = stddev > 20
+    else:
+        avg = 0; stddev = 0; inconsistent = False
+
+    return {
+        "per_slide":    per_slide,
+        "avg_size_pt":  round(avg, 1),
+        "stddev_pt":    round(stddev, 1),
+        "inconsistent": inconsistent,
+        "total_images": len(all_sizes),
+    }
+
+
+# ── One Page Summary Generator ────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/one-page-summary-generator")
+async def one_page_summary_generator(doc_id: str):
+    """AI generates a one-page structured text summary of the entire deck."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(t[:80])
+
+    context = "\n".join(all_text[:60])
+    slide_count = len(list(doc.slides))
+    prompt = (
+        f"Create a structured one-page summary of this {slide_count}-slide presentation.\n\n"
+        f"{context}\n\n"
+        "Structure: background/context, main argument, 3-5 supporting points, "
+        "evidence/data highlights, conclusion, next steps.\n"
+        "Return JSON: {\"background\": string, \"main_argument\": string, "
+        "\"supporting_points\": [string], \"evidence_highlights\": [string], "
+        "\"conclusion\": string, \"next_steps\": [string]}"
+    )
+    result: dict = {}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("one-page-summary-generator parse failed: %s", exc)
+
+    return result
+
+
+# ── Shape Visibility Audit ────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/shape-visibility-audit")
+async def shape_visibility_audit(doc_id: str):
+    """Find shapes that appear to be hidden or positioned off the slide canvas."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    slide_width  = doc.slide_width  or 9144000
+    slide_height = doc.slide_height or 6858000
+
+    per_slide = []
+    for s in doc.slides:
+        off_canvas = []
+        for sh in s.shapes:
+            try:
+                left = sh.left or 0
+                top  = sh.top  or 0
+                w    = sh.width or 0
+                h    = sh.height or 0
+                if left + w < 0 or top + h < 0 or left > slide_width or top > slide_height:
+                    off_canvas.append({"name": sh.name, "shape_type": sh.shape_type})
+            except Exception:
+                pass
+        if off_canvas:
+            per_slide.append({
+                "slide_n":    s.slide_number,
+                "off_canvas": off_canvas,
+                "count":      len(off_canvas),
+            })
+
+    return {
+        "per_slide":      per_slide,
+        "flagged_slides": [s["slide_n"] for s in per_slide],
+        "total_hidden":   sum(s["count"] for s in per_slide),
+    }
+
+
+# ── Icebreaker Slide Generator ────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/icebreaker-slide-generator")
+async def icebreaker_slide_generator(doc_id: str):
+    """AI generates 3 icebreaker opening slide ideas tailored to the deck's topic."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    all_text: list[str] = []
+    for s in list(doc.slides)[:5]:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(t[:80])
+
+    context = "\n".join(all_text[:20])
+    prompt = (
+        "Based on the opening slides of this presentation, generate 3 icebreaker slide ideas "
+        "to engage the audience before the main content.\n\n"
+        f"{context}\n\n"
+        "Each icebreaker should be quick (1-2 minutes), relevant to the topic, and energizing.\n"
+        "Return JSON: {\"icebreakers\": [{\"title\": string, \"description\": string, "
+        "\"format\": \"poll\"|\"question\"|\"activity\"|\"fact\", \"duration_min\": number}]}"
+    )
+    result: dict = {"icebreakers": []}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("icebreaker-slide-generator parse failed: %s", exc)
+
+    return result
+
+
+# ── Slide Background Color Checker ────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slide-background-color-checker")
+async def slide_background_color_checker(doc_id: str):
+    """Extract the background color for each slide."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    per_slide = []
+    for s in doc.slides:
+        bg_hex = None
+        try:
+            bg = s.background.fill
+            if bg.type is not None:
+                bg_hex = str(bg.fore_color.rgb)
+        except Exception:
+            pass
+        per_slide.append({
+            "slide_n":  s.slide_number,
+            "bg_color": bg_hex or "unknown",
+            "has_custom_bg": bg_hex is not None,
+        })
+
+    color_counts: dict[str, int] = {}
+    for s in per_slide:
+        c = s["bg_color"]
+        color_counts[c] = color_counts.get(c, 0) + 1
+    dominant = max(color_counts, key=color_counts.get) if color_counts else "unknown"
+    inconsistent = len(color_counts) > 2
+
+    return {
+        "per_slide":     per_slide,
+        "dominant_bg":   dominant,
+        "inconsistent":  inconsistent,
+        "color_summary": color_counts,
+    }
+
+
+# ── Narrative Consistency Checker ─────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/narrative-consistency-checker")
+async def narrative_consistency_checker(doc_id: str):
+    """AI checks whether the narrative and messaging stay consistent throughout."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    snippets: list[str] = []
+    for s in doc.slides:
+        texts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    texts.append(t[:100])
+        if texts:
+            snippets.append(f"Slide {s.slide_number}: {' | '.join(texts[:2])}")
+
+    context = "\n".join(snippets[:50])
+    prompt = (
+        "Analyze this presentation for narrative consistency.\n\n"
+        f"{context}\n\n"
+        "Identify: tone shifts, messaging contradictions, topic drift, "
+        "and whether the slides build coherently on each other.\n"
+        "Return JSON: {\"overall_consistency\": number, \"issues\": [{\"slide_n\": number, "
+        "\"issue\": string, \"type\": \"tone_shift\"|\"contradiction\"|\"topic_drift\"|\"gap\"}], "
+        "\"verdict\": string, \"recommendation\": string}"
+    )
+    result: dict = {"overall_consistency": 7, "issues": [], "verdict": "", "recommendation": ""}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("narrative-consistency-checker parse failed: %s", exc)
+
+    return result
+
+
+# ── Slide Layer Order Audit ───────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slide-layer-order-audit")
+async def slide_layer_order_audit(doc_id: str):
+    """List shapes by z-order for each slide to audit layering."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    per_slide = []
+    for s in doc.slides:
+        layers = []
+        for idx, sh in enumerate(s.shapes):
+            layers.append({
+                "z_index": idx,
+                "name":    sh.name,
+                "type":    sh.shape_type,
+                "has_text": bool(sh.text_frame and sh.text_frame.text.strip()),
+            })
+        per_slide.append({
+            "slide_n":    s.slide_number,
+            "layers":     layers,
+            "shape_count": len(layers),
+        })
+
+    return {"per_slide": per_slide}
+
+
+# ── Brand Voice Scorer ────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/brand-voice-scorer")
+async def brand_voice_scorer(doc_id: str):
+    """AI rates how well the deck's language matches a confident brand voice."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(t[:80])
+
+    context = "\n".join(all_text[:50])
+    prompt = (
+        "Evaluate the brand voice of this presentation.\n\n"
+        f"{context}\n\n"
+        "Rate overall brand voice strength 1-10. Assess: confidence (1-10), clarity (1-10), "
+        "consistency (1-10), professionalism (1-10), distinctiveness (1-10).\n"
+        "Identify the voice archetype and key improvements.\n"
+        "Return JSON: {\"overall_score\": number, \"confidence\": number, \"clarity\": number, "
+        "\"consistency\": number, \"professionalism\": number, \"distinctiveness\": number, "
+        "\"voice_archetype\": string, \"improvements\": [string]}"
+    )
+    result: dict = {}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("brand-voice-scorer parse failed: %s", exc)
+
+    return result
+
+
+# ── Punctuation Consistency Check ─────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/punctuation-consistency-check")
+async def punctuation_consistency_check(doc_id: str):
+    """Check bullet points for consistent use of ending punctuation."""
+    import re as _re
+
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    per_slide = []
+    for s in doc.slides:
+        bullets: list[dict] = []
+        for sh in s.shapes:
+            if not sh.text_frame:
+                continue
+            for para in sh.text_frame.paragraphs:
+                t = para.text.strip()
+                if t and len(t) > 3:
+                    ends_with_period = t.endswith(".")
+                    ends_with_punct = bool(_re.search(r'[.!?;]$', t))
+                    bullets.append({
+                        "text":    t[:60],
+                        "ends_period": ends_with_period,
+                        "ends_punct":  ends_with_punct,
+                    })
+        if bullets:
+            period_count = sum(1 for b in bullets if b["ends_period"])
+            no_punct_count = sum(1 for b in bullets if not b["ends_punct"])
+            inconsistent = period_count > 0 and no_punct_count > 0
+            per_slide.append({
+                "slide_n":       s.slide_number,
+                "bullet_count":  len(bullets),
+                "with_period":   period_count,
+                "without_punct": no_punct_count,
+                "inconsistent":  inconsistent,
+            })
+
+    return {
+        "per_slide":          per_slide,
+        "inconsistent_slides": [s["slide_n"] for s in per_slide if s["inconsistent"]],
+        "total_inconsistent":  sum(1 for s in per_slide if s["inconsistent"]),
+    }
+
+
+# ── Slide Split Recommender ───────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slide-split-recommender")
+async def slide_split_recommender(doc_id: str):
+    """AI identifies slides that are too dense and should be split into two."""
+    d   = _require(doc_id)
+    doc = d["doc"]
+
+    snippets: list[str] = []
+    for s in doc.slides:
+        texts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    texts.append(t[:100])
+        word_count = sum(len(t.split()) for t in texts)
+        shape_count = len(list(s.shapes))
+        snippets.append(f"Slide {s.slide_number}: {word_count}w, {shape_count} shapes, content='{' | '.join(texts[:2])}'")
+
+    context = "\n".join(snippets[:50])
+    prompt = (
+        "Identify slides that are too dense and should be split into two slides.\n\n"
+        f"{context}\n\n"
+        "For each recommended split, explain what goes on each new slide.\n"
+        "Return JSON: {\"splits\": [{\"slide_n\": number, \"reason\": string, "
+        "\"slide_a_content\": string, \"slide_b_content\": string, "
+        "\"priority\": \"high\"|\"medium\"|\"low\"}]}"
+    )
+    result: dict = {"splits": []}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("slide-split-recommender parse failed: %s", exc)
+
+    return result
+
+
+# ── batch 64 ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slide-text-density")
+def slide_text_density(doc_id: str):
+    d   = _require(doc_id)
+    doc = d["doc"]
+    per_slide = []
+    for s in doc.slides:
+        words = 0; chars = 0; bullets = 0
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    t = para.text.strip()
+                    if t:
+                        words += len(t.split())
+                        chars += len(t)
+                        bullets += 1
+        per_slide.append({"slide_n": s.slide_number, "word_count": words,
+                           "char_count": chars, "bullet_count": bullets})
+    total_words = sum(s["word_count"] for s in per_slide)
+    avg_words   = round(total_words / len(per_slide), 1) if per_slide else 0
+    return {"per_slide": per_slide, "total_words": total_words, "avg_words_per_slide": avg_words}
+
+
+@app.post("/api/docs/{doc_id}/slide-transition-suggester")
+def slide_transition_suggester(doc_id: str):
+    d   = _require(doc_id)
+    doc = d["doc"]
+    snippets: list[str] = []
+    for s in doc.slides:
+        texts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    texts.append(t[:80])
+        snippets.append(f"Slide {s.slide_number}: {' | '.join(texts[:2])}")
+    context = "\n".join(snippets[:40])
+    prompt = (
+        "Suggest slide transition styles for each pair of consecutive slides based on their content.\n\n"
+        f"{context}\n\n"
+        "Return JSON: {\"transitions\": [{\"from_slide\": number, \"to_slide\": number, "
+        "\"style\": string, \"rationale\": string}]}"
+    )
+    result: dict = {"transitions": []}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("slide-transition-suggester parse failed: %s", exc)
+    return result
+
+
+@app.get("/api/docs/{doc_id}/duplicate-slide-content")
+def duplicate_slide_content(doc_id: str):
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide_texts: list[dict] = []
+    for s in doc.slides:
+        parts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    parts.append(t)
+        combined = " ".join(parts).lower().strip()
+        slide_texts.append({"slide_n": s.slide_number, "text": combined})
+    duplicates: list[dict] = []
+    for i in range(len(slide_texts)):
+        for j in range(i + 1, len(slide_texts)):
+            a = slide_texts[i]; b = slide_texts[j]
+            if not a["text"] or not b["text"]:
+                continue
+            a_words = set(a["text"].split()); b_words = set(b["text"].split())
+            union = a_words | b_words
+            if not union:
+                continue
+            overlap = len(a_words & b_words) / len(union)
+            if overlap >= 0.6:
+                duplicates.append({
+                    "slide_a": a["slide_n"], "slide_b": b["slide_n"],
+                    "overlap_pct": round(overlap * 100),
+                })
+    return {"duplicates": duplicates, "total_pairs": len(duplicates)}
+
+
+@app.post("/api/docs/{doc_id}/cta-strength-rater")
+def cta_strength_rater(doc_id: str):
+    d   = _require(doc_id)
+    doc = d["doc"]
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(t[:120])
+    context = "\n".join(all_text[:60])
+    prompt = (
+        "Analyze the call-to-action strength of this presentation.\n\n"
+        f"{context}\n\n"
+        "Evaluate: clarity, urgency, specificity, placement, and overall CTA score.\n"
+        "Return JSON: {\"overall_score\": number (1-10), \"clarity\": number, \"urgency\": number, "
+        "\"specificity\": number, \"placement\": number, "
+        "\"cta_text\": string or null, \"improvements\": [string], \"verdict\": string}"
+    )
+    result: dict = {"overall_score": 0, "clarity": 0, "urgency": 0, "specificity": 0,
+                    "placement": 0, "cta_text": None, "improvements": [], "verdict": ""}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("cta-strength-rater parse failed: %s", exc)
+    return result
+
+
+# ── batch 65 ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/agenda-slide-detector")
+def agenda_slide_detector(doc_id: str):
+    d   = _require(doc_id)
+    doc = d["doc"]
+    AGENDA_KEYWORDS = {"agenda", "table of contents", "contents", "overview", "outline",
+                       "topics", "today's agenda", "what we'll cover", "what we will cover"}
+    found: list[dict] = []
+    for s in doc.slides:
+        title_text = ""
+        body_texts: list[str] = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip().lower()
+                if sh.shape_type in (13,):
+                    continue
+                if not title_text:
+                    title_text = t
+                else:
+                    body_texts.append(t)
+        full_text = " ".join([title_text] + body_texts)
+        if any(kw in full_text for kw in AGENDA_KEYWORDS):
+            found.append({"slide_n": s.slide_number, "title": title_text[:80]})
+    return {"agenda_slides": found, "count": len(found)}
+
+
+@app.get("/api/docs/{doc_id}/passive-voice-detector")
+def passive_voice_detector(doc_id: str):
+    import re as _re
+    BE_FORMS = r"\b(is|are|was|were|be|been|being|am)\b"
+    PAST_PARTICIPLE = r"\b\w+ed\b"
+    PASSIVE_PATTERN = _re.compile(rf"{BE_FORMS}\s+(\w+\s+)*{PAST_PARTICIPLE}", _re.IGNORECASE)
+    d   = _require(doc_id)
+    doc = d["doc"]
+    per_slide: list[dict] = []
+    for s in doc.slides:
+        instances: list[str] = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    t = para.text.strip()
+                    if t and PASSIVE_PATTERN.search(t):
+                        instances.append(t[:100])
+        if instances:
+            per_slide.append({"slide_n": s.slide_number, "instances": instances})
+    return {"per_slide": per_slide, "total_instances": sum(len(s["instances"]) for s in per_slide)}
+
+
+@app.get("/api/docs/{doc_id}/slide-length-estimator")
+def slide_length_estimator(doc_id: str, wpm: int = 130):
+    d   = _require(doc_id)
+    doc = d["doc"]
+    per_slide: list[dict] = []
+    total_words = 0
+    for s in doc.slides:
+        words = 0
+        for sh in s.shapes:
+            if sh.text_frame:
+                words += len(sh.text_frame.text.split())
+        seconds = round((words / wpm) * 60)
+        total_words += words
+        per_slide.append({"slide_n": s.slide_number, "word_count": words,
+                           "est_seconds": seconds,
+                           "est_label": f"{seconds // 60}m {seconds % 60}s" if seconds >= 60 else f"{seconds}s"})
+    total_seconds = round((total_words / wpm) * 60)
+    return {"per_slide": per_slide,
+            "total_seconds": total_seconds,
+            "total_label": f"{total_seconds // 60}m {total_seconds % 60}s",
+            "wpm_assumption": wpm}
+
+
+@app.post("/api/docs/{doc_id}/data-claim-checker")
+def data_claim_checker(doc_id: str):
+    d   = _require(doc_id)
+    doc = d["doc"]
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(f"Slide {s.slide_number}: {t[:120]}")
+    context = "\n".join(all_text[:60])
+    prompt = (
+        "Identify all statistical, numerical, or factual data claims in this presentation that would benefit from a citation or source.\n\n"
+        f"{context}\n\n"
+        "List each claim, its slide number, and why it needs a citation.\n"
+        "Return JSON: {\"claims\": [{\"slide_n\": number, \"claim\": string, \"reason\": string, "
+        "\"severity\": \"high\"|\"medium\"|\"low\"}]}"
+    )
+    result: dict = {"claims": []}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("data-claim-checker parse failed: %s", exc)
+    return result
+
+
+# ── batch 66 ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slide-quote-finder")
+def slide_quote_finder(doc_id: str):
+    import re as _re
+    QUOTE_PATTERN = _re.compile(r'["“”‘’](.{20,}?)["“”‘’]')
+    d   = _require(doc_id)
+    doc = d["doc"]
+    quotes: list[dict] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                full = sh.text_frame.text
+                matches = QUOTE_PATTERN.findall(full)
+                for m in matches:
+                    quotes.append({"slide_n": s.slide_number, "quote": m.strip()[:200]})
+    return {"quotes": quotes, "total": len(quotes)}
+
+
+@app.get("/api/docs/{doc_id}/abbreviation-finder")
+def abbreviation_finder(doc_id: str):
+    import re as _re
+    ABBREV_PATTERN = _re.compile(r'\b([A-Z]{2,6})\b')
+    d   = _require(doc_id)
+    doc = d["doc"]
+    found: dict[str, list[int]] = {}
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                for match in ABBREV_PATTERN.finditer(sh.text_frame.text):
+                    abbr = match.group(1)
+                    if abbr not in found:
+                        found[abbr] = []
+                    if s.slide_number not in found[abbr]:
+                        found[abbr].append(s.slide_number)
+    result = [{"abbr": k, "slides": v} for k, v in sorted(found.items())]
+    return {"abbreviations": result, "total": len(result)}
+
+
+@app.post("/api/docs/{doc_id}/presentation-mood-analyzer")
+def presentation_mood_analyzer(doc_id: str):
+    d   = _require(doc_id)
+    doc = d["doc"]
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(t[:100])
+    context = "\n".join(all_text[:60])
+    prompt = (
+        "Analyze the overall mood and emotional tone of this presentation.\n\n"
+        f"{context}\n\n"
+        "Identify the dominant mood, secondary tones, and per-section mood shifts.\n"
+        "Return JSON: {\"dominant_mood\": string, \"mood_score\": number (1-10 where 10=most positive), "
+        "\"secondary_tones\": [string], \"mood_summary\": string, "
+        "\"recommendations\": [string]}"
+    )
+    result: dict = {"dominant_mood": "", "mood_score": 5, "secondary_tones": [],
+                    "mood_summary": "", "recommendations": []}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("presentation-mood-analyzer parse failed: %s", exc)
+    return result
+
+
+@app.post("/api/docs/{doc_id}/jargon-finder")
+def jargon_finder(doc_id: str):
+    d   = _require(doc_id)
+    doc = d["doc"]
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(f"Slide {s.slide_number}: {t[:120]}")
+    context = "\n".join(all_text[:60])
+    prompt = (
+        "Identify industry jargon, technical terms, or acronyms in this presentation that a general audience might not understand.\n\n"
+        f"{context}\n\n"
+        "For each term, note which slide it appears on and suggest a simpler alternative.\n"
+        "Return JSON: {\"jargon\": [{\"slide_n\": number, \"term\": string, \"suggestion\": string, "
+        "\"audience_risk\": \"high\"|\"medium\"|\"low\"}]}"
+    )
+    result: dict = {"jargon": []}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("jargon-finder parse failed: %s", exc)
+    return result
+
+
+# ── batch 67 ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/title-slide-detector")
+def title_slide_detector(doc_id: str):
+    d   = _require(doc_id)
+    doc = d["doc"]
+    title_slides: list[dict] = []
+    for s in doc.slides:
+        shapes_with_text = [sh for sh in s.shapes if sh.text_frame and sh.text_frame.text.strip()]
+        if len(shapes_with_text) <= 2 and s.slide_number == 1:
+            title_slides.append({"slide_n": s.slide_number, "reason": "first slide with minimal content"})
+            continue
+        for sh in shapes_with_text:
+            t = sh.text_frame.text.strip()
+            if sh.text_frame.paragraphs and sh.text_frame.paragraphs[0].runs:
+                run = sh.text_frame.paragraphs[0].runs[0]
+                if run.font.size and run.font.size.pt and run.font.size.pt >= 36:
+                    title_slides.append({"slide_n": s.slide_number, "reason": f"large font title: {t[:60]}"})
+                    break
+    seen = set(); unique = []
+    for ts in title_slides:
+        if ts["slide_n"] not in seen:
+            seen.add(ts["slide_n"]); unique.append(ts)
+    return {"title_slides": unique, "count": len(unique)}
+
+
+@app.get("/api/docs/{doc_id}/question-slide-finder")
+def question_slide_finder(doc_id: str):
+    d   = _require(doc_id)
+    doc = d["doc"]
+    found: list[dict] = []
+    for s in doc.slides:
+        questions: list[str] = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    t = para.text.strip()
+                    if t.endswith("?"):
+                        questions.append(t[:120])
+        if questions:
+            found.append({"slide_n": s.slide_number, "questions": questions})
+    return {"per_slide": found, "total_questions": sum(len(s["questions"]) for s in found)}
+
+
+@app.post("/api/docs/{doc_id}/slide-theme-extractor")
+def slide_theme_extractor(doc_id: str):
+    d   = _require(doc_id)
+    doc = d["doc"]
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(t[:100])
+    context = "\n".join(all_text[:60])
+    prompt = (
+        "Extract the key themes from this presentation content.\n\n"
+        f"{context}\n\n"
+        "Return 3-7 themes with a brief description and relevance score.\n"
+        "Return JSON: {\"themes\": [{\"theme\": string, \"description\": string, "
+        "\"relevance\": number (1-10), \"keywords\": [string]}]}"
+    )
+    result: dict = {"themes": []}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("slide-theme-extractor parse failed: %s", exc)
+    return result
+
+
+@app.get("/api/docs/{doc_id}/slide-complexity-scorer")
+def slide_complexity_scorer(doc_id: str):
+    d   = _require(doc_id)
+    doc = d["doc"]
+    per_slide: list[dict] = []
+    for s in doc.slides:
+        shapes = list(s.shapes)
+        shape_count = len(shapes)
+        word_count = sum(len(sh.text_frame.text.split()) for sh in shapes if sh.text_frame)
+        has_chart = any(sh.shape_type in (3, 8, 12) for sh in shapes)
+        has_image = any(sh.shape_type == 13 for sh in shapes)
+        score = min(10, round(
+            (shape_count * 0.5) +
+            (word_count * 0.03) +
+            (2 if has_chart else 0) +
+            (1 if has_image else 0)
+        ))
+        per_slide.append({
+            "slide_n": s.slide_number,
+            "complexity_score": score,
+            "shape_count": shape_count,
+            "word_count": word_count,
+            "has_chart": has_chart,
+            "has_image": has_image,
+        })
+    avg = round(sum(s["complexity_score"] for s in per_slide) / len(per_slide), 1) if per_slide else 0
+    return {"per_slide": per_slide, "avg_complexity": avg}
+
+
+# ── batch 68 ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slide-title-length-checker")
+def slide_title_length_checker(doc_id: str, max_words: int = 10):
+    d   = _require(doc_id)
+    doc = d["doc"]
+    from pptx.enum.shapes import PP_PLACEHOLDER
+    per_slide: list[dict] = []
+    for s in doc.slides:
+        title_text = ""
+        for ph in s.placeholders:
+            if ph.placeholder_format.idx == 0:
+                title_text = ph.text_frame.text.strip()
+                break
+        if not title_text:
+            for sh in s.shapes:
+                if sh.text_frame and sh.text_frame.text.strip():
+                    title_text = sh.text_frame.text.strip().split("\n")[0]
+                    break
+        word_count = len(title_text.split()) if title_text else 0
+        per_slide.append({
+            "slide_n": s.slide_number,
+            "title": title_text[:80],
+            "word_count": word_count,
+            "too_long": word_count > max_words,
+        })
+    long_count = sum(1 for s in per_slide if s["too_long"])
+    return {"per_slide": per_slide, "too_long_count": long_count, "max_words": max_words}
+
+
+@app.get("/api/docs/{doc_id}/testimonial-slide-finder")
+def testimonial_slide_finder(doc_id: str):
+    import re as _re
+    TESTIMONIAL_PATTERN = _re.compile(
+        r'["“”‘’\'](.{30,}?)["“”‘’\']|—\s*\w+|attribution|testimonial|said\b|quote',
+        _re.IGNORECASE
+    )
+    d   = _require(doc_id)
+    doc = d["doc"]
+    found: list[dict] = []
+    for s in doc.slides:
+        full_text = ""
+        for sh in s.shapes:
+            if sh.text_frame:
+                full_text += " " + sh.text_frame.text
+        if TESTIMONIAL_PATTERN.search(full_text):
+            excerpt = full_text.strip()[:150]
+            found.append({"slide_n": s.slide_number, "excerpt": excerpt})
+    return {"testimonials": found, "count": len(found)}
+
+
+@app.post("/api/docs/{doc_id}/slide-sentiment-trend")
+def slide_sentiment_trend(doc_id: str):
+    d   = _require(doc_id)
+    doc = d["doc"]
+    snippets: list[str] = []
+    for s in doc.slides:
+        texts = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    texts.append(t[:80])
+        snippets.append(f"Slide {s.slide_number}: {' | '.join(texts[:2])}")
+    context = "\n".join(snippets[:40])
+    prompt = (
+        "Analyze the sentiment progression through these slides from start to finish.\n\n"
+        f"{context}\n\n"
+        "Rate each slide's sentiment and describe the overall arc.\n"
+        "Return JSON: {\"per_slide\": [{\"slide_n\": number, \"sentiment\": \"positive\"|\"neutral\"|\"negative\", "
+        "\"score\": number (-5 to 5)}], "
+        "\"arc_summary\": string, \"trend\": \"rising\"|\"falling\"|\"flat\"|\"mixed\"}"
+    )
+    result: dict = {"per_slide": [], "arc_summary": "", "trend": "flat"}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("slide-sentiment-trend parse failed: %s", exc)
+    return result
+
+
+@app.get("/api/docs/{doc_id}/color-count-per-slide")
+def color_count_per_slide(doc_id: str):
+    from pptx.util import Pt
+    d   = _require(doc_id)
+    doc = d["doc"]
+    per_slide: list[dict] = []
+    for s in doc.slides:
+        colors: set[str] = set()
+        for sh in s.shapes:
+            try:
+                if sh.fill and sh.fill.type is not None:
+                    fc = sh.fill.fore_color
+                    if fc and fc.type is not None:
+                        try:
+                            rgb = fc.rgb
+                            colors.add(str(rgb))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    for run in para.runs:
+                        try:
+                            if run.font.color and run.font.color.type is not None:
+                                colors.add(str(run.font.color.rgb))
+                        except Exception:
+                            pass
+        per_slide.append({"slide_n": s.slide_number, "color_count": len(colors),
+                           "colors": list(colors)[:10]})
+    return {"per_slide": per_slide}
+
+
+# ── batch 69 ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/docs/{doc_id}/slide-font-size-audit")
+def slide_font_size_audit(doc_id: str):
+    from pptx.util import Pt
+    d   = _require(doc_id)
+    doc = d["doc"]
+    per_slide: list[dict] = []
+    for s in doc.slides:
+        sizes: list[float] = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    for run in para.runs:
+                        try:
+                            if run.font.size:
+                                sizes.append(round(run.font.size.pt, 1))
+                        except Exception:
+                            pass
+        if sizes:
+            per_slide.append({
+                "slide_n": s.slide_number,
+                "min_pt": min(sizes),
+                "max_pt": max(sizes),
+                "unique_sizes": sorted(set(sizes)),
+                "too_small": min(sizes) < 10,
+                "too_varied": (max(sizes) - min(sizes)) > 30,
+            })
+        else:
+            per_slide.append({"slide_n": s.slide_number, "min_pt": None, "max_pt": None,
+                               "unique_sizes": [], "too_small": False, "too_varied": False})
+    return {"per_slide": per_slide,
+            "flagged_count": sum(1 for s in per_slide if s["too_small"] or s["too_varied"])}
+
+
+@app.post("/api/docs/{doc_id}/presenter-notes-summarizer")
+def presenter_notes_summarizer(doc_id: str):
+    d   = _require(doc_id)
+    doc = d["doc"]
+    notes_by_slide: list[str] = []
+    for s in doc.slides:
+        if s.notes_slide and s.notes_slide.notes_text_frame:
+            note = s.notes_slide.notes_text_frame.text.strip()
+            if note:
+                notes_by_slide.append(f"Slide {s.slide_number}: {note[:200]}")
+    if not notes_by_slide:
+        return {"summary": "No speaker notes found in this presentation.",
+                "key_points": [], "total_slides_with_notes": 0}
+    context = "\n".join(notes_by_slide[:40])
+    prompt = (
+        "Summarize the speaker notes from this presentation into a concise presenter briefing.\n\n"
+        f"{context}\n\n"
+        "Create a briefing that the presenter can quickly review before going on stage.\n"
+        "Return JSON: {\"summary\": string, \"key_points\": [string], "
+        "\"total_slides_with_notes\": number}"
+    )
+    result: dict = {"summary": "", "key_points": [], "total_slides_with_notes": len(notes_by_slide)}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        parsed = json.loads(raw)
+        parsed["total_slides_with_notes"] = len(notes_by_slide)
+        result = parsed
+    except Exception as exc:
+        log.warning("presenter-notes-summarizer parse failed: %s", exc)
+        result["total_slides_with_notes"] = len(notes_by_slide)
+    return result
+
+
+@app.get("/api/docs/{doc_id}/slide-image-quality-checker")
+def slide_image_quality_checker(doc_id: str):
+    d   = _require(doc_id)
+    doc = d["doc"]
+    images: list[dict] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.shape_type == 13:  # picture
+                try:
+                    img = sh.image
+                    w, h = img.size
+                    blob_size = len(img.blob)
+                    dpi_est = round(max(w, h) / max(sh.width.inches, sh.height.inches, 0.1))
+                    quality = "high" if dpi_est >= 150 else "medium" if dpi_est >= 72 else "low"
+                    images.append({
+                        "slide_n": s.slide_number,
+                        "width_px": w,
+                        "height_px": h,
+                        "size_kb": round(blob_size / 1024),
+                        "est_dpi": dpi_est,
+                        "quality": quality,
+                    })
+                except Exception:
+                    pass
+    low_count = sum(1 for img in images if img["quality"] == "low")
+    return {"images": images, "total": len(images), "low_quality_count": low_count}
+
+
+@app.post("/api/docs/{doc_id}/content-freshness-checker")
+def content_freshness_checker(doc_id: str):
+    d   = _require(doc_id)
+    doc = d["doc"]
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(f"Slide {s.slide_number}: {t[:120]}")
+    context = "\n".join(all_text[:60])
+    prompt = (
+        "Identify content in this presentation that may be outdated, stale, or time-sensitive.\n\n"
+        f"{context}\n\n"
+        "Look for: old statistics, outdated technology references, expired market data, time-based claims.\n"
+        "Return JSON: {\"issues\": [{\"slide_n\": number, \"content\": string, \"concern\": string, "
+        "\"urgency\": \"high\"|\"medium\"|\"low\"}], \"overall_freshness\": \"fresh\"|\"mixed\"|\"stale\"}"
+    )
+    result: dict = {"issues": [], "overall_freshness": "fresh"}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("content-freshness-checker parse failed: %s", exc)
+    return result
+
+
+# ── batch 70 ──────────────────────────────────────────────────────────────────
+
+@app.post("/api/docs/{doc_id}/slide-table-of-contents-generator")
+def slide_table_of_contents_generator(doc_id: str):
+    d   = _require(doc_id)
+    doc = d["doc"]
+    titles: list[str] = []
+    for s in doc.slides:
+        title = ""
+        for ph in s.placeholders:
+            if ph.placeholder_format.idx == 0:
+                title = ph.text_frame.text.strip()
+                break
+        if not title:
+            for sh in s.shapes:
+                if sh.text_frame and sh.text_frame.text.strip():
+                    title = sh.text_frame.text.strip().split("\n")[0]
+                    break
+        titles.append(f"Slide {s.slide_number}: {title or '(no title)'}")
+    context = "\n".join(titles)
+    prompt = (
+        "Generate a clean table of contents for this presentation based on the slide titles.\n\n"
+        f"{context}\n\n"
+        "Group slides into sections where logical. Format as a proper TOC with section headers and slide numbers.\n"
+        "Return JSON: {\"sections\": [{\"section_title\": string, \"slides\": [{\"slide_n\": number, \"title\": string}]}], "
+        "\"formatted_toc\": string}"
+    )
+    result: dict = {"sections": [], "formatted_toc": ""}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("slide-table-of-contents-generator parse failed: %s", exc)
+    return result
+
+
+@app.get("/api/docs/{doc_id}/risk-statement-finder")
+def risk_statement_finder(doc_id: str):
+    RISK_KEYWORDS = {
+        "risk", "caveat", "limitation", "warning", "caution", "disclaimer",
+        "assumption", "uncertainty", "challenge", "constraint", "concern",
+        "however", "but note", "important to note", "please note",
+    }
+    d   = _require(doc_id)
+    doc = d["doc"]
+    found: list[dict] = []
+    for s in doc.slides:
+        matches: list[str] = []
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    t = para.text.strip().lower()
+                    if any(kw in t for kw in RISK_KEYWORDS) and len(t) > 10:
+                        matches.append(para.text.strip()[:120])
+        if matches:
+            found.append({"slide_n": s.slide_number, "statements": matches})
+    return {"per_slide": found, "total_statements": sum(len(s["statements"]) for s in found)}
+
+
+@app.post("/api/docs/{doc_id}/visual-metaphor-checker")
+def visual_metaphor_checker(doc_id: str):
+    d   = _require(doc_id)
+    doc = d["doc"]
+    all_text: list[str] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                t = sh.text_frame.text.strip()
+                if t:
+                    all_text.append(f"Slide {s.slide_number}: {t[:100]}")
+    context = "\n".join(all_text[:50])
+    prompt = (
+        "Identify visual metaphors, analogies, or symbolic language used in this presentation.\n\n"
+        f"{context}\n\n"
+        "List each metaphor with its slide number, what it represents, and how effective it is.\n"
+        "Return JSON: {\"metaphors\": [{\"slide_n\": number, \"metaphor\": string, "
+        "\"represents\": string, \"effectiveness\": \"strong\"|\"moderate\"|\"weak\"}]}"
+    )
+    result: dict = {"metaphors": []}
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic()
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+        result = json.loads(raw)
+    except Exception as exc:
+        log.warning("visual-metaphor-checker parse failed: %s", exc)
+    return result
+
+
+@app.get("/api/docs/{doc_id}/slide-action-plan-extractor")
+def slide_action_plan_extractor(doc_id: str):
+    import re as _re
+    ACTION_PATTERN = _re.compile(
+        r'\b(will|shall|must|should|need to|plan to|going to|action:|todo:|next step|follow.?up|by [a-z]+day|by Q[1-4])\b',
+        _re.IGNORECASE
+    )
+    d   = _require(doc_id)
+    doc = d["doc"]
+    actions: list[dict] = []
+    for s in doc.slides:
+        for sh in s.shapes:
+            if sh.text_frame:
+                for para in sh.text_frame.paragraphs:
+                    t = para.text.strip()
+                    if t and ACTION_PATTERN.search(t) and len(t) > 8:
+                        actions.append({"slide_n": s.slide_number, "action": t[:150]})
+    return {"actions": actions, "total": len(actions)}
 
 
 # ── serve built frontend in production ────────────────────────────────────────

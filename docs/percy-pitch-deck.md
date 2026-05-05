@@ -8,10 +8,11 @@ _Blueprint for the main Percy deck. Narrative thread: business storytelling has 
 
 **Act 1 — The Historical Gap:** A great leap happened in 1987. Nothing meaningful has happened since.
 **Act 2 — The Cost of the Gap:** The manual labor of bridging data and narrative is enormous and invisible.
-**Act 3 — The Mission:** Percy is the missing operating layer between data, AI, and business storytelling.
-**Act 4 — The Technology:** The Bridge model makes every visual element structured, inspectable, and programmable.
-**Act 5 — The Product:** Percy Studio — a canvas where every element is also a program.
-**Act 6 — The Platform:** Enterprise organizational intelligence. Every document, pipeline, and binding accumulates into a structured corpus of the organization's business communication — queryable, AI-operable, and compounding over time. The operating system for how an enterprise understands and describes itself.
+**Act 3 — Why Me:** I have lived this problem as a quant researcher. I am not building it from a thesis — I am building it from experience.
+**Act 4 — The Mission:** Percy is the missing operating layer between data, AI, and business storytelling.
+**Act 5 — The Technology:** The Bridge model makes every visual element structured, inspectable, and programmable.
+**Act 6 — The Product:** Percy Studio — a canvas where every element is also a program.
+**Act 7 — The Platform:** Every document, pipeline, and binding accumulates into a structured corpus of the organization's business communication. The operating system for how an enterprise understands and describes itself.
 
 ---
 
@@ -119,7 +120,32 @@ But business storytelling — the decks, the QBRs, the board reports, the execut
 
 ---
 
-### Slide 6 — The Mission
+### Slide 6 — Why Me. Why Now.
+
+**Headline:**
+> I am building Percy because I have spent my career inside the problem.
+
+**Body (first person, plain prose):**
+
+I am a quantitative researcher at an asset manager. My week is data and decks.
+
+The data side of my job runs on modern tooling: Python, SQL, version control, a warehouse, model pipelines on a schedule, code review, tests. The communication side runs on copy and paste.
+
+Numbers I produce in a notebook on Tuesday end up pasted into a slide on Thursday. By Friday the slide is wrong and nobody knows. I have watched a portfolio manager rebuild a Sunday-night attribution deck because last week's numbers had a typo. I have rebuilt the same investor letter format for the eleventh quarter in a row. I have inherited reports nobody can reproduce because the analyst who built them left two years ago. I have seen the same metric defined three different ways across three different decks for the same investment committee.
+
+These are not theoretical problems. They are what I do every week. Every analyst, finance team, strategy group, and PM I have ever worked with does some version of the same thing.
+
+The data layer has been transformed. The communication layer is still 1987. I am building Percy because I cannot keep waiting for someone else to fix it.
+
+**Caption beneath:**
+- _Ben Steel_
+- _Quantitative researcher, asset management_
+
+**Design intent:** Personal, specific, plainly stated. Not a resume. The audience should hear: this person has lived on the receiving end of this pain, has the technical foundation to fix it, and has skin in the outcome.
+
+---
+
+### Slide 7 — The Mission
 
 **Full bleed. Large type. Centered.**
 
@@ -130,7 +156,7 @@ But business storytelling — the decks, the QBRs, the board reports, the execut
 
 ---
 
-### Slide 7 — The Core Insight
+### Slide 8 — The Core Insight
 
 **Headline:**
 > The deck is not the source of truth. It should be a rendered result.
@@ -143,7 +169,7 @@ But business storytelling — the decks, the QBRs, the board reports, the execut
 
 ---
 
-### Slide 8 — The Bridge
+### Slide 9 — The Bridge
 
 **Headline:**
 > Every visual element becomes structured, inspectable, and programmable.
@@ -166,7 +192,7 @@ But business storytelling — the decks, the QBRs, the board reports, the execut
 
 ---
 
-### Slide 9 — Onboard. Bind. Refresh.
+### Slide 10 — Onboard. Bind. Refresh.
 
 **Headline:**
 > Three steps from static file to living system.
@@ -184,7 +210,7 @@ Run a job. Percy rebuilds the deck from current data, compares it against the pr
 
 ---
 
-### Slide 10 — Percy Studio
+### Slide 11 — Percy Studio
 
 **Headline:**
 > A canvas where every element is also a program.
@@ -212,7 +238,7 @@ Studio exists as a web app for collaborative enterprise workflows and a desktop 
 
 ---
 
-### Slide 11 — AI That Operates on Structure
+### Slide 12 — AI That Operates on Structure
 
 **Headline:**
 > AI that works with structured business visuals — not screenshots.
@@ -234,28 +260,28 @@ Percy gives AI structured Bridge elements to work with. AI in Percy can:
 
 ---
 
-### Slide 12 — Who It's For
+### Slide 13 — Who It's For
 
 **Headline:**
 > Built for the people who produce truth and have to package it too.
 
 **Four tiles:**
 
+**Asset Management & Investing** _(beachhead market)_
+Investor letters, attribution decks, IC memos, fund updates — produced on a schedule, audited, and always wrong the day after the data refreshes. Percy binds every chart, table, and metric to its source. Compliance gets a clean audit trail. The investment team gets their Sundays back.
+
 **Data & Analytics**
-Builds the numbers. Then rebuilds the slides. Percy closes the loop — the analysis feeds the deck directly.
+Builds the numbers, then rebuilds the slides. Percy closes the loop — the analysis pipeline feeds the deck directly.
 
 **Finance**
-Weekly and monthly decks, always one database refresh away from being wrong. Percy makes the refresh automatic and auditable.
+Weekly and monthly reporting decks, always one database refresh away from being wrong. Percy makes the refresh automatic, the audit trail complete.
 
-**Strategy**
-Board decks and investor materials assembled by hand from twelve sources. Percy gives every element a source of truth and a version history.
-
-**Operations**
-Recurring reports nobody can reproduce because the person who built them left. Percy makes every report a documented, reproducible system.
+**Strategy & Operations**
+Board decks, QBRs, and recurring reports assembled by hand from a dozen sources, with logic that walks out the door when an analyst leaves. Percy gives every element a source of truth, a version history, and an owner.
 
 ---
 
-### Slide 13 — Enterprise-Grade From the Start
+### Slide 14 — Enterprise-Grade From the Start
 
 **Headline:**
 > Built for organizations that cannot afford to get this wrong.
@@ -264,74 +290,65 @@ Recurring reports nobody can reproduce because the person who built them left. P
 
 | Capability | What It Means |
 |---|---|
-| Bridge model | Every visual element is structured, versioned, auditable — the foundation of everything |
-| Organizational element corpus | Uploaded documents decompose into shared team memory: chart types, layouts, data refs, brand tokens |
-| Shared data pipelines | One pipeline feeds every deck that uses that metric — definitions enforced by architecture |
-| Python execution | Sandboxed, permissioned, run-history tracked — data work lives inside the presentation layer |
-| Agentic AI on structured elements | AI that reasons about data provenance, staleness, and consistency — not just text |
-| Multiplayer collaboration | Live presence, comments, element-level ownership, approvals |
-| Template & component library | Reusable layouts, chart styles, brand rules — org knowledge made permanent |
-| Visual QA & diffing | Before/after comparison on every refresh, automated regression detection |
-| Interactive live outputs | Web presentations where elements stay alive: live charts, filterable tables, scenario toggles |
-| Audit trails | Every action logged — who changed what, when, from what source, and who approved it |
-| Role-based access | Teams, sub-teams, project-level permissions, access request flows |
-| Secure AI | Operates on structured elements; sandboxed; no raw document exposure to LLMs |
-| Export fidelity | PowerPoint, PDF, web — the format is a choice, not a constraint |
+| Bridge model | Every visual element is structured, versioned, auditable — the foundation underneath everything else |
+| Shared element corpus + pipelines | Uploaded documents and data bindings accumulate into a team-wide library — institutional knowledge made durable |
+| Python execution | Sandboxed, permissioned, run-history tracked — analytical work lives inside the reporting layer |
+| AI on structured elements | AI reasons about data provenance, staleness, and consistency — not just text and layout |
+| Visual QA & diffing | Before/after comparison on every refresh, with regressions flagged for human review |
+| Approval workflow + audit | Element-level ownership, RBAC, full audit trail from source data to published output |
+| Multiple render targets | Web (interactive), PowerPoint, PDF — the format is a choice, not a constraint |
 
 ---
 
-### Slide 14 — The Vision
+### Slide 15 — The Vision
 
 **Headline (full bleed, large):**
 
-> The final boss for data visualization and reporting.
+> The structured layer underneath every report your organization produces.
 
-**Beneath it:**
+**Beneath it, three short lines:**
 
-Not just decks.
-Not just dashboards.
-Not just templates.
-Not just AI generation.
+Data warehouses gave the organization one source of numerical truth.
 
-> One platform where your organization encodes how it understands and describes itself — and that knowledge compounds.
+Percy gives the organization one source of communication truth.
+
+Every metric, every chart, every recurring report — bound to its data, owned by its team, and queryable as a single corpus.
 
 **Subtext:**
-_PowerPoint is an output format. Percy is the system underneath — the structured model of your organization's business communication, alive and queryable._
+_PowerPoint is one output format. Percy is the structured model underneath._
 
 ---
 
-### Slide 15 — The Organization That Knows Itself
+### Slide 16 — The Organization That Knows Itself
 
 **Headline:**
-> A mature Percy deployment is organizational intelligence infrastructure.
+> Most software gets more useful as you add users. Percy gets more useful as you add knowledge.
 
-**The compound flywheel:**
+**Body:**
 
-Most enterprise software gets more useful as you add users. Percy gets more useful as you add **knowledge** — and knowledge, unlike seats, compounds.
+Every document uploaded, every pipeline built, every chart bound to a source accumulates into a structured corpus. Not a file archive — a queryable, AI-operable model of how your organization understands and describes itself.
 
-Every document uploaded, every data pipeline built, every chart bound to a source, every refresh approved and audited — all of it accumulates into a structured corpus. Not a file archive. A queryable, AI-operable model of your organization's business communication.
+**The questions that become askable:**
 
-**What becomes possible at scale:**
+- _"What net revenue retention did we report in every investor update since Series B?"_
+- _"Which decks in the company define ARR differently than our current definition?"_
+- _"Alert me when any metric in the live board deck moves more than 10% week-over-week."_
+- _"Who approved the revenue figure in last quarter's earnings presentation, and what was the source?"_
+- _"Draft the Q3 board update in our format, using our live data, with what changed from Q2 highlighted."_
 
-- _"What was our stated net revenue retention in every investor update since Series B?"_ — answered instantly, with source citations
-- _"Which slides across which decks use a different definition of ARR than our current one?"_ — surfaced automatically, flagged for remediation
-- _"Alert me when any metric in the live board deck moves more than 10% week-over-week."_ — a standing monitor, not a manual check
-- _"Generate a draft Q3 board update in our format, using our live data, highlighting what changed from Q2."_ — done in seconds after six months of institutional learning
-- _"Who approved the revenue figure in last quarter's earnings presentation, and what was the source?"_ — fully auditable, unambiguous
+These are not features. They are categories of question that no presentation tool can answer today, because no presentation tool has the structured corpus underneath.
 
-**What stops walking out the door:**
+**Two organizational outcomes Percy is designed to deliver:**
 
-In most organizations, the knowledge of how to build the board deck lives in one analyst's head. When they leave, it leaves. Percy encodes that knowledge structurally: the data bindings, the Python transforms, the chart conventions, the layout patterns, the approved metric definitions. New team members inherit the organization's reporting intelligence on day one. Senior institutional knowledge stops being fragile.
+**Knowledge that stays.** When an analyst leaves, their pipelines, templates, bindings, and approved metric definitions remain. New team members inherit the organization's reporting intelligence on day one. Institutional knowledge stops walking out the door.
 
-**What alignment looks like when it's structural:**
+**Alignment as architecture.** When every team draws from the same shared pipelines, "which version of ARR is this?" stops being a question. The sales deck, the board deck, the investor update, and the QBR all reference the same source. Consistency is not a process — it is enforced structurally.
 
-When every team's presentations draw from the same shared pipelines, "which version of ARR is this?" stops being a question. The sales deck, the board deck, the investor update, and the QBR all draw from the same source. Consistency is not a process — it is enforced by the architecture.
-
-**The destination:** An organization where business storytelling is institutional, not individual. Where the best analyst's work becomes a permanent organizational asset. Where the gap between "data changed" and "decision-makers know" shrinks from days to minutes.
+**The trajectory:** Percy ships today as the foundation — Bridge model, onboarding, binding, refresh, visual QA. The organizational intelligence layer above it (corpus search, cross-deck monitoring, agentic drafting) is built on that foundation as the corpus grows.
 
 ---
 
-### Slide 16 — The Market Is Already Being Validated
+### Slide 17 — The Market Is Already Being Validated
 
 **Headline:**
 > The category is real. The right solution does not exist yet.
@@ -361,7 +378,7 @@ Every major technology platform — Microsoft, Google, Anthropic, Notion, Figma 
 
 ---
 
-### Slide 17 — Competitive Landscape
+### Slide 18 — Competitive Landscape
 
 **Headline:**
 > Every competitor solves one part. Percy solves the whole lifecycle.
@@ -423,15 +440,15 @@ Every major technology platform — Microsoft, Google, Anthropic, Notion, Figma 
 
 ---
 
-### Slide 18 — What Only Percy Does
+### Slide 19 — What Only Percy Does
 
 **Headline:**
 > The capabilities that do not exist anywhere else.
 
 **Five specific things Percy does that no competitor offers:**
 
-**1. Team agentic memory built from existing documents**
-Getting a team onto Percy takes five minutes: upload your existing decks. Percy decomposes each document into structured elements — chart types, table schemas, layout patterns, data references, brand tokens, recurring metrics — and stores them in shared team memory. From that point, Percy's AI builds with institutional knowledge: it knows how your team structures board slides, which data sources feed which charts, what your QBR tables look like, how your brand system works in practice. Combined with shared data pipelines, this creates a compounding team-wide agentic memory that improves with every document added. Every other tool starts from zero every time. Percy learns the organization.
+**1. Team memory built from existing documents**
+Onboarding a team takes minutes: upload your existing decks. Percy decomposes each document into structured elements — chart types, table schemas, layout patterns, data references, brand tokens, recurring metrics — and stores them in a shared team library. That library becomes the substrate the AI layer is built on: it knows how your team structures board slides, which data sources feed which charts, what your QBR tables look like, how your brand system works in practice. Every other tool starts from zero every time. Percy is designed to learn the organization, and to get more useful as more documents are added.
 
 **2. AI that operates on structure, not screenshots**
 When Microsoft Copilot edits a slide, it sees text and layout. When Rollstack's automation runs, it embeds a picture of a Tableau chart. When Gamma generates content, it sees a prompt. When Percy's AI operates on a deck, it sees the Bridge element model — the actual data binding, the chart type, the underlying series values, the formatting rules, the element's provenance. Percy can ask: "Is this chart using the right data source?" "Has this metric changed since last quarter?" "Does this element's value match what the Python snippet would produce?" No other tool — not Microsoft, not Anthropic, not Google — can ask those questions, because no other tool has the structured element model underneath.
@@ -443,14 +460,14 @@ After every programmatic refresh, Percy renders a before/after comparison of eve
 Percy brings Python — the language where modern data work, analytics, and AI already happen — into the presentation refresh lifecycle. A data engineer can write a pandas transformation that feeds a chart. A quant analyst can attach a Python snippet to a table that computes from a model output. A data science team can bind a forecast visualization to the same code that runs in their pipeline. Microsoft Copilot can write Python code in a chat window. Percy executes it inside the slide refresh job. The difference is the difference between a suggestion and an infrastructure primitive.
 
 **5. Outputs that live with the data**
-A Percy presentation is not a frozen file. It is a web document where every bound element stays alive: charts that update when their data source changes, tables that re-sort and re-filter, metric tiles that pull live values, scenario toggles that let a viewer switch between assumptions, hover-detail panels that expose the underlying data on demand. The audience is not looking at a snapshot of what was true when the analyst hit export — they are looking at what is true now. This is a different category of business communication, and no other presentation tool produces it.
+A Percy-published presentation does not have to be a frozen file. The web render target keeps bound elements alive: charts that update when their data source changes, tables that re-sort and re-filter, metric tiles that pull live values, scenario toggles that let a viewer switch between assumptions, hover-detail panels that expose the underlying data. The audience is not looking at a snapshot of what was true when the analyst hit export — they are looking at what is true now. This is a different category of business communication, and Percy is the only platform on this list designed to produce it.
 
 **6. The full lifecycle in one platform**
 Five minutes to onboard → structured element model built from your documents → elements bound to data and Python → scheduled or triggered refresh jobs → visual QA diff after every run → approval workflow → publish as interactive web output or export to PowerPoint and PDF → version history and audit trail. Microsoft's stack splits this across Copilot, Power Automate, Power BI, and SharePoint — four products with no shared data model. Percy is the first platform designed to handle the entire lifecycle in one place, because business storytelling deserves an operating system, not a collection of disconnected point tools.
 
 ---
 
-### Slide 19 — The Ask
+### Slide 20 — The Ask
 
 _Audience-dependent. Placeholder._
 
@@ -484,12 +501,7 @@ _Audience-dependent. Placeholder._
 - _"Percy is the missing operating layer between data, AI, and business storytelling."_
 - _"The deck is not the source of truth. It should be a rendered result."_
 - _"Business storytelling is the last form of knowledge work without an operating system."_
-- _"The final boss for data visualization and reporting."_
-- _"Every visual element becomes structured, inspectable, and programmable."_
 - _"A canvas where every element is also a program."_
-- _"Built for the people who produce truth and have to package it too."_
-- _"Not just decks. Not just dashboards. Not just templates."_
 - _"The organization that knows itself."_
 - _"Knowledge that stays when people go."_
-- _"When data changes, the people who need to know — know."_
 - _"Consistency is not a process. It is enforced by the architecture."_

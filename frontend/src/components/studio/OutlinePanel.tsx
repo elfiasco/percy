@@ -82,69 +82,103 @@ export default function OutlinePanel({ docId, slideCount, selectedSlide, refresh
         {filtered.length === 0 && search.trim() && (
           <p className="text-[10px] text-muted/50 italic px-3 py-2">No slides match "{search}"</p>
         )}
-        {filtered.map((entry) => {
+        {filtered.map((entry, idx) => {
           const isSelected = entry.slide_n === selectedSlide
+          const showSection = entry.section && (idx === 0 || filtered[idx - 1].section !== entry.section)
+          const notesColor = !entry.has_notes ? "" :
+            (entry.notes_words ?? 0) >= 80 ? "text-emerald-400/60" :
+            (entry.notes_words ?? 0) >= 30 ? "text-amber-400/60" : "text-white/30"
           return (
-            <div
-              key={entry.slide_n}
-              className={[
-                "px-3 py-2 border-b border-edge/40 last:border-b-0 cursor-pointer group",
-                isSelected ? "bg-accent/10" : "hover:bg-white/5",
-              ].join(" ")}
-              onClick={() => onJumpToSlide(entry.slide_n)}
-            >
-              <div className="flex items-baseline gap-1.5">
-                {slideTags[entry.slide_n] && (
-                  <span
-                    className="w-2 h-2 rounded-full shrink-0 mt-0.5"
-                    style={{ background: slideTags[entry.slide_n], alignSelf: "center" }}
-                  />
-                )}
-                <span className={`text-[10px] shrink-0 font-mono ${isSelected ? "text-accent-light" : "text-muted/60"}`}>
-                  {entry.slide_n}
-                </span>
-                {editingN === entry.slide_n ? (
-                  <input
-                    ref={inputRef}
-                    className="flex-1 min-w-0 text-xs bg-black/40 border border-accent/60 rounded px-1 py-0 text-slate-200 focus:outline-none"
-                    value={editVal}
-                    onChange={(e) => setEditVal(e.target.value)}
-                    onBlur={() => commitEdit(entry)}
-                    onKeyDown={(e) => {
-                      e.stopPropagation()
-                      if (e.key === "Enter") { e.preventDefault(); commitEdit(entry) }
-                      if (e.key === "Escape") setEditingN(null)
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                ) : (
-                  <span
-                    className={`text-xs truncate flex-1 min-w-0 ${isSelected ? "text-slate-200 font-medium" : "text-slate-400"}`}
-                    onDoubleClick={(e) => {
-                      e.stopPropagation()
-                      if (entry.title_el_id) {
-                        setEditingN(entry.slide_n)
-                        setEditVal(entry.title)
-                      }
-                    }}
-                    title={entry.title || "(untitled)"}
-                  >
-                    {entry.title || <span className="text-muted/40 italic">untitled</span>}
+            <div key={entry.slide_n}>
+              {showSection && (
+                <div className="px-3 pt-2 pb-0.5 text-[8px] font-bold uppercase tracking-widest text-paper/60 border-t border-paper/20 mt-0.5">
+                  § {entry.section}
+                </div>
+              )}
+              <div
+                className={[
+                  "px-3 py-2 border-b border-edge/40 last:border-b-0 cursor-pointer group",
+                  isSelected ? "bg-accent/10" : "hover:bg-white/5",
+                ].join(" ")}
+                onClick={() => onJumpToSlide(entry.slide_n)}
+              >
+                <div className="flex items-baseline gap-1.5">
+                  {slideTags[entry.slide_n] && (
+                    <span
+                      className="w-2 h-2 rounded-full shrink-0 mt-0.5"
+                      style={{ background: slideTags[entry.slide_n], alignSelf: "center" }}
+                    />
+                  )}
+                  <span className={`text-[10px] shrink-0 font-mono ${isSelected ? "text-accent-light" : "text-muted/60"}`}>
+                    {entry.slide_n}
                   </span>
+                  {editingN === entry.slide_n ? (
+                    <input
+                      ref={inputRef}
+                      className="flex-1 min-w-0 text-xs bg-black/40 border border-accent/60 rounded px-1 py-0 text-slate-200 focus:outline-none"
+                      value={editVal}
+                      onChange={(e) => setEditVal(e.target.value)}
+                      onBlur={() => commitEdit(entry)}
+                      onKeyDown={(e) => {
+                        e.stopPropagation()
+                        if (e.key === "Enter") { e.preventDefault(); commitEdit(entry) }
+                        if (e.key === "Escape") setEditingN(null)
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  ) : (
+                    <span
+                      className={`text-xs truncate flex-1 min-w-0 ${isSelected ? "text-slate-200 font-medium" : "text-slate-400"}`}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation()
+                        if (entry.title_el_id) {
+                          setEditingN(entry.slide_n)
+                          setEditVal(entry.title)
+                        }
+                      }}
+                      title={entry.title || "(untitled)"}
+                    >
+                      {entry.title || <span className="text-muted/40 italic">untitled</span>}
+                    </span>
+                  )}
+                  {entry.has_notes && (
+                    <span className={`text-[8px] shrink-0 ${notesColor}`} title={`${entry.notes_words}w notes`}>📝</span>
+                  )}
+                </div>
+                {slideLabels[entry.slide_n] && (
+                  <p className="text-[10px] text-paper/60 truncate mt-0.5 ml-5">
+                    {slideLabels[entry.slide_n]}
+                  </p>
+                )}
+                {entry.body_preview && (
+                  <p className="text-[10px] text-muted/50 truncate mt-0.5 ml-5">{entry.body_preview}</p>
                 )}
               </div>
-              {slideLabels[entry.slide_n] && (
-                <p className="text-[10px] text-indigo-300/60 truncate mt-0.5 ml-5">
-                  {slideLabels[entry.slide_n]}
-                </p>
-              )}
-              {entry.body_preview && (
-                <p className="text-[10px] text-muted/50 truncate mt-0.5 ml-5">{entry.body_preview}</p>
-              )}
             </div>
           )
         })}
       </div>
+      {/* summary footer */}
+      {entries.length > 0 && (() => {
+        const totalWords = entries.reduce((sum, e) => sum + (e.notes_words ?? 0), 0)
+        const notedSlides = entries.filter((e) => e.has_notes).length
+        const estMins = totalWords > 0 ? Math.round(totalWords / 130) : 0
+        return (
+          <div className="px-3 py-2 border-t border-edge/50 shrink-0 flex items-center gap-2 flex-wrap">
+            <span className="text-[9px] text-muted/40">
+              {notedSlides}/{entries.length} slides with notes
+            </span>
+            {totalWords > 0 && (
+              <span className="text-[9px] text-muted/40">·</span>
+            )}
+            {totalWords > 0 && (
+              <span className="text-[9px] text-muted/40">
+                ~{totalWords}w · ~{estMins}m
+              </span>
+            )}
+          </div>
+        )
+      })()}
     </div>
   )
 }

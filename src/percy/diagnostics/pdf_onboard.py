@@ -415,8 +415,12 @@ def _onboard_page(
     # starts far outside the page bounds.  PyMuPDF's get_drawings() loses the
     # PDF ExtGState blend mode that makes these elements subtle (typically
     # Multiply over a white background = invisible).  Rendering them as freeforms
-    # produces bold full-opacity stripes that obscure content.  Skip them — the
-    # slide background color already provides the correct appearance for white pages.
+    # produces bold full-opacity stripes that obscure content.
+    #
+    # EXCEPTION: when the page has a non-white background (colored slide covers,
+    # annual report pages, etc.) off-page paths are real decorative art, not
+    # invisible Multiply textures.  In that case we rasterize the full page so
+    # blend modes are reproduced correctly by PyMuPDF.
     _page_w = page.rect.width
     _page_h = page.rect.height
     _offpage_count = 0
@@ -433,19 +437,35 @@ def _onboard_page(
                 or _off_right > _page_w * 0.25 or _off_bottom > _page_h * 0.25):
             if not (_r & page.rect).is_empty:
                 _offpage_candidates.append(_i)
+
+    # Is the page background non-white?  White pages use Multiply textures that
+    # should be invisible; colored pages have real decorative off-page art.
+    _bg_is_white = (
+        bg_color is None
+        or all(int(bg_color.lstrip("#")[k:k+2], 16) > 220 for k in (0, 2, 4))
+    )
+
     if len(_offpage_candidates) > 5:
-        # High count → decorative texture drawn via Multiply blend mode.
-        # Skip to avoid full-opacity rendering artifacts.
-        used_draw = used_draw | set(_offpage_candidates)
+        if _bg_is_white:
+            # High count on white page → Multiply-blend textures → skip.
+            used_draw = used_draw | set(_offpage_candidates)
+        else:
+            # High count on colored page → real decorative graphics.
+            # Rasterize full page so PyMuPDF handles blend modes correctly.
+            _use_page_raster = True
+            used_draw = used_draw | set(_offpage_candidates)
     else:
-        # Low count but individual rects that extend far beyond the page bounds
-        # (>40% excess in any dimension) are text-clip fill shapes: a large colored
-        # rect is clipped to glyph outlines via PDF text-clip mode.  Without the
-        # clip path we'd render them as solid full-page overlays.  Skip them — the
-        # text color is already captured in BridgeText elements.
+        # Low count: individual rects >40% excess in any dimension are text-clip
+        # fill shapes (large colored rect clipped to glyph outlines via PDF
+        # text-clip mode).  Skip them — text color is already in BridgeText.
+        # But only skip if they have minimal visible area (≤5% of page) —
+        # large-visible off-page graphics should still be rendered.
+        _pg_area = _page_w * _page_h
         for _ci in _offpage_candidates:
             _cr = drawings[_ci].get("rect") or fitz.Rect()
-            if _cr.width > 1.4 * _page_w or _cr.height > 1.4 * _page_h:
+            _vis = (_cr & page.rect).width * (_cr & page.rect).height
+            if ((_cr.width > 1.4 * _page_w or _cr.height > 1.4 * _page_h)
+                    and _vis < 0.05 * _pg_area):
                 used_draw = used_draw | {_ci}
 
     # Also skip drawings that extend off the right or bottom of the page and are
@@ -525,13 +545,74 @@ def _onboard_page(
                     el.stacking.z_index = 0
                     elements.append(el)
                 continue
+            # Skip clipped-rectangle artifacts: PDF sometimes fills a huge simple
+            # rectangle inside a W-n clip path (for rounded-corner fills, etc.).
+            # PyMuPDF reports the UNCLIPPED bounding rect with clip=None, so we
+            # would render a giant colored slab over the whole page.  Detect this by
+            # checking if (a) the drawing is a single 're' item and (b) its rect
+            # extends more than 20% of the page dimension beyond any page edge.
+            _draw_items = drawing.get("items", [])
+            _dr_rect = drawing.get("rect") or fitz.Rect(0, 0, 0, 0)
+            if (len(_draw_items) == 1
+                    and _draw_items[0][0] == "re"
+                    and drawing.get("clip") is None):
+                _ext_l = max(0.0, page.rect.x0 - _dr_rect.x0)
+                _ext_r = max(0.0, _dr_rect.x1 - page.rect.x1)
+                _ext_t = max(0.0, page.rect.y0 - _dr_rect.y0)
+                _ext_b = max(0.0, _dr_rect.y1 - page.rect.y1)
+                _pw = page.rect.width or 1.0
+                _ph = page.rect.height or 1.0
+                if (_ext_l / _pw > 0.20 or _ext_r / _pw > 0.20
+                        or _ext_t / _ph > 0.20 or _ext_b / _ph > 0.20):
+                    continue  # clipped-rect artifact — skip
             # Apply ExtGState fill opacity if the content stream set one via `gs`
             draw_opacity = draw_opacities.get(stream_pos, 1.0)
             el = _drawing_to_element(drawing, page_number, next_id(), fill_opacity=draw_opacity)
             if el is not None:
-                el.stacking.z_index = draw_z
-                draw_z += 1
+                # White/near-white background shapes that appear before Form XObject
+                # images in the PDF content stream are base-layer elements — they get
+                # painted first and then covered by the image.  Detect two cases:
+                # (a) large white rect covering >= 70% of the page, or
+                # (b) any white rect entirely within a full-bleed Form XObject bbox.
+                # In both cases force z=0 so full-bleed images (added later, also z=0)
+                # are drawn on top when the renderer iterates in insertion order.
+                _dr = drawing.get("rect") or fitz.Rect(0, 0, 0, 0)
+                _df = drawing.get("fill") or ()
+                _pg_area_d = _page_w * _page_h
+                _is_white = len(_df) >= 3 and all(v >= 0.85 for v in _df[:3])
+                _is_bg_shape = False
+                if _is_white and _pg_area_d > 0:
+                    _dr_vis_area = (_dr & page.rect).get_area()
+                    if _dr_vis_area / _pg_area_d >= 0.70:
+                        _is_bg_shape = True
+                    else:
+                        for _xb in img_blocks:
+                            if not _xb.get("xref"):
+                                _xbb = _xb.get("bbox", (0, 0, 0, 0))
+                                _xr2 = fitz.Rect(float(_xbb[0]), float(_xbb[1]),
+                                                 float(_xbb[2]), float(_xbb[3]))
+                                _xr2_vis = (_xr2 & page.rect).get_area()
+                                if (_xr2_vis / _pg_area_d >= 0.70
+                                        and _xr2.contains(_dr)):
+                                    _is_bg_shape = True
+                                    break
+                if _is_bg_shape:
+                    el.stacking.z_index = 0
+                else:
+                    el.stacking.z_index = draw_z
+                    draw_z += 1
                 elements.append(el)
+
+    # Rasterize pattern-filled regions that get_drawings() silently omits.
+    # PDF /Pattern cs scn fills (PatternType 2 gradient shadings) don't appear
+    # in get_drawings() at all — parse the content stream to find and clip-rasterize them.
+    if not _use_page_raster:
+        for _pat_rect in _extract_pattern_fill_rects(page, doc):
+            _pat_el = _rasterize_region(page, {"rect": _pat_rect}, page_number, next_id())
+            if _pat_el is not None:
+                _pat_el.stacking.z_index = draw_z
+                draw_z += 1
+                elements.append(_pat_el)
 
     # Build stripped→full font name map for this page so _line_to_runs can
     # resolve PyMuPDF's stripped span['font'] names back to the full prefixed
@@ -568,11 +649,17 @@ def _onboard_page(
     # "used" so they are not rendered as BridgeText elements.  Form XObjects get
     # rasterized in the primary image pass, so their text content is already captured
     # visually — adding BridgeText for the same spans would double-render the text.
+    # Exception: full-page Form XObjects (>70% of page area) are background images
+    # whose text layer sits on top as separate elements — don't suppress those.
     _xobj_rects: list[fitz.Rect] = []
     for _ib in img_blocks:
         if not _ib.get("xref"):
             _ibb = _ib.get("bbox", (0, 0, 0, 0))
-            _xobj_rects.append(fitz.Rect(float(_ibb[0]), float(_ibb[1]), float(_ibb[2]), float(_ibb[3])))
+            _ir = fitz.Rect(float(_ibb[0]), float(_ibb[1]), float(_ibb[2]), float(_ibb[3]))
+            _vis = (_ir & page.rect).get_area()
+            _pg_area = _page_w * _page_h
+            if _pg_area > 0 and _vis / _pg_area < 0.70:
+                _xobj_rects.append(_ir)
     if _xobj_rects:
         for _ti, _tb in enumerate(text_blocks):
             if _ti in used_text:
@@ -584,14 +671,51 @@ def _onboard_page(
             _tr_area = _tr.get_area()
             if _tr_area <= 0:
                 continue
-            # If this text block overlaps ≥20% with any Form XObject bbox, skip it.
-            # Threshold is intentionally low: multi-line text blocks can span two
-            # adjacent XObjects, so neither single XObject covers the full block.
+            # Suppress text blocks whose CENTER falls inside a Form XObject and that
+            # also overlap ≥20% of their own area with it.  The center check prevents
+            # text that merely clips the edge of a large decorative XObject from being
+            # dropped; the overlap threshold handles multi-line blocks that straddle
+            # two adjacent XObjects (neither alone covers the full block).
+            # Also check per-line centers: a block whose geometric center is just
+            # outside an xobj (due to a stray line at the block's edge) should still
+            # be suppressed if the majority of its TEXT lines fall inside the xobj.
+            _cx = (_tr.x0 + _tr.x1) / 2
+            _cy = (_tr.y0 + _tr.y1) / 2
+            _tb_lines = _tb.get("lines", [])
             for _xr in _xobj_rects:
                 _inter = (_tr & _xr).get_area()
-                if _inter / _tr_area >= 0.20:
+                _center_inside = (_xr.x0 <= _cx <= _xr.x1 and _xr.y0 <= _cy <= _xr.y1)
+                if _inter / _tr_area >= 0.20 and _center_inside:
                     used_text = used_text | {_ti}
                     break
+                # Fallback: check if ≥50% of text lines (by count) have their bbox
+                # center inside the xobj — catches blocks where a stray line skews
+                # the block's geometric center just outside the xobj boundary.
+                # Guard: only apply when the block's top edge is within the xobj
+                # (not above it), so we don't suppress text that merely overlaps
+                # the xobj boundary from above.
+                _block_top = _tb.get("bbox", [0, 0])[1]
+                if (_inter / _tr_area >= 0.20 and _tb_lines
+                        and _block_top >= _xr.y0 - 5.0):
+                    # Only count lines with non-whitespace content: whitespace-only
+                    # cursor-position lines may sit inside the XObject bbox even
+                    # when the actual text content is outside (e.g. PDF title text
+                    # that follows logo-area placeholder spaces).
+                    _content_lines = [
+                        _l for _l in _tb_lines
+                        if any(s.get("text", "").strip() for s in _l.get("spans", []))
+                    ]
+                    if not _content_lines:
+                        break
+                    _lines_inside = sum(
+                        1 for _l in _content_lines
+                        if (_l.get("bbox") and
+                            _xr.x0 <= (_l["bbox"][0] + _l["bbox"][2]) / 2 <= _xr.x1 and
+                            _xr.y0 <= (_l["bbox"][1] + _l["bbox"][3]) / 2 <= _xr.y1)
+                    )
+                    if _lines_inside / len(_content_lines) >= 0.50:
+                        used_text = used_text | {_ti}
+                        break
 
     text_z = _Z_TEXT_BASE
     for i, block in enumerate(text_blocks):
@@ -662,6 +786,7 @@ def _onboard_page(
                 image_data=ImageData(image_bytes=_full_bytes, image_format="PNG"),
                 file_info=ImageFileInfo(),
                 dimensions=ImageDimensions(width_px=_full_pix.width, height_px=_full_pix.height),
+                fill_mode="stretch",
                 custom_properties={"source_format": "pdf", "onboard_status": "page-raster"},
             )
             elements.append(_page_img_el)
@@ -676,11 +801,14 @@ def _onboard_page(
     for block in img_blocks:
         el = _image_block_to_element(doc, block, page_number, next_id(), page=page, smask_map=smask_map, secondary_sizes=secondary_sizes)
         if el is not None:
-            # Full-bleed background: image covers ≥80% of page area → z=0
+            # Full-bleed background: image covers ≥80% of page area → z=-1 so it
+            # renders behind all shapes/text (z≥0).  Previously this was z=0 which
+            # caused stable-sort to place the photo AFTER bg shapes (also z=0),
+            # covering them and producing photographic-background text artifacts.
             bbox = block.get("bbox", (0, 0, 0, 0))
             img_area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
             if page_area > 0 and img_area / page_area >= 0.8:
-                el.stacking.z_index = 0
+                el.stacking.z_index = -1
             else:
                 el.stacking.z_index = draw_z
                 draw_z += 1
@@ -855,13 +983,13 @@ def _onboard_page(
             extracted_render_rects.add(rect_key)
 
             # Determine z-index for this secondary image.
-            # Full-page coverage (≥90%) → z=0 (behind all shapes).
+            # Full-page coverage (≥90%) → z=-1 so it renders behind all shapes/text.
             # Large image that contains smaller primary images (≥3× area) → place
             # just below those primaries (acts as a background for them).
             visible_area = visible.width * visible.height
             is_full_bg = page_area > 0 and visible_area / page_area >= 0.90
             if is_full_bg:
-                z_idx = 0
+                z_idx = -1
             else:
                 contained_z_vals = []
                 if visible_area > 0:
@@ -907,7 +1035,7 @@ def _onboard_page(
         (e.position.left, e.position.top,
          e.position.left + e.position.width, e.position.top + e.position.height)
         for e in elements
-        if isinstance(e, BridgeImage) and e.stacking and e.stacking.z_index == 0
+        if isinstance(e, BridgeImage) and e.stacking and e.stacking.z_index <= 0
     ]
     if _raster_rects:
         _filtered: list = []
@@ -1084,7 +1212,14 @@ def _assign_lines_to_cells(
                 if _bbox_center_in_rect(line_bbox, cell_rect):
                     runs = _line_to_runs(line)
                     if runs:
-                        cell_paras[key].append(TextParagraph(runs=runs))
+                        spans = line.get("spans", [])
+                        line_text_w = sum(
+                            float(sp["bbox"][2]) - float(sp["bbox"][0])
+                            for sp in spans
+                            if sp.get("text", "").strip() and sp.get("bbox")
+                        )
+                        pdf_lw = _pt_to_in(line_text_w) if line_text_w > 0.5 else None
+                        cell_paras[key].append(TextParagraph(runs=runs, pdf_line_width_in=pdf_lw))
                         txt = _line_plain_text(line)
                         if txt:
                             cell_text_map[key] = (
@@ -1285,42 +1420,37 @@ def _try_line_grids(
     Short decorative lines (hyperlink underlines, dividers) that don't cross
     the column or row boundaries are excluded before building the grid.
     """
-    # First pass: compute the candidate x and y ranges
-    h_ys = [float(r.y0) for _, r in h_lines]
-    v_xs = [float(r.x0) for _, r in v_lines]
-    h_map = _snap_coords(h_ys, _SNAP_TOL)
-    v_map = _snap_coords(v_xs, _SNAP_TOL)
-
-    unique_ys_all = sorted(set(h_map.values()))
-    unique_xs_all = sorted(set(v_map.values()))
-
-    if len(unique_ys_all) < _MIN_TABLE_LINES or len(unique_xs_all) < _MIN_TABLE_LINES:
+    # Quick pre-check: need at least _MIN_TABLE_LINES of each kind.
+    if len(h_lines) < _MIN_TABLE_LINES or len(v_lines) < _MIN_TABLE_LINES:
         return []
 
-    # Keep only h-lines that span at least 2 of the unique x positions.
-    # A line from x=89 to x=224 does NOT cross v-lines at x=360, 444 etc.;
-    # including it would extend the grid far beyond the actual table.
-    if unique_xs_all:
-        x_min_grid = unique_xs_all[0]
-        x_max_grid = unique_xs_all[-1]
-        grid_x_span = max(x_max_grid - x_min_grid, 1.0)
-
+    # Keep only lines that are geometrically crossed by >= 2 lines from the
+    # other set.  "Crossed" means:
+    #   h-line at y: a v-line whose x falls in [h.x0, h.x1] AND whose
+    #                y-span includes h.y0
+    #   v-line at x: an h-line whose y falls in [v.y0, v.y1] AND whose
+    #                x-span includes v.x0
+    # This rejects full-width section-separator rules that share column
+    # x-positions with a table but whose y-position is not bounded by any
+    # vertical rule — the hallmark of a non-table divider line.
     valid_h: list[tuple[int, fitz.Rect]] = []
     for idx, r in h_lines:
-        # Count how many unique x positions fall within this h-line's x span
-        xs_crossed = sum(1 for x in unique_xs_all if r.x0 - _SNAP_TOL <= x <= r.x1 + _SNAP_TOL)
-        if xs_crossed >= 2:
+        v_actual = sum(
+            1 for _, vr in v_lines
+            if r.x0 - _SNAP_TOL <= vr.x0 <= r.x1 + _SNAP_TOL
+            and vr.y0 - _SNAP_TOL <= r.y0 <= vr.y1 + _SNAP_TOL
+        )
+        if v_actual >= 2:
             valid_h.append((idx, r))
-
-    # Keep only v-lines that span at least 2 of the unique y positions.
-    if unique_ys_all:
-        y_min_grid = unique_ys_all[0]
-        y_max_grid = unique_ys_all[-1]
 
     valid_v: list[tuple[int, fitz.Rect]] = []
     for idx, r in v_lines:
-        ys_crossed = sum(1 for y in unique_ys_all if r.y0 - _SNAP_TOL <= y <= r.y1 + _SNAP_TOL)
-        if ys_crossed >= 2:
+        h_actual = sum(
+            1 for _, hr in h_lines
+            if r.y0 - _SNAP_TOL <= hr.y0 <= r.y1 + _SNAP_TOL
+            and hr.x0 - _SNAP_TOL <= r.x0 <= hr.x1 + _SNAP_TOL
+        )
+        if h_actual >= 2:
             valid_v.append((idx, r))
 
     if len(valid_h) < _MIN_TABLE_LINES or len(valid_v) < _MIN_TABLE_LINES:
@@ -1461,6 +1591,7 @@ def _rasterize_region(
         image_data=ImageData(image_bytes=img_bytes, image_format="PNG"),
         file_info=ImageFileInfo(),
         dimensions=ImageDimensions(width_px=pix.width, height_px=pix.height),
+        fill_mode="stretch",
         custom_properties={
             "source_format": "pdf",
             "pdf_rasterized": True,
@@ -1468,6 +1599,155 @@ def _rasterize_region(
             "semantic_debt": [],
         },
     )
+
+
+def _extract_pattern_fill_rects(
+    page: "fitz.Page",
+    doc: "fitz.Document",
+) -> list["fitz.Rect"]:
+    """Find filled paths using PDF PatternType 2 (gradient shading) that get_drawings() misses.
+
+    PyMuPDF's get_drawings() silently skips any path whose fill colorspace is set to
+    /Pattern via the ``cs`` operator followed by ``scn``.  These are typically large
+    gradient-filled background shapes that are critical for correct visual rendering.
+
+    Returns a list of fitz.Rect (PyMuPDF top-down coordinates) for each found region,
+    filtered to minimum area and clipped to the page bounds.  Caller should rasterize
+    each rect with page.get_pixmap(clip=rect) to capture the correct gradient appearance.
+    """
+    import re as _re2
+
+    # Quick pre-check: skip if page has no /Pattern resource dict entry
+    try:
+        page_obj = doc.xref_object(page.xref, compressed=False)
+        if "/Pattern" not in page_obj:
+            return []
+    except Exception:
+        return []
+
+    # Collect page content stream(s)
+    stream_data = b""
+    for cx in page.get_contents():
+        try:
+            s = doc.xref_stream(cx)
+            if s:
+                stream_data += s
+        except Exception:
+            pass
+    if not stream_data:
+        return []
+
+    text = stream_data.decode("latin-1", errors="replace")
+    lines = text.split("\n")
+    total_lines = max(len(lines), 1)
+    page_h = page.rect.height
+
+    _FILL_OPS = frozenset({"f", "f*", "F", "B", "b", "B*", "b*"})
+    _SKIP_OPS = frozenset({"Q", "q", "W", "W*", "n", "cm", "gs", "g", "G",
+                            "rg", "RG", "EMC", "BDC", "BMC", "BT", "ET", "Do",
+                            "scn", "SCN", "sc", "SC", "S", "s"})
+    _IS_NUM = _re2.compile(r"^-?\d+(\.\d+)?$")
+
+    results: list[fitz.Rect] = []
+    i = 0
+    while i < total_lines:
+        line = lines[i].strip()
+
+        # Detect /Pattern cs  — fill colorspace switched to pattern
+        if not _re2.search(r"/Pattern\s+cs", line):
+            i += 1
+            continue
+
+        # Scan forward (up to 25 lines) for the filled path
+        j = i + 1
+        path_nums: list[float] = []
+        has_re = False
+        found_fill = False
+
+        while j < min(i + 25, total_lines):
+            tok_line = lines[j].strip()
+            toks = tok_line.split()
+            if not toks:
+                j += 1
+                continue
+
+            last = toks[-1]
+            if last in _FILL_OPS:
+                # Collect any numbers on this line before the operator
+                for t in toks[:-1]:
+                    if _IS_NUM.match(t):
+                        path_nums.append(float(t))
+                found_fill = True
+                break
+
+            # Skip pure-operator or decorator lines but collect numbers if present
+            if last in _SKIP_OPS or last.startswith("/"):
+                for t in toks[:-1]:
+                    if _IS_NUM.match(t):
+                        path_nums.append(float(t))
+                j += 1
+                continue
+
+            # "re" rectangle operator: collect preceding numbers
+            if last == "re":
+                has_re = True
+                for t in toks[:-1]:
+                    if _IS_NUM.match(t):
+                        path_nums.append(float(t))
+                j += 1
+                continue
+
+            # Generic line: collect all numbers as potential path coords
+            for t in toks:
+                if _IS_NUM.match(t):
+                    path_nums.append(float(t))
+            j += 1
+
+        if not found_fill or not path_nums:
+            i += 1
+            continue
+
+        # Build bounding rect from collected numbers
+        rect: fitz.Rect | None = None
+        if has_re and len(path_nums) >= 4:
+            # PDF "re" operator: x y w h (bottom-up)
+            x, y, w, h = path_nums[0], path_nums[1], path_nums[2], path_nums[3]
+            if w < 0:
+                x, w = x + w, -w
+            if h < 0:
+                y, h = y + h, -h
+            if w > 0 and h > 0:
+                # Convert PDF bottom-up → PyMuPDF top-down
+                rect = fitz.Rect(x, page_h - y - h, x + w, page_h - y)
+        elif len(path_nums) >= 4:
+            # General path: pair numbers as (x, y) coords and compute bbox
+            xs = path_nums[0::2]
+            ys = path_nums[1::2]
+            if xs and ys:
+                x0p, x1p = min(xs), max(xs)
+                y0p, y1p = min(ys), max(ys)  # PDF bottom-up
+                rect = fitz.Rect(x0p, page_h - y1p, x1p, page_h - y0p)
+
+        if rect is not None:
+            rect = rect & page.rect  # clip to page bounds
+            if (not rect.is_empty
+                    and rect.width > 5
+                    and rect.height > 5
+                    and rect.width * rect.height >= _MIN_GRADIENT_AREA):
+                results.append(rect)
+
+        i = j + 1
+
+    # Deduplicate near-identical rects (same content stream pattern can appear twice)
+    deduped: list[fitz.Rect] = []
+    for r in results:
+        if not any(
+            abs(r.x0 - d.x0) < 2 and abs(r.y0 - d.y0) < 2
+            and abs(r.x1 - d.x1) < 2 and abs(r.y1 - d.y1) < 2
+            for d in deduped
+        ):
+            deduped.append(r)
+    return deduped
 
 
 # ── rounded rectangle detection ──────────────────────────────────────────────
@@ -1489,14 +1769,14 @@ def _rounded_rect_corner_radius(drawing: dict) -> float:
     rect: fitz.Rect = drawing.get("rect") or fitz.Rect(0, 0, 0, 0)
     for item in items:
         if item[0] == "c":
-            # Bezier control points; approximate radius as distance from endpoint to control
             start = item[1]
-            ctrl1 = item[2]
-            # Radius ≈ distance from corner to first control point projected onto edge
-            dr = abs(ctrl1.x - start.x) + abs(ctrl1.y - start.y)
-            # Use the smaller dimension of bounding box to clamp radius
+            end = item[4]  # endpoint of the bezier arc
+            # For a rounded-corner bezier, the arc spans exactly r in each axis:
+            # start is on one edge at distance r from the corner,
+            # end is on the adjacent edge at distance r from the corner.
+            r = max(abs(end.x - start.x), abs(end.y - start.y))
             max_r = min(rect.width, rect.height) / 2.0
-            return _pt_to_in(min(dr * 0.55, max_r))
+            return _pt_to_in(min(r, max_r))
     return _pt_to_in(min(rect.width, rect.height) * 0.1)
 
 
@@ -1985,7 +2265,7 @@ def _block_to_paragraphs(
             line_sizes.append(dominant)
 
     for idx, line in enumerate(lines):
-        runs = _line_to_runs(line, stripped_to_full)
+        runs = _line_to_runs(line, stripped_to_full, block_x0=block_x0)
         if not runs:
             continue
         # Estimate line_spacing multiplier from delta to next line
@@ -1997,7 +2277,7 @@ def _block_to_paragraphs(
                 mult = delta / fs
                 if 0.8 <= mult <= 4.0:  # sanity-clamp; ignore outliers
                     line_spacing = round(mult, 3)
-        # X indent: line x0 relative to block x0 (accounts for bullet indentation)
+        # X indent: line x0 relative to block x0 (accounts for bullet indentation).
         line_bbox = line.get("bbox")
         left_indent: float | None = None
         if line_bbox:
@@ -2027,6 +2307,24 @@ def _block_to_paragraphs(
             lh = float(line_bbox[3]) - float(line_bbox[1])
             baseline_y = float(line_bbox[3]) - lh * 0.20
         pdf_y_offset = _pt_to_in(baseline_y - block_y0) if baseline_y is not None else None
+        # X offset: leftmost span origin relative to block_x0 — captures paragraphs
+        # that are visually in a different column of a merged text block.
+        pdf_x_offset: float | None = None
+        if line_bbox:
+            dx = float(line_bbox[0]) - block_x0
+            if dx > 144.0:  # only store for genuine column separations (≥2 inches); sub-inch offsets are normal text indentation already captured by left_indent
+                pdf_x_offset = _pt_to_in(dx)
+        # PDF line width: sum of span bbox widths on this line — used by renderer
+        # to apply horizontal scale correction when extracted font metrics differ.
+        pdf_line_width_in: float | None = None
+        if line_bbox:
+            line_text_w = sum(
+                float(sp["bbox"][2]) - float(sp["bbox"][0])
+                for sp in spans
+                if sp.get("text", "").strip() and sp.get("bbox")
+            )
+            if line_text_w > 0.5:  # only store for lines with real content (>0.5 pt)
+                pdf_line_width_in = _pt_to_in(line_text_w)
         paragraphs.append(TextParagraph(
             runs=runs,
             line_spacing=line_spacing,
@@ -2034,13 +2332,37 @@ def _block_to_paragraphs(
             bullet_type=bullet_type,
             bullet_char=bullet_char,
             pdf_y_offset=pdf_y_offset,
+            pdf_x_offset=pdf_x_offset,
+            pdf_line_width_in=pdf_line_width_in,
         ))
     return paragraphs
+
+
+_TYPO_NORMALIZE = str.maketrans({
+    "‘": "'",   # LEFT SINGLE QUOTATION MARK → apostrophe
+    "’": "'",   # RIGHT SINGLE QUOTATION MARK → apostrophe
+    "“": '"',   # LEFT DOUBLE QUOTATION MARK → quotation mark
+    "”": '"',   # RIGHT DOUBLE QUOTATION MARK → quotation mark
+    "′": "'",   # PRIME → apostrophe
+    "″": '"',   # DOUBLE PRIME → quotation mark
+    "–": "–",  # EN DASH — keep as-is (most fonts support)
+    "—": "—",  # EM DASH — keep as-is
+    "…": "...", # HORIZONTAL ELLIPSIS → three dots
+    " ": " ",   # NON-BREAKING SPACE → space
+    "­": "",    # SOFT HYPHEN → remove
+    "ﬁ": "fi",  # fi LIGATURE → two chars
+    "ﬂ": "fl",  # fl LIGATURE → two chars
+    "ﬃ": "ffi", # ffi LIGATURE → three chars
+    "ﬄ": "ffl", # ffl LIGATURE → three chars
+    "ﬅ": "st",  # st LIGATURE → two chars
+    "ﬆ": "st",  # st LIGATURE → two chars
+})
 
 
 def _line_to_runs(
     line: dict,
     stripped_to_full: dict[str, str] | None = None,
+    block_x0: float = 0.0,
 ) -> list[TextRun]:
     """Extract TextRun list from a single fitz text line."""
     runs: list[TextRun] = []
@@ -2048,6 +2370,10 @@ def _line_to_runs(
         text = span.get("text", "")
         if not text:
             continue
+        # Normalize typographic Unicode chars that PDF ToUnicode CMaps may map to
+        # but the extracted subset font may not support at those codepoints.
+        # e.g. U+2019 RIGHT SINGLE QUOTATION MARK → the glyph is registered at U+0027.
+        text = text.translate(_TYPO_NORMALIZE)
         flags = span.get("flags", 0)
         font = span.get("font") or None
         # PyMuPDF span['font'] returns the stripped name without the 6-char
@@ -2061,6 +2387,14 @@ def _line_to_runs(
         is_super = bool(flags & (1 << 0))  # bit 0: superscript
         is_sub   = bool(flags & (1 << 5))  # bit 5: subscript
         base_size = round(float(span.get("size", 12.0)), 2)
+        # Span X origin relative to block left: used by renderer to position each
+        # span at its exact PDF x coordinate, avoiding cumulative advance-width drift.
+        span_origin = span.get("origin")
+        span_x_in: float | None = None
+        if span_origin and len(span_origin) >= 1:
+            dx = float(span_origin[0]) - block_x0
+            if dx >= -2.0:  # allow small negative (sub-pt noise) but not off-page
+                span_x_in = _pt_to_in(max(0.0, dx))
         run = TextRun(
             text=text,
             font_name=font,
@@ -2069,6 +2403,7 @@ def _line_to_runs(
             font_italic=_is_italic(flags, font),
             font_color=_packed_int_to_hex(span.get("color", 0)),
             baseline_shift=-0.40 if is_super else (0.15 if is_sub else None),
+            pdf_span_x_in=span_x_in,
         )
         runs.append(run)
     return runs
@@ -2192,6 +2527,7 @@ def _image_block_to_element(
         image_data=ImageData(image_bytes=img_bytes, image_format=img_ext),
         file_info=ImageFileInfo(),
         dimensions=ImageDimensions(width_px=img_w, height_px=img_h),
+        fill_mode="stretch",
         custom_properties={
             "source_format": "pdf",
             "onboard_status": "semantic-best-effort",
@@ -2357,11 +2693,18 @@ def _is_hairline_rect(drawing: dict) -> bool:
 
 
 def _is_single_line(drawing: dict) -> bool:
-    """True for a single explicit line segment or a hairline rectangle."""
+    """True for a single explicit line segment or a hairline rectangle.
+
+    Filled hairline rectangles (logo letter-strokes, thin bars) are NOT
+    treated as connectors — they need their fill colour preserved.
+    """
     items = drawing.get("items", [])
     if len(items) == 1 and items[0][0] == "l":
         return True
-    return _is_simple_rect(drawing) and _is_hairline_rect(drawing)
+    if _is_simple_rect(drawing) and _is_hairline_rect(drawing):
+        # If the rect has a solid fill, keep it as a filled shape
+        return drawing.get("fill") is None
+    return False
 
 
 # ── geometry helpers ──────────────────────────────────────────────────────────

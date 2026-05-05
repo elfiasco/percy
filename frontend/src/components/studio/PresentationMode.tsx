@@ -5,7 +5,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from "react"
-import { getSlideNotes, fetchSlideTransitions } from "../../lib/studioApi"
+import { getSlideNotes, fetchSlideTransitions, fetchSlideSections, getTimerBudget, fetchHiddenSlides } from "../../lib/studioApi"
 
 interface Props {
   docId: string
@@ -76,17 +76,28 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
   const [showAutoSettings, setShowAutoSettings] = useState(false)
   const autoProgressRef                 = useRef(0)
   const [autoProgress, setAutoProgress] = useState(0)
-  const [transition, setTransition]     = useState<"fade" | "slide" | "zoom" | "none">("fade")
+  const [transition, setTransition]     = useState<"fade" | "slide" | "zoom" | "none" | "flip" | "push" | "wipe" | "dissolve">("fade")
   const [transDir, setTransDir]         = useState<1 | -1>(1)
   const [slideTransitions, setSlideTransitions] = useState<Record<number, string>>({})
   const [targetMinutes, setTargetMinutes] = useState<number | null>(null)
   const [showTeleprompter, setShowTeleprompter] = useState(false)
   const [telepFontSize, setTelepFontSize] = useState(28)
   const [speakerView, setSpeakerView] = useState(false)
+  const [slideSections, setSlideSections] = useState<Record<number, string>>({})
+  const [hiddenSlides, setHiddenSlides]   = useState<Set<number>>(new Set())
+  const [_timerBudgetMin, _setTimerBudgetMin] = useState<number | null>(null)
   // Drawing tools
+  const [showMiniMap, setShowMiniMap]   = useState(false)
+  const [showRehearsalReport, setShowRehearsalReport] = useState(false)
+  const [editingSlideN, setEditingSlideN] = useState(false)
+  const [slideNInput, setSlideNInput]   = useState("")
+  const [speaking, setSpeaking]         = useState(false)
   const [drawMode, setDrawMode]         = useState(false)
   const [penColor, setPenColor]         = useState("#FF3B30")
   const [penSize, setPenSize]           = useState(4)
+  const [eraserMode, setEraserMode]     = useState(false)
+  const [laserMode, setLaserMode]       = useState(false)
+  const [laserPos, setLaserPos]         = useState<{ x: number; y: number } | null>(null)
   const drawCanvasRef                   = useRef<HTMLCanvasElement>(null)
   const drawingRef                      = useRef(false)
   const lastPtRef                       = useRef<{ x: number; y: number } | null>(null)
@@ -131,6 +142,8 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
     // Clear drawing canvas on slide change
     const ctx = drawCanvasRef.current?.getContext("2d")
     if (ctx && drawCanvasRef.current) ctx.clearRect(0, 0, drawCanvasRef.current.width, drawCanvasRef.current.height)
+    // Stop speech synthesis on slide change
+    if (speaking) { window.speechSynthesis?.cancel(); setSpeaking(false) }
   }, [current, autoplay])
 
   // Fetch notes for current slide (and adjacent) when notes panel, teleprompter, or speaker view is open
@@ -144,42 +157,71 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
     }
   }, [current, showNotes, showTeleprompter, speakerView, docId, slideCount])
 
-  // Load per-slide transition overrides
+  // Load per-slide transition overrides and section data
   useEffect(() => {
     fetchSlideTransitions(docId)
       .then((r) => setSlideTransitions(
         Object.fromEntries(Object.entries(r.transitions).map(([k, v]) => [Number(k), v.transition]))
       ))
       .catch(() => {})
+    fetchSlideSections(docId)
+      .then((r) => setSlideSections(
+        Object.fromEntries(Object.entries(r.sections).map(([k, v]) => [Number(k), v as string]))
+      ))
+      .catch(() => {})
+    getTimerBudget(docId)
+      .then((r) => { if (r.total_minutes) { setTargetMinutes(r.total_minutes); _setTimerBudgetMin(r.total_minutes) } })
+      .catch(() => {})
+    fetchHiddenSlides(docId)
+      .then((r) => setHiddenSlides(new Set(r.hidden)))
+      .catch(() => {})
   }, [docId])
 
   // Per-slide transition: use slide's stored transition if set, else global default
-  const effectiveTransition = (slideTransitions[current] as "fade" | "slide" | "zoom" | "none" | undefined) ?? transition
+  const effectiveTransition = (slideTransitions[current] as typeof transition | undefined) ?? transition
 
   const go = useCallback((n: number) => {
     if (transitioning) return
-    const clamped = Math.max(1, Math.min(slideCount, n))
+    let clamped = Math.max(1, Math.min(slideCount, n))
+    // Skip hidden slides — find nearest visible slide in same direction
+    if (hiddenSlides.has(clamped) && clamped !== current) {
+      const dir = n > current ? 1 : -1
+      let candidate = clamped + dir
+      while (candidate >= 1 && candidate <= slideCount && hiddenSlides.has(candidate)) candidate += dir
+      if (candidate >= 1 && candidate <= slideCount) clamped = candidate
+      else return // all slides in that direction are hidden
+    }
     if (clamped === current) return
     setTransDir(clamped > current ? 1 : -1)
     setSlideTimes((prev) => ({ ...prev, [current]: (prev[current] ?? 0) + (elapsed - slideStart) }))
     setSlideStart(elapsed)
     setTransitioning(true)
     const eff = (slideTransitions[clamped] as "fade" | "slide" | "zoom" | "none" | undefined) ?? transition
-    const dur = eff === "none" ? 0 : 180
+    const dur = eff === "none" ? 0 : eff === "flip" ? 250 : eff === "push" ? 220 : 180
     setTimeout(() => {
       setCurrent(clamped)
       setTransitioning(false)
     }, dur)
-  }, [current, slideCount, transitioning, elapsed, slideStart, transition, slideTransitions])
+  }, [current, slideCount, transitioning, elapsed, slideStart, transition, slideTransitions, hiddenSlides])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { onClose(); return }
+      if (e.key === "Escape") {
+        // If timer has been running (any slide time recorded), show rehearsal report
+        if (Object.keys(slideTimes).length > 0 || elapsed > 0) {
+          setShowRehearsalReport(true)
+        } else {
+          onClose()
+        }
+        return
+      }
       if (e.key === "n" || e.key === "N") { e.preventDefault(); setShowNotes((v) => !v); return }
       if (e.key === "t" || e.key === "T") { e.preventDefault(); setShowTimer((v) => !v); return }
       if (e.key === "p" || e.key === "P") { e.preventDefault(); toggleTimer(); return }
       if (e.key === "a" || e.key === "A") { e.preventDefault(); setAutoplay((v) => !v); return }
-      if (e.key === "d" || e.key === "D") { e.preventDefault(); setDrawMode((v) => !v); return }
+      if (e.key === "d" || e.key === "D") { e.preventDefault(); setDrawMode((v) => !v); setLaserMode(false); return }
+      if (e.key === "l" || e.key === "L") { e.preventDefault(); setLaserMode((v) => !v); setDrawMode(false); return }
+      if (e.key === "m" || e.key === "M") { e.preventDefault(); setShowMiniMap((v) => !v); return }
       if (e.key === "z" || e.key === "Z") { e.preventDefault(); setShowTeleprompter((v) => !v); return }
       if (e.key === "v" || e.key === "V") { e.preventDefault(); setSpeakerView((v) => !v); return }
       if (e.key === "c" || e.key === "C") {
@@ -189,10 +231,26 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
         return
       }
       if (e.key === "ArrowRight" || e.key === "ArrowDown" || e.key === "PageDown" || e.key === " ") {
-        e.preventDefault(); go(current + 1)
+        e.preventDefault()
+        if (e.ctrlKey || e.metaKey) {
+          // Jump to next section start
+          const slides = Array.from({ length: slideCount }, (_, i) => i + 1)
+          const nextSectionSlide = slides.find((n) => n > current && slideSections[n])
+          go(nextSectionSlide ?? slideCount)
+        } else {
+          go(current + 1)
+        }
       }
       if (e.key === "ArrowLeft" || e.key === "ArrowUp" || e.key === "PageUp") {
-        e.preventDefault(); go(current - 1)
+        e.preventDefault()
+        if (e.ctrlKey || e.metaKey) {
+          // Jump to previous section start
+          const slides = Array.from({ length: slideCount }, (_, i) => slideCount - i)
+          const prevSectionSlide = slides.find((n) => n < current && slideSections[n])
+          go(prevSectionSlide ?? 1)
+        } else {
+          go(current - 1)
+        }
       }
       if (e.key === "Home") { e.preventDefault(); go(1) }
       if (e.key === "End")  { e.preventDefault(); go(slideCount) }
@@ -204,7 +262,7 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
-  }, [current, go, onClose, slideCount, toggleTimer])
+  }, [current, go, onClose, slideCount, toggleTimer, slideSections, slideTimes, elapsed])
 
   useEffect(() => {
     containerRef.current?.focus()
@@ -228,13 +286,18 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
           aspectRatio: "16/9",
           maxHeight: showNotes ? "72vh" : "100vh",
           transition: effectiveTransition === "none" ? "max-height 0.2s" :
-                      effectiveTransition === "fade"  ? "opacity 0.18s ease, max-height 0.2s" :
-                      effectiveTransition === "slide" ? "transform 0.18s ease, opacity 0.1s, max-height 0.2s" :
-                                                       "transform 0.18s ease, opacity 0.12s, max-height 0.2s",
-          opacity: transitioning && effectiveTransition !== "slide" ? 0 : 1,
-          transform: transitioning
-            ? effectiveTransition === "slide" ? `translateX(${transDir * 8}%)` : effectiveTransition === "zoom" ? "scale(0.93)" : "none"
-            : "none",
+                      effectiveTransition === "flip"  ? "transform 0.25s ease, max-height 0.2s" :
+                      effectiveTransition === "wipe"  ? "clip-path 0.22s ease, max-height 0.2s" :
+                                                        "transform 0.18s ease, opacity 0.15s ease, max-height 0.2s",
+          opacity: transitioning && !["slide", "push", "flip", "wipe"].includes(effectiveTransition) ? 0 :
+                   transitioning && effectiveTransition === "dissolve" ? 0.1 : 1,
+          transform: transitioning ? (
+            effectiveTransition === "slide"   ? `translateX(${transDir * 8}%)` :
+            effectiveTransition === "push"    ? `translateX(${transDir * 100}%)` :
+            effectiveTransition === "zoom"    ? "scale(0.93)" :
+            effectiveTransition === "flip"    ? `rotateY(${transDir * 90}deg)` :
+            "none"
+          ) : "none",
         }}
         onClick={drawMode ? (e) => e.stopPropagation() : undefined}
       >
@@ -253,13 +316,14 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
             inset: 0,
             width: "100%",
             height: "100%",
-            cursor: drawMode ? "crosshair" : "none",
-            pointerEvents: drawMode ? "all" : "none",
+            cursor: (drawMode || laserMode) ? (laserMode ? "none" : "crosshair") : "none",
+            pointerEvents: (drawMode || laserMode) ? "all" : "none",
             touchAction: "none",
           }}
           onPointerDown={(e) => {
-            if (!drawMode) return
+            if (!drawMode && !laserMode) return
             e.stopPropagation()
+            if (laserMode) { setLaserPos({ x: e.clientX, y: e.clientY }); return }
             const canvas = drawCanvasRef.current
             if (!canvas) return
             const rect = canvas.getBoundingClientRect()
@@ -272,6 +336,7 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
             canvas.setPointerCapture(e.pointerId)
           }}
           onPointerMove={(e) => {
+            if (laserMode) { setLaserPos({ x: e.clientX, y: e.clientY }); return }
             if (!drawMode || !drawingRef.current) return
             e.stopPropagation()
             const canvas = drawCanvasRef.current
@@ -285,21 +350,47 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
             const y = (e.clientY - rect.top) * sy
             const last = lastPtRef.current!
             ctx.beginPath()
-            ctx.strokeStyle = penColor
-            ctx.lineWidth = penSize * (canvas.width / rect.width)
+            if (eraserMode) {
+              ctx.globalCompositeOperation = "destination-out"
+              ctx.strokeStyle = "rgba(0,0,0,1)"
+              ctx.lineWidth = penSize * 4 * (canvas.width / rect.width)
+            } else {
+              ctx.globalCompositeOperation = "source-over"
+              ctx.strokeStyle = penColor
+              ctx.lineWidth = penSize * (canvas.width / rect.width)
+            }
             ctx.lineCap = "round"
             ctx.lineJoin = "round"
             ctx.moveTo(last.x, last.y)
             ctx.lineTo(x, y)
             ctx.stroke()
+            ctx.globalCompositeOperation = "source-over"
             lastPtRef.current = { x, y }
           }}
           onPointerUp={(e) => {
             e.stopPropagation()
             drawingRef.current = false
             lastPtRef.current = null
+            if (laserMode) setLaserPos(null)
           }}
+          onPointerLeave={() => { if (laserMode) setLaserPos(null) }}
         />
+        {/* laser pointer dot */}
+        {laserMode && laserPos && (
+          <div
+            className="fixed pointer-events-none"
+            style={{
+              left: laserPos.x - 10,
+              top: laserPos.y - 10,
+              width: 20,
+              height: 20,
+              borderRadius: "50%",
+              background: "rgba(255,60,60,0.85)",
+              boxShadow: "0 0 8px 4px rgba(255,60,60,0.5), 0 0 20px 8px rgba(255,60,60,0.2)",
+              zIndex: 99999,
+            }}
+          />
+        )}
       </div>
 
       {/* presenter notes panel */}
@@ -330,6 +421,13 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
         </div>
       )}
 
+      {/* section badge */}
+      {slideSections[current] && (
+        <div className="absolute top-4 right-4 text-[11px] font-semibold uppercase tracking-widest text-paper/80 bg-black/50 px-3 py-1 rounded-full backdrop-blur-sm pointer-events-none">
+          § {slideSections[current]}
+        </div>
+      )}
+
       {/* slide counter */}
       <div
         className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2"
@@ -342,9 +440,40 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
         >
           ‹
         </button>
-        <span className="text-white/60 text-xs font-mono px-2 bg-black/40 rounded-full py-0.5">
-          {current} / {slideCount}
-        </span>
+        {editingSlideN ? (
+          <input
+            autoFocus
+            type="number"
+            min={1}
+            max={slideCount}
+            value={slideNInput}
+            onChange={(e) => setSlideNInput(e.target.value)}
+            onBlur={() => {
+              const n = parseInt(slideNInput, 10)
+              if (!isNaN(n) && n >= 1 && n <= slideCount) go(n)
+              setEditingSlideN(false)
+            }}
+            onKeyDown={(e) => {
+              e.stopPropagation()
+              if (e.key === "Enter") {
+                const n = parseInt(slideNInput, 10)
+                if (!isNaN(n) && n >= 1 && n <= slideCount) go(n)
+                setEditingSlideN(false)
+              }
+              if (e.key === "Escape") setEditingSlideN(false)
+            }}
+            className="w-16 text-center text-white/80 text-xs font-mono bg-black/60 border border-white/30 rounded-full py-0.5 px-2 focus:outline-none"
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <span
+            className="text-white/60 text-xs font-mono px-2 bg-black/40 rounded-full py-0.5 cursor-pointer hover:text-white/90 hover:bg-black/60 transition-colors"
+            title="Click to jump to a slide"
+            onClick={(e) => { e.stopPropagation(); setSlideNInput(String(current)); setEditingSlideN(true) }}
+          >
+            {current} / {slideCount}
+          </span>
+        )}
         <button
           onClick={() => go(current + 1)}
           disabled={current >= slideCount}
@@ -356,11 +485,31 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
 
       {/* close button */}
       <button
-        onClick={(e) => { e.stopPropagation(); onClose() }}
+        onClick={(e) => {
+          e.stopPropagation()
+          if (Object.keys(slideTimes).length > 0 || elapsed > 0) {
+            setShowRehearsalReport(true)
+          } else {
+            onClose()
+          }
+        }}
         title="Exit presentation (Esc)"
         className="absolute top-3 right-4 text-white/40 hover:text-white/80 text-xl transition-colors"
       >
         ✕
+      </button>
+
+      {/* mini-map toggle button */}
+      <button
+        onClick={(e) => { e.stopPropagation(); setShowMiniMap((v) => !v) }}
+        title="Toggle slide mini-map (M)"
+        className={`absolute top-3 right-[4.5rem] text-xs px-2 py-0.5 rounded border transition-colors ${
+          showMiniMap
+            ? "text-sky-300 border-sky-400/40 bg-sky-500/20"
+            : "text-white/30 border-white/10 hover:text-white/60 hover:border-white/25"
+        }`}
+      >
+        Map
       </button>
 
       {/* notes toggle button */}
@@ -420,7 +569,7 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
         className="absolute top-3 right-[15rem] flex items-center gap-0.5"
         onClick={(e) => e.stopPropagation()}
       >
-        {(["none", "fade", "slide", "zoom"] as const).map((t) => (
+        {(["none", "fade", "slide", "zoom", "flip", "push", "wipe", "dissolve"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTransition(t)}
@@ -438,15 +587,28 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
 
       {/* draw mode toggle */}
       <button
-        onClick={(e) => { e.stopPropagation(); setDrawMode((v) => !v) }}
+        onClick={(e) => { e.stopPropagation(); setDrawMode((v) => !v); setLaserMode(false) }}
         title="Toggle draw mode (D)"
-        className={`absolute top-3 right-[11.5rem] text-xs px-2 py-0.5 rounded border transition-colors ${
+        className={`absolute top-3 right-[15rem] text-xs px-2 py-0.5 rounded border transition-colors ${
           drawMode
             ? "text-white/80 border-white/40 bg-white/15"
             : "text-white/30 border-white/10 hover:text-white/60 hover:border-white/25"
         }`}
       >
         ✏ Draw
+      </button>
+
+      {/* laser pointer toggle */}
+      <button
+        onClick={(e) => { e.stopPropagation(); setLaserMode((v) => !v); setDrawMode(false) }}
+        title="Toggle laser pointer (L)"
+        className={`absolute top-3 right-[11.5rem] text-xs px-2 py-0.5 rounded border transition-colors ${
+          laserMode
+            ? "text-red-400 border-red-400/50 bg-red-400/15"
+            : "text-white/30 border-white/10 hover:text-white/60 hover:border-white/25"
+        }`}
+      >
+        🔴 Laser
       </button>
 
       {/* drawing toolbar — shown when draw mode is on */}
@@ -480,6 +642,13 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
           ))}
           <div className="w-px h-4 bg-white/20 mx-1" />
           <button
+            onClick={() => { setEraserMode((v) => !v); setLaserMode(false) }}
+            className={`text-xs px-2 py-0.5 rounded transition-colors ${eraserMode ? "bg-white text-black" : "text-white/50 hover:text-white"}`}
+            title="Eraser"
+          >
+            ✦
+          </button>
+          <button
             onClick={() => {
               const ctx = drawCanvasRef.current?.getContext("2d")
               if (ctx && drawCanvasRef.current) ctx.clearRect(0, 0, drawCanvasRef.current.width, drawCanvasRef.current.height)
@@ -491,6 +660,8 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
           </button>
         </div>
       )}
+
+      {/* laser pointer toggle button — shown always in toolbar */}
 
       {/* timer display */}
       {showTimer && (() => {
@@ -591,7 +762,7 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
       {autoplay && (
         <div className="absolute top-0 left-0 right-0 h-0.5 bg-white/10">
           <div
-            className="h-full bg-indigo-400 transition-none"
+            className="h-full bg-paper transition-none"
             style={{ width: `${autoProgress}%` }}
           />
         </div>
@@ -628,7 +799,7 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
           title={autoplay ? "Stop autoplay (A)" : "Start autoplay (A)"}
           className={`text-xs px-2 py-0.5 rounded border transition-colors ${
             autoplay
-              ? "text-indigo-300 border-indigo-400/40 bg-indigo-500/20 hover:bg-indigo-500/30"
+              ? "text-paper border-paper/40 bg-paper/20 hover:bg-paper/30"
               : "text-white/30 border-white/10 hover:text-white/60 hover:border-white/25"
           }`}
         >
@@ -669,7 +840,35 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
           </div>
           {/* current slide notes */}
           <div className="flex-1 overflow-y-auto px-3 pb-3 scrollbar-thin">
-            <div className="text-[9px] text-white/30 uppercase tracking-widest mb-2">Notes — Slide {current}</div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[9px] text-white/30 uppercase tracking-widest">Notes — Slide {current}</div>
+              {"speechSynthesis" in window && currentNotes?.trim() && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (speaking) {
+                      window.speechSynthesis.cancel()
+                      setSpeaking(false)
+                    } else {
+                      const utt = new SpeechSynthesisUtterance(currentNotes!)
+                      utt.rate = 0.9
+                      utt.onend = () => setSpeaking(false)
+                      utt.onerror = () => setSpeaking(false)
+                      window.speechSynthesis.speak(utt)
+                      setSpeaking(true)
+                    }
+                  }}
+                  title={speaking ? "Stop reading" : "Read notes aloud"}
+                  className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors ${
+                    speaking
+                      ? "text-sky-300 border-sky-400/40 bg-sky-500/20"
+                      : "text-white/30 border-white/10 hover:text-white/60"
+                  }`}
+                >
+                  {speaking ? "⏹" : "▶ Read"}
+                </button>
+              )}
+            </div>
             {currentNotes === null ? (
               <div className="text-white/30 text-xs animate-pulse">Loading…</div>
             ) : currentNotes.trim() ? (
@@ -727,9 +926,129 @@ export default function PresentationMode({ docId, slideCount, startSlide = 1, on
         </div>
       )}
 
+      {/* rehearsal report modal */}
+      {showRehearsalReport && (() => {
+        const targetSecs = targetMinutes != null ? targetMinutes * 60 : null
+        const slideTarget = targetSecs != null ? Math.floor(targetSecs / slideCount) : null
+        const allSlideTimes = { ...slideTimes, [current]: (slideTimes[current] ?? 0) + (elapsed - slideStart) }
+        return (
+          <div
+            className="fixed inset-0 z-[999999] flex items-center justify-center bg-black/80"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-neutral-900 border border-white/10 rounded-2xl shadow-2xl w-[480px] max-h-[85vh] flex flex-col overflow-hidden">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
+                <span className="text-sm font-semibold text-white/90">Rehearsal Report</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-white/40 text-xs font-mono">Total: {fmtTime(elapsed)}{targetSecs ? ` / ${fmtTime(targetSecs)}` : ""}</span>
+                </div>
+              </div>
+              <div className="overflow-y-auto flex-1 p-4">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-white/30 text-[10px] uppercase tracking-wider border-b border-white/5">
+                      <th className="text-left pb-1.5 font-medium">Slide</th>
+                      <th className="text-right pb-1.5 font-medium">Time</th>
+                      {slideTarget && <th className="text-right pb-1.5 font-medium">Target</th>}
+                      {slideTarget && <th className="text-right pb-1.5 font-medium">Δ</th>}
+                      <th className="pb-1.5"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Array.from({ length: slideCount }, (_, i) => i + 1).map((n) => {
+                      const t = allSlideTimes[n] ?? 0
+                      const delta = slideTarget != null ? t - slideTarget : null
+                      const over = delta != null && delta > 0
+                      const under = delta != null && delta < 0
+                      const pct = slideTarget ? Math.min(100, (t / slideTarget) * 100) : 0
+                      return (
+                        <tr key={n} className="border-b border-white/5 hover:bg-white/5">
+                          <td className="py-1.5 pr-3">
+                            <span className="text-white/60 font-mono">{n}</span>
+                            {slideSections[n] && (
+                              <span className="ml-2 text-[9px] text-paper/60 font-medium">§ {slideSections[n]}</span>
+                            )}
+                          </td>
+                          <td className="py-1.5 text-right font-mono text-white/70">{t > 0 ? fmtTime(t) : "—"}</td>
+                          {slideTarget && (
+                            <td className="py-1.5 text-right font-mono text-white/30">{fmtTime(slideTarget)}</td>
+                          )}
+                          {slideTarget && (
+                            <td className={`py-1.5 text-right font-mono text-[11px] ${over ? "text-red-400" : under ? "text-emerald-400" : "text-white/30"}`}>
+                              {delta != null && delta !== 0 ? `${over ? "+" : ""}${fmtTime(Math.abs(delta))}` : "—"}
+                            </td>
+                          )}
+                          <td className="py-1.5 pl-2 w-16">
+                            {slideTarget && t > 0 && (
+                              <div className="w-full bg-white/10 rounded-full h-1">
+                                <div
+                                  className={`h-1 rounded-full ${over ? "bg-red-500" : "bg-emerald-500"}`}
+                                  style={{ width: `${pct}%` }}
+                                />
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className="flex items-center justify-between px-5 py-3 border-t border-white/10">
+                <button
+                  onClick={() => { setShowRehearsalReport(false); resetTimer() }}
+                  className="text-xs px-3 py-1.5 rounded border border-white/15 text-white/50 hover:text-white/80 hover:border-white/30 transition-colors"
+                >
+                  Continue Presenting
+                </button>
+                <button
+                  onClick={() => { setShowRehearsalReport(false); onClose() }}
+                  className="text-xs px-4 py-1.5 rounded bg-white/10 text-white/80 hover:bg-white/20 transition-colors"
+                >
+                  Exit
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* slide mini-map — M to toggle */}
+      {showMiniMap && (
+        <div
+          className="absolute bottom-0 left-0 right-0 bg-black/80 backdrop-blur-sm border-t border-white/10 overflow-x-auto flex items-center gap-1 px-3 py-2"
+          style={{ maxHeight: "8rem" }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {Array.from({ length: slideCount }, (_, i) => i + 1).map((n) => (
+            <button
+              key={n}
+              onClick={() => go(n)}
+              className={`shrink-0 rounded overflow-hidden border-2 transition-all ${
+                n === current ? "border-paper scale-110 shadow-lg" :
+                hiddenSlides.has(n) ? "border-white/10 opacity-30" :
+                "border-transparent hover:border-white/30"
+              }`}
+              style={{ width: 80, aspectRatio: "16/9" }}
+              title={`Slide ${n}`}
+            >
+              <img
+                src={slideUrl(n)}
+                alt={`Slide ${n}`}
+                className="w-full h-full object-contain bg-neutral-900"
+                loading="lazy"
+              />
+              <div className={`text-center text-[8px] mt-0 py-0.5 font-mono ${n === current ? "text-paper" : "text-white/30"}`}>
+                {n}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* keyboard hint */}
       <div className="absolute top-3 left-4 text-white/25 text-[10px] font-mono">
-        ← → navigate · N notes · V speaker · Z telep · T timer · A auto · D draw · Esc exit
+        ← → navigate · Ctrl+← → section jump · N notes · V speaker · Z telep · T timer · A auto · D draw · M map · Esc exit
       </div>
     </div>
   )

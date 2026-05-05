@@ -92,8 +92,8 @@ export default function InlineTextEditor({ element, docId, slideN, onCommit, onC
           onKeyDown={handleKeyDown}
           onClick={(e) => e.stopPropagation()}
           className="w-full h-full resize-none bg-black/60 text-white text-sm
-                     border-2 border-indigo-400 rounded-sm p-1
-                     focus:outline-none focus:border-indigo-300"
+                     border-2 border-paper rounded-sm p-1
+                     focus:outline-none focus:border-paper"
           style={{ fontFamily: "inherit", lineHeight: "1.3" }}
           placeholder="Type text… (Ctrl+Enter to save, Esc to cancel)"
         />

@@ -30,9 +30,11 @@ const SECTIONS = [
       { keys: "L",                  desc: "Toggle lock on selected element" },
       { keys: "Ctrl+T",             desc: "Insert text box on current slide" },
       { keys: "Ctrl+C",             desc: "Copy element to clipboard" },
-      { keys: "Ctrl+V",             desc: "Paste element on current slide (offset)" },
+      { keys: "Ctrl+V",             desc: "Paste element on current slide (offset) — or paste image from system clipboard" },
       { keys: "Ctrl+Shift+V",       desc: "Paste in place (exact same position)" },
       { keys: "Ctrl+Shift+C",       desc: "Format Painter — copy element style" },
+      { keys: "Ctrl+]",             desc: "Bring element forward (z-order)" },
+      { keys: "Ctrl+[",             desc: "Send element backward (z-order)" },
       { keys: "Ctrl+D",             desc: "Duplicate selected element(s)" },
       { keys: "Ctrl+Z",             desc: "Undo" },
       { keys: "Ctrl+Y / Ctrl+Shift+Z", desc: "Redo" },
@@ -55,14 +57,20 @@ const SECTIONS = [
     shortcuts: [
       { keys: "Ctrl+S",             desc: "Full rebuild (python-pptx)" },
       { keys: "Ctrl+H / Ctrl+F",    desc: "Find & Replace" },
-      { keys: "Ctrl+K",             desc: "Jump to element (command palette)" },
+      { keys: "Ctrl+K",             desc: "Jump to element (command palette) — type > to run actions" },
       { keys: "Ctrl+G",             desc: "Slide sorter grid view" },
+      { keys: "Ctrl+B",             desc: "Pin / unpin current slide" },
+      { keys: "Ctrl+Shift+B",       desc: "Jump to next pinned slide" },
       { keys: "PageUp / PageDown",  desc: "Previous / next slide" },
+      { keys: "Ctrl+↑ / Ctrl+↓",   desc: "Move current slide up / down" },
       { keys: "?",                  desc: "Show this help" },
       { keys: "F5",                 desc: "Start presentation (fullscreen slideshow)" },
       { keys: "N (in present)",     desc: "Toggle presenter notes overlay" },
       { keys: "V (in present)",     desc: "Toggle speaker view (next slide + notes panel)" },
       { keys: "Z (in present)",     desc: "Toggle teleprompter (large notes)" },
+      { keys: "L (in present)",     desc: "Toggle laser pointer" },
+      { keys: "Ctrl+← → (present)", desc: "Jump to previous / next section" },
+      { keys: "M (in present)",      desc: "Toggle slide mini-map strip" },
       { keys: "Notes bar",          desc: "Speaker notes (bottom of canvas)" },
     ],
   },
@@ -110,7 +118,7 @@ export default function KeyboardShortcutsModal({ onClose }: Props) {
                 <tbody>
                   {sec.shortcuts.map(({ keys, desc }) => (
                     <tr key={keys} className="border-b border-edge/20 last:border-0">
-                      <td className="py-0.5 pr-3 font-mono text-[11px] text-indigo-300 whitespace-nowrap">
+                      <td className="py-0.5 pr-3 font-mono text-[11px] text-paper whitespace-nowrap">
                         {keys}
                       </td>
                       <td className="py-0.5 text-xs text-muted">{desc}</td>

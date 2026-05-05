@@ -62,10 +62,10 @@ def _cleanup_tmp() -> None:
 
 # Name tokens that signal bold weight
 _BOLD_TOKENS = re.compile(
-    r"(?i)(extrabold|semibold|demibold|ultrabold|heavy|black|bold)"
+    r"(?i)(extrabold|semibold|demibold|ultrabold|heavy|black|bold|\bbd\b|\bsb\b)"
 )
 _LIGHT_TOKENS = re.compile(
-    r"(?i)(extralight|ultralight|thin|hairline|light)"
+    r"(?i)(extralight|ultralight|thin|hairline|light|\bli\b|\blt\b)"
 )
 _ITALIC_TOKENS = re.compile(
     r"(?i)(italic|oblique|slant(?:ed)?)"
@@ -130,6 +130,8 @@ def _parse_pdf_font_name(raw: str) -> tuple[str, str, str]:
             weight = "thin"
         else:
             weight = "light"
+    elif re.search(r"(?i)(\bmedium\b|\bme\b|\bmd\b)", combined):
+        weight = "medium"
     else:
         weight = "normal"
 
@@ -337,8 +339,12 @@ def _wrap_cff_to_otf(cff_data: bytes, family: str, weight: str, style: str) -> b
         post.mapping = {i: n for i, n in enumerate(glyph_names)}; post.extraNames = []
         font["post"] = post
 
+        _weight_class = {
+            "thin": 100, "ultralight": 200, "light": 300, "normal": 400,
+            "medium": 500, "semibold": 600, "bold": 700, "extra bold": 800, "black": 900,
+        }.get(weight, 400)
         os2 = newTable("OS/2"); os2.version = 4
-        os2.xAvgCharWidth = 600; os2.usWeightClass = 400; os2.usWidthClass = 5; os2.fsType = 0
+        os2.xAvgCharWidth = 600; os2.usWeightClass = _weight_class; os2.usWidthClass = 5; os2.fsType = 0
         os2.ySubscriptXSize = 650; os2.ySubscriptYSize = 600
         os2.ySubscriptXOffset = 0; os2.ySubscriptYOffset = 75
         os2.ySuperscriptXSize = 650; os2.ySuperscriptYSize = 600
@@ -370,7 +376,22 @@ def _wrap_cff_to_otf(cff_data: bytes, family: str, weight: str, style: str) -> b
                 rec.platformID = platformID; rec.platEncID = platEncID; rec.langID = langID
                 rec.string = string.encode("utf-16-be") if platformID == 3 else string.encode("mac_roman", errors="replace")
                 name_table.names.append(rec)
-        subfamily = "Italic" if style == "italic" else ("Bold Italic" if weight == "bold" and style == "italic" else "Regular")
+        _is_bold_w = weight in ("bold", "semibold", "extra bold", "black")
+        _is_italic_s = style in ("italic", "oblique")
+        if _is_bold_w and _is_italic_s:
+            subfamily = "Bold Italic"
+        elif _is_bold_w:
+            subfamily = "Bold"
+        elif _is_italic_s:
+            subfamily = "Italic"
+        elif weight == "medium":
+            subfamily = "Medium"
+        elif weight == "light":
+            subfamily = "Light"
+        elif weight in ("thin", "ultralight"):
+            subfamily = "Thin"
+        else:
+            subfamily = "Regular"
         _add_name(1, family); _add_name(2, subfamily); _add_name(3, ps_name)
         _add_name(4, full_name); _add_name(6, ps_name)
         font["name"] = name_table
@@ -677,10 +698,20 @@ def _patch_font_names(font_bytes: bytes, family: str, weight: str, style: str) -
 
         _is_bold   = weight in ("bold", "semibold", "extra bold", "black")
         _is_italic = style in ("italic", "oblique")
-        subfamily  = ("Bold Italic" if _is_bold and _is_italic
-                      else "Italic" if _is_italic
-                      else "Bold" if _is_bold
-                      else "Regular")
+        if _is_bold and _is_italic:
+            subfamily = "Bold Italic"
+        elif _is_bold:
+            subfamily = "Bold"
+        elif _is_italic:
+            subfamily = "Italic"
+        elif weight == "medium":
+            subfamily = "Medium"
+        elif weight == "light":
+            subfamily = "Light"
+        elif weight in ("thin", "ultralight"):
+            subfamily = "Thin"
+        else:
+            subfamily = "Regular"
         ps_name   = f"{family.replace(' ', '')}-{subfamily.replace(' ', '')}"
         full_name = f"{family} {subfamily}" if subfamily != "Regular" else family
 
@@ -706,6 +737,30 @@ def _patch_font_names(font_bytes: bytes, family: str, weight: str, style: str) -
 # ---------------------------------------------------------------------------
 # Font subset merging
 # ---------------------------------------------------------------------------
+
+def _has_suspect_ascii_mapping(registered_path: str) -> bool:
+    """Return True if the font maps multiple ASCII codepoints to the same glyph name.
+
+    Type0 CID-patched fonts sometimes produce a cmap where both U+0066 ('f')
+    and U+0069 ('i') resolve to the glyph named 'f' (because the CID index for
+    'i' was named 'f' in the original font).  Such a font renders 'f' with the
+    'i' shape and must not be used as the merge base.
+    """
+    try:
+        from fontTools.ttLib import TTFont as _TT
+        tt = _TT(registered_path, lazy=True)
+        ct = tt.get("cmap")
+        if not ct:
+            return False
+        cmap: dict[int, str] = {}
+        for t in ct.tables:
+            if t.platformID == 3 and t.platEncID == 1:
+                cmap.update(t.cmap)
+        ascii_names = [g for uv, g in cmap.items() if 0x20 <= uv <= 0x7E]
+        return len(ascii_names) != len(set(ascii_names))
+    except Exception:
+        return False
+
 
 def _merge_font_subsets(
     result: dict[str, BridgeFont],
@@ -746,11 +801,16 @@ def _merge_font_subsets(
     for stripped, full_names in groups.items():
         if len(full_names) <= 1:
             continue
-        # Sort by nonempty_glyph_count descending; use best as base
+        # Sort: non-suspect fonts first (Type0-patched fonts with duplicate
+        # ASCII glyph names are deprioritized), then by nonempty_glyph_count
+        # descending.  This prevents a Type0-derived font where both 'f' and
+        # 'i' map to the same glyph from becoming the base for the merged font.
         full_names_sorted = sorted(
             full_names,
-            key=lambda n: result[n].nonempty_glyph_count,
-            reverse=True,
+            key=lambda n: (
+                1 if _has_suspect_ascii_mapping(result[n].registered_path) else 0,
+                -result[n].nonempty_glyph_count,
+            ),
         )
         base_bf = result[full_names_sorted[0]]
         try:
@@ -813,7 +873,24 @@ def _merge_font_subsets(
                 except Exception:
                     pass
 
+        # If the base is a clean font (no suspect glyph mapping) but some of the
+        # "other" fonts are suspect, redirect all group members to the base path
+        # even when nothing was added.  This covers the common case where a clean
+        # TrueType subset is a strict superset of all suspect Type0-patched subsets:
+        # merging would add 0 glyphs, but we still want suspects to use the clean base.
+        base_is_clean = not _has_suspect_ascii_mapping(base_bf.registered_path)
+        any_suspect = any(
+            _has_suspect_ascii_mapping(result[n].registered_path)
+            for n in full_names_sorted[1:]
+        )
         if added == 0:
+            if base_is_clean and any_suspect:
+                for fn in full_names:
+                    result[fn].registered_path = base_bf.registered_path
+                log.debug(
+                    "Redirected %d suspect subsets of %s to clean base (0 glyphs added)",
+                    len(full_names) - 1, stripped,
+                )
             continue
 
         base_tt.setGlyphOrder(glyph_order)
@@ -1272,6 +1349,18 @@ def extract_and_register(doc: fitz.Document) -> dict[str, BridgeFont]:
                                         nonempty_count += 1
                                 except Exception:
                                     pass
+                        else:
+                            # CFF/OTF font: count charstrings as proxy for nonempty glyph count
+                            _cff = _ft.get("CFF ")
+                            if _cff:
+                                try:
+                                    _cs = _cff.cff.topDictIndex[0].CharStrings
+                                    nonempty_count = sum(
+                                        1 for _gn in _ft.getGlyphOrder()
+                                        if _gn != ".notdef" and _gn in _cs
+                                    )
+                                except Exception:
+                                    pass
                     except Exception:
                         pass
 
@@ -1293,6 +1382,14 @@ def extract_and_register(doc: fitz.Document) -> dict[str, BridgeFont]:
     _merge_font_subsets(result, tmp, doc_hash)
     # Supplement registered system fonts with missing glyphs from system fonts
     _supplement_system_fonts(result, tmp, doc_hash)
+
+    # Add stripped-name entries so the renderer can look up fonts by basefont
+    # name (without the "ABCDEF+" subset prefix that PyMuPDF omits from spans).
+    # We add these AFTER merge/supplement so paths are final.
+    for full_name in list(result.keys()):
+        stripped = _SUBSET_PREFIX.sub("", full_name)
+        if stripped != full_name and stripped not in result:
+            result[stripped] = result[full_name]
 
     return result
 
