@@ -574,6 +574,7 @@ class TextRun:
     font_caps: str | None = None   # "all" | "small" | None — OOXML rPr cap attribute
     baseline_shift: float | None = None  # fraction of font_size; negative=up (super), positive=down (sub)
     strikethrough: str | None = None    # "sng" | "dbl" | None — OOXML rPr strike attribute
+    pdf_span_x_in: float | None = None  # X origin of this span relative to text block left (inches); PDF only
 
 
 @dataclass(slots=True)
@@ -592,6 +593,8 @@ class TextParagraph:
     bullet_blip_bytes: bytes | None = None
     bullet_blip_ext: str | None = None
     pdf_y_offset: float | None = None  # Y offset from block top (inches) for PDF text
+    pdf_x_offset: float | None = None  # X offset from block left (inches) for PDF text
+    pdf_line_width_in: float | None = None  # Actual rendered width of this line in PDF (inches); used for horizontal scale correction
     end_para_font_size: float | None = None  # endParaRPr sz in points (controls line height for empty paras)
 
 
@@ -848,7 +851,25 @@ class BridgeImage(BridgeElement):
 
 @dataclass(slots=True)
 class BridgeGroup(BridgeElement):
+    """A group of Bridge elements that move/resize together.
+
+    Two flavors:
+      - **static** — children authored manually; ``generator_script`` is None.
+      - **live** — children authored by ``generator_script`` at runtime.
+
+    Live groups are how the agent supports data-driven structure: a script
+    that runs in the sandbox emits N children based on its ``generator_inputs``.
+    On regenerate, children whose ``custom_properties["user_locked"]`` flag
+    is True survive; the rest are replaced.
+
+    PPTX export flattens both flavors to flat shapes (groups don't round-trip).
+    """
     children: list[BridgeElement] = field(default_factory=list)
+    generator_script: str | None = None
+    generator_inputs: dict[str, Any] = field(default_factory=dict)
+    generator_provenance: dict[str, Any] = field(default_factory=dict)
+    # ^ {last_run_at, last_run_inputs_hash, child_count, source_template_id?,
+    #    last_run_logs?, last_run_error?}
 
 
 @dataclass(slots=True)
@@ -942,6 +963,12 @@ class BridgeSlide:
     background_gradient_angle: float = 0.0
     default_text_color: str | None = None  # resolved hex fallback for runs with no explicit color
     custom_properties: dict[str, Any] = field(default_factory=dict)
+    # Slide-level Python script. Runs in the sandbox with a `studio` client and
+    # the same `script_api` SDK that live-group generators use. Used for slide-
+    # wide logic — hide callouts with empty data, recolor by status, etc.
+    script: str | None = None
+    script_inputs: dict[str, Any] = field(default_factory=dict)
+    script_provenance: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

@@ -32,6 +32,15 @@ tags
 *.out.log
 *.err.log
 
+# Agent runtime artifacts (per-machine; never commit)
+.percy_agent.db
+.percy_agent.db-journal
+.percy_agent.db-shm
+.percy_agent.db-wal
+/.percy_materials/
+.claude/scheduled_tasks.lock
+.claude/scheduled_tasks.json
+
 # Generated visual comparison artifacts at repo root
 /*_bridge.png
 /*_diff.png

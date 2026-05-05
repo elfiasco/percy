@@ -119,10 +119,9 @@ _TABLEAU_COLORS = [
 _FONT_FAMILY_MAP: dict[str, str] = {
     # Sans-serif — prefer actual system font names so matplotlib gets accurate metrics.
     # On Windows these are installed; on other platforms matplotlib falls back gracefully.
-    "inter":               "sans-serif",
-    "montserrat":          "sans-serif",
-    "helveticaneue":       "Helvetica Neue",
-    "helvetica":           "Helvetica",
+    "montserrat":          "Century Gothic",   # geometric sans; Century Gothic is the closest Windows match
+    "helveticaneue":       "Arial",        # Helvetica Neue not on Windows; Arial has near-identical metrics
+    "helvetica":           "Arial",        # same reasoning
     "arialmт":             "Arial",
     "arial":               "Arial",
     "arialmt":             "Arial",
@@ -135,29 +134,73 @@ _FONT_FAMILY_MAP: dict[str, str] = {
     "sourcesans3":         "sans-serif",
     "worksans":            "sans-serif",
     "ptsans":              "sans-serif",
-    "gothambold":          "sans-serif",
-    "gothambook":          "sans-serif",
-    "gotham":              "sans-serif",
+    "arialnova":           "Arial",            # Arial Nova not installed; standard Arial is close
     "myriadpro":           "sans-serif",
-    "franklingothic":      "sans-serif",
-    "gillsans":            "sans-serif",
-    "futura":              "sans-serif",
+    "franklingothic":      "Franklin Gothic Medium",   # available on Windows; much closer metrics than sans-serif
+    "gillsans":            "Gill Sans MT",     # available on Windows
     "sfpro":               "sans-serif",
     "sfprodisplay":        "sans-serif",
     "sfprotext":           "sans-serif",
-    "proximanova":         "sans-serif",
     "brandon":             "sans-serif",
     "avenir":              "sans-serif",
     "archivo":             "sans-serif",
     "archivo-bold":        "sans-serif",
-    "blkfort":             "sans-serif",
-    "blkfortbook":         "sans-serif",
-    "blkfortextrabold":    "sans-serif",
-    "circularstd":         "sans-serif",
-    "circular":            "sans-serif",
+    "blkfort":             "Gill Sans MT",     # BlackRock proprietary humanist sans; Gill Sans MT is the closest on Windows
+    "blkfortbook":         "Gill Sans MT",
+    "blkfortextrabold":    "Gill Sans MT",
+    # Corporate / brand fonts — mapped to closest Windows-native equivalent
+    "lyftpro":             "Gill Sans MT",     # Lyft brand font: humanist sans, Gill Sans MT is closest on Windows
+    "attalecksans":        "Gill Sans MT",     # AT&T brand font: humanist sans
+    "attaleck":            "Gill Sans MT",
+    "salesforcesans":      "Calibri",          # Salesforce brand sans; Calibri has similar proportions
+    "bpsans":              "Calibri",          # BNP Paribas brand sans; Calibri is close
+    "bpsanstf":            "Calibri",
+    "bans":                "Calibri",          # mangled key: bpSans* after normalizer strips "ps"
+    "wellsfargosans":      "Calibri",          # Wells Fargo brand sans
+    "teleneo":             "Segoe UI",         # Deutsche Telekom brand sans; Segoe UI is close
+    "teleicon":            "Segoe UI",
+    "calibre":             "Calibri",          # Klim's Calibre: clean geometric sans, Calibri is very close
+    "citisans":            "Calibri",          # Citigroup brand sans
+    "emprint":             "Calibri",          # HP brand sans; Calibri has similar proportions
+    "itcavantgarde":       "Century Gothic",   # ITC Avant Garde: geometric sans, Century Gothic is closest
+    "avantgarde":          "Century Gothic",
+    "barlow":              "sans-serif",
+    "everydaysans":        "sans-serif",       # IBM brand font variant
+    "centra":              "Calibri",          # Centra No. 2: clean geometric, Calibri is close
+    "fedexsans":           "Calibri",          # FedEx brand sans
+    "ericssonhilda":       "Segoe UI",         # Ericsson brand font
+    "gpcommerce":          "sans-serif",       # Goldman Sachs custom font
+    "siemenssans":         "Calibri",          # Siemens brand sans; Calibri has similar humanist proportions
+    "siemens":             "Calibri",
+    "aptos":               "Calibri",          # Microsoft Office 2024 default font (Calibri successor)
+    "fraunces":            "Georgia",          # Fraunces: optical serif, Georgia is closest on Windows; matches "fraunces72pt" via substring
+    "plusjakartadisplay":  "sans-serif",
+    "proximanova":         "Calibri",          # ProximaNova: humanist geometric sans; Calibri has closest metrics on Windows
+    "proxima":             "Calibri",
+    "bentonsans":          "Gill Sans MT",     # BentonSans: humanist sans (AmexGBT brand font)
+    "benton":              "Gill Sans MT",
+    "univers":             "Arial",            # Univers: grotesque sans (Frutiger); Arial has very similar metrics
+    "dejavusans":          "DejaVu Sans",      # DejaVu Sans embedded in PDFs: use exact same font for perfect metrics
+    # Deutsche Telekom subset-embedded fonts with scrambled names (TeleNeo family)
+    "hbrfpr":              "Segoe UI",
+    "qfrhfc":              "Segoe UI",
+    "bfhcpd":              "Segoe UI",
+    "brfbdr":              "Segoe UI",
+    "cqbqhq":              "Segoe UI",
+    # Geometric sans-serifs — Century Gothic is the closest Windows-native match
+    # for Futura/Gotham/AllianceNo.2 (all share geometric proportions).
+    "allianceno":          "Century Gothic",   # Palantir brand font
+    "alliance":            "Century Gothic",
+    "futura":              "Century Gothic",   # better than generic sans-serif
+    "gotham":              "Century Gothic",   # condensed-ish geometric; CG is closest
+    "foundersgrotesk":     "Century Gothic",
+    "centurygothic":       "Century Gothic",
+    "circularstd":         "Century Gothic",   # CircularSTD is a geometric sans; Century Gothic is closest on Windows
+    "circular":            "Century Gothic",   # MCircularTT (3M brand), CircularBook, etc. — all geometric sans
     "dmsans":              "sans-serif",
     "plusjakartasans":     "sans-serif",
-    "poppins":             "sans-serif",
+    "poppins":             "Century Gothic",   # Poppins: geometric sans; Century Gothic has closest advance widths
+    "dsindigo":            "Calibri",          # DocuSign brand sans; humanist, Calibri is closest
     "raleway":             "sans-serif",
     "oswald":              "sans-serif",
     "publicsans":          "sans-serif",
@@ -167,8 +210,12 @@ _FONT_FAMILY_MAP: dict[str, str] = {
     "titilliumweb":        "sans-serif",
     "urbanist":            "sans-serif",
     "segoeui":             "Segoe UI",
+    "inter":               "Segoe UI",         # Inter: screen-optimized humanist; Segoe UI has near-identical metrics
     "tahoma":              "Tahoma",
     "verdana":             "Verdana",
+    # Condensed/narrow Arial variants — must appear before plain "arial" for specificity
+    "arialnarrow":         "Arial Narrow",     # ArialNarrow is condensed; Arial Narrow is installed on Windows
+    "arialnovacond":       "Arial Narrow",     # ArialNovaCond is condensed version of ArialNova
     # Serif — actual names for better metric matching on Windows/macOS
     "georgia":             "Georgia",
     "timesnewroman":       "Times New Roman",
@@ -190,6 +237,8 @@ _FONT_FAMILY_MAP: dict[str, str] = {
     "firacode":            "monospace",
 }
 
+# Pre-sorted by key length descending so longer/more-specific entries match first.
+_FONT_FAMILY_MAP_BY_LEN = sorted(_FONT_FAMILY_MAP.items(), key=lambda kv: len(kv[0]), reverse=True)
 
 _BOLD_WEIGHT_WORDS = frozenset({"bold", "black", "heavy", "extrabold", "demibold", "semibold"})
 
@@ -230,19 +279,32 @@ def _font_name_implies_bold(font_name: str | None) -> bool:
 
 
 def _normalize_font_family(font_name: str | None) -> str:
-    """Map a PDF/PPTX font name to a matplotlib-available generic family."""
+    """Map a PDF/PPTX font name to a matplotlib-available generic family.
+
+    Two-pass strategy so specific entries (e.g. 'arialnarrow') beat generic
+    ones (e.g. 'arial') even when the suffix-stripped key collapses both:
+      Pass 1 — raw key (spaces/hyphens stripped, no suffix removal): longest
+               matching map key wins, preserving 'narrow'/'cond' distinctions.
+      Pass 2 — suffix-stripped key: catches remaining fonts after weight/style
+               words are removed (e.g. 'CalibriBold' → 'calibri').
+    """
     if not font_name:
         return "sans-serif"
-    # Normalize: lowercase, strip spaces/hyphens/underscores, drop weight suffixes
-    key = font_name.lower()
-    key = key.replace(" ", "").replace("-", "").replace("_", "")
-    # Strip common weight/style suffixes for lookup
+    key_raw = font_name.lower().replace(" ", "").replace("-", "").replace("_", "")
+    # Pass 1: raw key, longest map entry wins (most specific match first).
+    # Only match family_key as substring of key_raw (not reverse) to avoid
+    # "arial" matching "arialnarrow" via the inverse direction.
+    for family_key, generic in _FONT_FAMILY_MAP_BY_LEN:
+        if len(family_key) >= 4 and family_key in key_raw:
+            return generic
+    # Pass 2: strip weight/style suffixes then look up again
+    key = key_raw
     for suffix in ("bold", "italic", "oblique", "regular", "light", "medium",
                    "semibold", "extrabold", "black", "thin", "book", "mt",
                    "ps", "roman", "narrow", "condensed", "expanded"):
         key = key.replace(suffix, "")
-    for family_key, generic in _FONT_FAMILY_MAP.items():
-        if family_key in key or key in family_key:
+    for family_key, generic in _FONT_FAMILY_MAP_BY_LEN:
+        if len(family_key) >= 3 and (family_key in key or (len(key) >= 4 and key in family_key)):
             return generic
     return font_name  # keep original; matplotlib will fall back gracefully
 
@@ -498,6 +560,23 @@ class SlideRenderer:
         if not pdf_font_name:
             return "sans-serif", "normal", "normal", ""
         spec = self._font_map.get(pdf_font_name)
+        # Try expanding abbreviated weight/style suffixes to match canonical names
+        # e.g. "FooFont-Li" → "FooFont-Light", "FooFont-Me" → "FooFont-Medium"
+        if spec is None:
+            _ABBREV_EXPAND = {
+                "-Li": "-Light", "-Th": "-Thin", "-Lt": "-Light",
+                "-Me": "-Medium", "-Md": "-Medium",
+                "-Re": "-Regular",
+                "-Bd": "-Bold", "-Sb": "-SemiBold",
+                "-Bk": "-Black", "-Bl": "-Black",
+                "-It": "-Italic", "-Obl": "-Oblique",
+            }
+            for abbrev, full in _ABBREV_EXPAND.items():
+                if pdf_font_name.endswith(abbrev):
+                    candidate = pdf_font_name[:-len(abbrev)] + full
+                    spec = self._font_map.get(candidate)
+                    if spec is not None:
+                        break
         if spec is not None:
             # When we have an exact registered font file, use the raw family name
             # (it was registered under that name).  When there's no file path,
@@ -508,6 +587,11 @@ class SlideRenderer:
             # mappings even after ToUnicode patching, making 'S' render as 'r', etc.
             # Prefer the system font (rpath="") which always has correct glyph shapes.
             if rpath and _is_system_font_family(spec.family):
+                rpath = ""
+            # If the subset is missing >3 of the 26 lowercase letters, it's too
+            # sparse to render arbitrary text safely (_safe_text_for_font would turn
+            # the absent chars into spaces).  Fall back to a system font instead.
+            if rpath and _has_sparse_ascii_cmap(rpath):
                 rpath = ""
             family = spec.family if rpath else _normalize_font_family(spec.family)
             return family, spec.weight, spec.style, rpath
@@ -804,12 +888,26 @@ class SlideRenderer:
         mr = (_bi.get("right") if _bi.get("right") is not None
               else el.margins.margin_right if el.margins.margin_right is not None
               else 0.1)
+        mb = (_bi.get("bottom") if _bi.get("bottom") is not None
+              else el.margins.margin_bottom if el.margins.margin_bottom is not None
+              else 0.05)
         text_x = p.left + ml
-        text_y = p.top + mt
         max_w = p.width - ml - mr
 
         _tf_scale = el.text_frame.font_scale
         _fs_factor = _tf_scale / 100000.0 if _tf_scale and _tf_scale != 100000 else 1.0
+
+        # Vertical anchor: default top, support middle/center and bottom
+        vanchor = (el.text_frame.vertical_anchor or "top").lower()
+        text_y = p.top + mt
+        if vanchor in ("middle", "center", "ctr"):
+            _text_h = self._measure_paragraphs(el.paragraphs, _fs_factor, max_w=max_w)
+            _avail_h = p.height - mt - mb
+            text_y = p.top + mt + max(0.0, (_avail_h - _text_h) / 2)
+        elif vanchor in ("bottom", "b"):
+            _text_h = self._measure_paragraphs(el.paragraphs, _fs_factor, max_w=max_w)
+            text_y = max(p.top + mt, p.top + p.height - mb - _text_h)
+
         self._draw_paragraphs(ax, el.paragraphs, text_x, text_y, max_w, z,
                               pdf_mode=el.text_frame.word_wrap is False,
                               font_scale=_fs_factor)
@@ -1181,11 +1279,22 @@ class SlideRenderer:
             _sml = _si.get("left", 0.1)
             _smt = _si.get("top", 0.05)
             _smr = _si.get("right", 0.1)
+            _smb = _si.get("bottom", 0.05)
             _stf_scale = el.text_frame.font_scale
             _sfs = _stf_scale / 100000.0 if _stf_scale and _stf_scale != 100000 else 1.0
+            _svanchor = (el.text_frame.vertical_anchor or "top").lower()
+            _stext_y = p.top + _smt
+            _smaxw = p.width - _sml - _smr
+            if _svanchor in ("middle", "center", "ctr"):
+                _sth = self._measure_paragraphs(el.text_content.paragraphs, _sfs, max_w=_smaxw)
+                _savail = p.height - _smt - _smb
+                _stext_y = p.top + _smt + max(0.0, (_savail - _sth) / 2)
+            elif _svanchor in ("bottom", "b"):
+                _sth = self._measure_paragraphs(el.text_content.paragraphs, _sfs, max_w=_smaxw)
+                _stext_y = max(p.top + _smt, p.top + p.height - _smb - _sth)
             self._draw_paragraphs(
                 ax, el.text_content.paragraphs,
-                p.left + _sml, p.top + _smt,
+                p.left + _sml, _stext_y,
                 p.width - _sml - _smr, z,
                 font_scale=_sfs,
             )
@@ -1330,13 +1439,13 @@ class SlideRenderer:
                 # Cell text — prefer paragraph/run data (captures per-run ColorSpec colors)
                 margin = 0.04
                 if cf and cf.paragraphs:
-                    valign = ((cf.alignment.vertical_alignment if cf and cf.alignment else None) or "middle").upper()
+                    valign = ((cf.alignment.vertical_alignment if cf and cf.alignment else None) or "top").upper()
                     if valign in ("BOTTOM", "B"):
                         text_y = cy + actual_h - margin
-                    elif valign in ("TOP", "T"):
+                    elif valign in ("MIDDLE", "CENTER", "M", "C"):
+                        text_y = cy + actual_h / 2
+                    else:  # TOP is default
                         text_y = cy + margin
-                    else:
-                        text_y = cy + actual_h / 4
                     self._draw_paragraphs(
                         ax, cf.paragraphs,
                         cx + margin, text_y,
@@ -1365,25 +1474,30 @@ class SlideRenderer:
                             parse_math=False,
                         )
 
-        # Draw grid lines: outer border + inner cell divisions
-        table_right  = p.left + sum(col_widths[:n_cols])
-        table_bottom = p.top  + sum(row_heights[:n_rows])
-        grid_color = "#AAAAAA"
-        grid_lw    = 0.5
-
-        # Horizontal grid lines (top edge of each row + bottom edge of last row)
-        for ry in row_tops:
-            ax.plot([p.left, table_right], [ry, ry],
+        # Draw grid lines only when cells carry explicit border specifications.
+        # If no cell has borders the table relies on fill-color contrast and
+        # connector lines for visual separation — adding a generic gray grid
+        # introduces artifacts not present in the original.
+        has_cell_borders = any(
+            (cf and cf.borders)
+            for row in (el.cell_formats or [])
+            for cf in (row or [])
+        )
+        if has_cell_borders:
+            table_right  = p.left + sum(col_widths[:n_cols])
+            table_bottom = p.top  + sum(row_heights[:n_rows])
+            grid_color = "#AAAAAA"
+            grid_lw    = 0.5
+            for ry in row_tops:
+                ax.plot([p.left, table_right], [ry, ry],
+                        color=grid_color, linewidth=grid_lw, zorder=z + 0.05)
+            ax.plot([p.left, table_right], [table_bottom, table_bottom],
                     color=grid_color, linewidth=grid_lw, zorder=z + 0.05)
-        ax.plot([p.left, table_right], [table_bottom, table_bottom],
-                color=grid_color, linewidth=grid_lw, zorder=z + 0.05)
-
-        # Vertical grid lines
-        for cx in col_lefts:
-            ax.plot([cx, cx], [p.top, table_bottom],
+            for cx_g in col_lefts:
+                ax.plot([cx_g, cx_g], [p.top, table_bottom],
+                        color=grid_color, linewidth=grid_lw, zorder=z + 0.05)
+            ax.plot([table_right, table_right], [p.top, table_bottom],
                     color=grid_color, linewidth=grid_lw, zorder=z + 0.05)
-        ax.plot([table_right, table_right], [p.top, table_bottom],
-                color=grid_color, linewidth=grid_lw, zorder=z + 0.05)
 
     def _draw_cell_borders(
         self, ax: plt.Axes,
@@ -1638,7 +1752,7 @@ class SlideRenderer:
     def _render_connector(self, ax: plt.Axes, el: BridgeConnector) -> None:
         ep = el.endpoints
         lc = self._c(el.line.color, "#000000")
-        lw = max((el.line.width or 1.0) / 72 * self.dpi * 0.4, 0.5)
+        lw = max((el.line.width or 0.25) / 72 * self.dpi * 0.4, 0.1)
         z  = el.stacking.z_index
 
         head_end = (el.line.head_end or "none").lower()
@@ -1734,6 +1848,43 @@ class SlideRenderer:
     # Text drawing helpers
     # ------------------------------------------------------------------
 
+    def _measure_paragraphs(
+        self, paragraphs: list, font_scale: float = 1.0, max_w: float | None = None
+    ) -> float:
+        """Estimate total height (inches) of a paragraph list without rendering.
+
+        max_w: when provided, estimates wrapped line count via _text_width_in so that
+        bottom/middle anchor calculations are correct for multi-line paragraphs.
+        """
+        import math
+        total = 0.0
+        for para in (paragraphs or []):
+            if not para.runs:
+                total += self._line_height(10)
+                continue
+            base_run = next((r for r in para.runs if not r.is_line_break), None)
+            if base_run is None:
+                total += self._line_height(10)
+                continue
+            fs_pt = (base_run.font_size or 10) * font_scale
+            ls_mult = para.line_spacing if para.line_spacing else 1.2
+            total += (para.space_before or 0) / 72
+            line_h = fs_pt * ls_mult / 72
+            n_lines = 1
+            if max_w and max_w > 0:
+                _rfam, _rwt, _rst, _rpath = self._resolve_font(base_run.font_name)
+                _bold = (base_run.font_bold if base_run.font_bold is not None
+                         else _rwt not in ("normal", "light", "thin", "ultralight"))
+                _ital = base_run.font_italic or (_rst in ("italic", "oblique")) or False
+                _full = "".join(
+                    r.text for r in para.runs if not r.is_line_break and r.text
+                )
+                if _full.strip():
+                    _tw = _text_width_in(_full, fs_pt, _bold, _ital, _rfam, _rpath)
+                    n_lines = max(1, math.ceil(_tw / max_w))
+            total += line_h * n_lines
+        return total
+
     def _draw_paragraphs(
         self, ax: plt.Axes,
         paragraphs: list, x0: float, y0: float,
@@ -1789,7 +1940,8 @@ class SlideRenderer:
                     len({_color(r.font_color, "") for r in content_runs}) > 1 or
                     len({r.font_underline for r in content_runs}) > 1 or
                     len({getattr(r, "strikethrough", None) for r in content_runs}) > 1 or
-                    len({getattr(r, "char_spacing", None) for r in content_runs}) > 1
+                    len({getattr(r, "char_spacing", None) for r in content_runs}) > 1 or
+                    len({r.font_name for r in content_runs}) > 1
                 )
             )
             needs_per_run = has_baseline_shift or has_mixed_style
@@ -1811,9 +1963,19 @@ class SlideRenderer:
             if pdf_mode and pdf_y_off is not None:
                 y = y0 + pdf_y_off
 
-            # Horizontal indent: shift x0 right for indented lines (e.g. bullets)
-            li = getattr(para, "left_indent", None)
-            para_x0 = x0 + li if li else x0
+            # In pdf_mode also use x offset — handles merged blocks where paragraphs
+            # originate from different horizontal columns (e.g. L3Harris title + label).
+            # pdf_x_offset and left_indent are both derived from the same dx value, so
+            # when pdf_x_offset is applied we skip left_indent to avoid doubling the shift.
+            pdf_x_off = getattr(para, "pdf_x_offset", None)
+            _using_pdf_x = pdf_mode and pdf_x_off is not None
+            base_x0 = (x0 + pdf_x_off) if _using_pdf_x else x0
+
+            # Horizontal indent: shift x0 right for indented lines (e.g. bullets).
+            # In pdf_mode, pdf_x_off already captures the full x offset from block left,
+            # so left_indent must not be added again.
+            li = getattr(para, "left_indent", None) if not _using_pdf_x else None
+            para_x0 = base_x0 + li if li else base_x0
             effective_max_w = max_w - li if li else max_w
 
             if needs_per_run:
@@ -1866,7 +2028,18 @@ class SlideRenderer:
                 # In pdf_mode don't line-wrap mixed runs (PDF already broke lines)
                 import matplotlib.font_manager as _fmgr
                 if pdf_mode or eff_wrap <= 0:
-                    cx = para_x0
+                    # For center/right alignment, compute total line width first
+                    if ha in ("center", "right"):
+                        _line_w = sum(
+                            _text_width_in(t[0], t[1], t[4], t[5], t[3], t[7])
+                            for t in _tokens if t[0] != "\n"
+                        )
+                        if ha == "center":
+                            cx = para_x0 + (eff_wrap - _line_w) / 2
+                        else:
+                            cx = para_x0 + eff_wrap - _line_w
+                    else:
+                        cx = para_x0
                     for (tok_text, rfs, rfc, rfn, rbold, rial, shift, rfpath, runderline, rstrike, rcharsp) in _tokens:
                         if tok_text == "\n":
                             y += line_h
@@ -1981,6 +2154,8 @@ class SlideRenderer:
                     y += line_h + (para.space_after or 0) / 72
                     continue
 
+                import matplotlib.font_manager as _fmgr2
+
                 # In PDF mode each para is one rendered line: auto-scale font
                 # size to fit effective_max_w (counters font-substitution width creep).
                 render_fs = fs_pt
@@ -1993,9 +2168,60 @@ class SlideRenderer:
                         render_fs = fs_pt * (eff_w / text_w)
                         line_h = render_fs * ls_mult / 72
 
+                # In pdf_mode: if any run (beyond the first) carries a PDF span
+                # x-origin > 0.05", render each run at its PDF x position to
+                # correct cumulative advance-width drift across multi-run paragraphs.
+                _content_runs = [r for r in para.runs if not r.is_line_break and r.text and not _is_icon_font(r.font_name)]
+                _has_span_x = (
+                    pdf_mode
+                    and len(_content_runs) > 1
+                    and any(
+                        (getattr(r, "pdf_span_x_in", None) or 0) > 0.05
+                        for r in _content_runs[1:]
+                    )
+                )
+                if _has_span_x:
+                    if clip_height is None or y <= y0 + clip_height:
+                        _fs_scale = render_fs / fs_pt if fs_pt else 1.0
+                        for run in _content_runs:
+                            rt = _filter_pua(run.text)
+                            if caps in ("all", "small"):
+                                rt = rt.upper()
+                            if not rt.strip():
+                                continue
+                            sx_in = getattr(run, "pdf_span_x_in", None)
+                            sx = (base_x0 + sx_in) if sx_in is not None else para_x0
+                            rfs  = (run.font_size or fs_pt) * font_scale * _fs_scale
+                            rfc  = self._c(run.font_color, self._default_text_color or "#222222")
+                            _rfam2, _rwt2, _rst2, _rpath2 = self._resolve_font(run.font_name)
+                            rbold = (run.font_bold if run.font_bold is not None
+                                     else _rwt2 not in ("normal", "light", "thin", "ultralight"))
+                            rial  = (run.font_italic if run.font_italic is not None
+                                     else _rst2 in ("italic", "oblique"))
+                            _eff_rpath = _rpath2 or _resolve_font_path(_rfam2, rbold, rial)
+                            kw2: dict = dict(ha="left", va="baseline", clip_on=True,
+                                             zorder=z + 0.1, parse_math=False, color=rfc)
+                            if _rpath2:
+                                kw2["fontproperties"] = _fmgr2.FontProperties(
+                                    fname=_rpath2, size=rfs,
+                                    weight="bold" if rbold else "normal",
+                                    style="italic" if rial else "normal",
+                                )
+                            else:
+                                kw2["fontsize"] = rfs
+                                kw2["fontweight"] = "bold" if rbold else "normal"
+                                kw2["fontstyle"] = "italic" if rial else "normal"
+                                try:
+                                    kw2["fontfamily"] = _rfam2
+                                except Exception:
+                                    pass
+                            ax.text(sx, y, _safe_text_for_font(rt, _eff_rpath), **kw2)
+                    y += line_h
+                    y += (para.space_after or 0) / 72
+                    continue
+
                 wrapped = [full_text] if pdf_mode else _wrap_text(full_text, fs_pt, eff_w, bold, ital, fname)
 
-                import matplotlib.font_manager as _fmgr2
                 for line in wrapped:
                     if clip_height is not None and y > y0 + clip_height:
                         break
@@ -2164,6 +2390,22 @@ def _resolve_font_path(family: str, bold: bool, italic: bool) -> str:
 
 
 @functools.lru_cache(maxsize=512)
+def _has_sparse_ascii_cmap(font_path: str) -> bool:
+    """Return True if the font subset is missing more than 3 lowercase letters.
+
+    PDF subsets only embed glyphs used in that document/weight, so a subset for
+    a weight that happens not to use 'b' or 'j' will drop those chars to spaces
+    via _safe_text_for_font when a different text block uses the same family name.
+    Falling back to a system font is safer than rendering with holes.
+    """
+    supported = _font_codepoints(font_path)
+    if not supported:
+        return False
+    missing_lower = sum(1 for c in range(ord('a'), ord('z') + 1) if c not in supported)
+    return missing_lower > 3
+
+
+@functools.lru_cache(maxsize=512)
 def _font_codepoints(font_path: str) -> frozenset:
     """Return frozenset of codepoints supported by the font (cached per path)."""
     if not font_path:
@@ -2185,6 +2427,8 @@ def _font_codepoints(font_path: str) -> frozenset:
 # may be absent from extracted PDF font subsets.  Applied before the cmap
 # check so the result remains readable rather than turning into spaces.
 _UNICODE_FALLBACKS: dict[int, str] = {
+    0x0027: chr(0x2019),   # APOSTROPHE → try curly right-single-quote (PDF subsets often encode only the curly form)
+    0x0022: chr(0x201D),   # QUOTATION MARK → try curly right-double-quote
     0x02BC: chr(0x27),   # MODIFIER LETTER APOSTROPHE
     0x2018: chr(0x27),   # LEFT SINGLE QUOTATION MARK
     0x2019: chr(0x27),   # RIGHT SINGLE QUOTATION MARK
@@ -2224,7 +2468,13 @@ _UNICODE_FALLBACKS: dict[int, str] = {
 
 
 def _safe_text_for_font(text: str, font_path: str) -> str:
-    """Replace characters not in font's cmap with ASCII equivalents or space."""
+    """Replace characters not in font's cmap with ASCII equivalents or space.
+
+    Non-PUA characters not in the primary font are passed through unchanged so
+    matplotlib can render them via its font fallback mechanism (e.g., DejaVu Sans
+    for arrows/symbols). Only PUA glyphs (icon-font private use areas) are dropped
+    to space, since those have no meaningful fallback.
+    """
     if not font_path:
         return text
     supported = _font_codepoints(font_path)
@@ -2240,8 +2490,12 @@ def _safe_text_for_font(text: str, font_path: str) -> str:
             if sub is not None:
                 # Only use the substitute if the substitute chars are supported
                 result.append("".join(s for s in sub if ord(s) in supported) or " ")
-            else:
+            elif 0xE000 <= cp <= 0xF8FF or cp >= 0xF0000:
+                # PUA glyph not in this font — drop to space (no meaningful fallback)
                 result.append(" ")
+            else:
+                # Non-PUA character: keep as-is and let matplotlib use fallback fonts
+                result.append(c)
     return "".join(result)
 
 
@@ -2413,6 +2667,46 @@ def render_slide(slide: BridgeSlide, dpi: int = 150) -> plt.Figure:
     return SlideRenderer(dpi=dpi).render_slide(slide)
 
 
+def render_bridge_slides(
+    doc: PercyDocument,
+    out_dir: str | Path,
+    slide_numbers: list[int] | None = None,
+    dpi: int = 150,
+) -> list[Path]:
+    """Render specific slides (or all if ``slide_numbers`` is None) to PNGs.
+
+    Used by every studio endpoint that mutates a slide's content and wants to
+    refresh just that slide's thumbnail without rebuilding the whole deck.
+
+    Returns a list of paths to the saved PNGs.
+    """
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    renderer = SlideRenderer(dpi=dpi, theme=doc.theme_colors or None)
+    if doc.embedded_fonts:
+        _register_embedded_fonts(doc.embedded_fonts)
+
+    target_set = set(slide_numbers) if slide_numbers is not None else None
+
+    import warnings as _warnings
+    paths: list[Path] = []
+    for slide in doc.slides:
+        if target_set is not None and slide.slide_number not in target_set:
+            continue
+        fig = renderer.render_slide(slide)
+        dest = out / f"slide-{slide.slide_number:03d}.png"
+        with _warnings.catch_warnings():
+            _warnings.filterwarnings(
+                "ignore",
+                message=r"Glyph \d+.*missing from font",
+                category=UserWarning,
+            )
+            fig.savefig(dest, dpi=dpi, bbox_inches="tight", pad_inches=0)
+        fig.clf()
+        paths.append(dest)
+    return paths
+
+
 def render_document(
     doc: PercyDocument,
     out_dir: str | Path,
@@ -2429,11 +2723,21 @@ def render_document(
     # Register any embedded fonts with matplotlib
     if doc.embedded_fonts:
         _register_embedded_fonts(doc.embedded_fonts)
+    import warnings as _warnings
     paths: list[Path] = []
     for slide in doc.slides:
         fig = renderer.render_slide(slide)
         dest = out / f"slide-{slide.slide_number:03d}.png"
-        fig.savefig(dest, dpi=dpi, bbox_inches="tight", pad_inches=0)
+        # Suppress "Glyph X missing from font" for all-caps PDF font subsets —
+        # these fire from matplotlib's internal 'lp' line-height probe, not from
+        # actual rendered text (which is already filtered by _safe_text_for_font).
+        with _warnings.catch_warnings():
+            _warnings.filterwarnings(
+                "ignore",
+                message=r"Glyph \d+.*missing from font",
+                category=UserWarning,
+            )
+            fig.savefig(dest, dpi=dpi, bbox_inches="tight", pad_inches=0)
         fig.clf()
         paths.append(dest)
     return paths

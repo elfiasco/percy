@@ -1070,7 +1070,11 @@ _LINE_TYPES = frozenset({
 def _chart_type(chart_type: str | None) -> Any:
     if not chart_type:
         return None
-    return getattr(XL_CHART_TYPE, chart_type, None)
+    # XL_CHART_TYPE enum names are uppercase (e.g. COLUMN_CLUSTERED). The agent
+    # builders produce lowercase ('column_clustered') matching the chart-data
+    # PATCH API; the onboarded form may be either. Try both.
+    return (getattr(XL_CHART_TYPE, chart_type, None)
+            or getattr(XL_CHART_TYPE, chart_type.upper(), None))
 
 
 def _build_chart_data(element: BridgeChart) -> Any:
