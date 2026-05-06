@@ -341,6 +341,8 @@ import CommentsPanel from "./CommentsPanel"
 import PresentationCheckModal from "./PresentationCheckModal"
 import { setupNativeRenderers } from "./renderers"
 import { useToast } from "../Toaster"
+import { useStudioCollab } from "../../lib/collab/useStudioCollab"
+import { useAuth } from "../../auth/AuthContext"
 
 setupNativeRenderers()
 
@@ -352,6 +354,7 @@ interface Props {
 
 export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const toast = useToast()
+  const { user: authUser } = useAuth()
   const [selectedSlide, setSelectedSlide]     = useState(1)
   const [selectedElement, setSelectedElement] = useState<StudioElement | null>(null)
   const [slideWidthIn, setSlideWidthIn]       = useState(13.333)
@@ -367,6 +370,18 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
     if (v === "false") return false
     return null
   })
+
+  // Yjs collaboration room for the current slide. Uses BroadcastChannel
+  // transport by default — converges between two studio tabs in the same
+  // browser without any server. Swap transport to "websocket" / "liveblocks"
+  // when we deploy a relay.
+  const { remoteUserCount } = useStudioCollab(
+    doc.doc_id,
+    selectedSlide,
+    authUser ? { id: authUser.id, name: authUser.display_name } : null,
+    /* enabled */ true,
+    /* transport */ "broadcast",
+  )
   const [connectModalElementId, setConnectModalElementId] = useState<string | null>(null)
   const [docConnects, setDocConnects] = useState<{ slide_n: number; element_id: string }[]>([])
   const [findReplaceOpen, setFindReplaceOpen] = useState(false)
@@ -1491,6 +1506,14 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
             <span title="Bound elements with Python connects" className={docConnects.length > 0 ? "text-champagne" : ""}>
               {docConnects.length} {docConnects.length === 1 ? "connect" : "connects"}
             </span>
+            {remoteUserCount > 0 && (
+              <>
+                <span className="text-edge">·</span>
+                <span title="Other people editing this slide" className="text-verdigris">
+                  ● {remoteUserCount} {remoteUserCount === 1 ? "collaborator" : "collaborators"}
+                </span>
+              </>
+            )}
             <span className="text-edge">·</span>
             <span>{slideWidthIn.toFixed(2)} × {slideHeightIn.toFixed(2)} in</span>
             <span className="text-edge">·</span>

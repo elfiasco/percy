@@ -1,11 +1,15 @@
 import { useEffect, useState, useCallback, useRef } from "react"
 import { useEditor, EditorContent, generateHTML } from "@tiptap/react"
-import type { Editor } from "@tiptap/core"
+import Collaboration from "@tiptap/extension-collaboration"
+import CollaborationCursor from "@tiptap/extension-collaboration-cursor"
 import type { ParagraphsTextContent } from "../../../lib/studioTypes"
 import { fetchElementText, updateElementText, fetchElementStyle } from "../../../lib/studioApi"
 import { paragraphsToTiptap, tiptapToParagraphs } from "../../../lib/bridge/tiptapAdapter"
 import { bridgeExtensions } from "../../../lib/bridge/extensions"
 import { setActiveTiptapEditor } from "../../../lib/bridge/activeEditor"
+import { getCollabContext } from "../../../lib/collab/collabContext"
+import { hydrateElementText } from "../../../lib/collab/bridgeYjsSync"
+import { getAwareness } from "../../../lib/collab/awareness"
 import { registerRenderer, type NativeRendererProps } from "./RendererRegistry"
 
 /**
@@ -145,20 +149,42 @@ function RichTextEditor({
 }) {
   const initialJSON = useRef(paragraphsToTiptap(initialContent)).current
   const lastSavedJSON = useRef<string>("")
+  const collab = getCollabContext()
+
+  // Build the extension list. In collab mode we drop the StarterKit's history
+  // (Collaboration provides its own) and add the Collaboration + cursor
+  // extensions hooked to this element's shared Y.XmlFragment.
+  const extensions = (() => {
+    if (collab?.enabled && collab.room) {
+      // Hydrate from Bridge if the fragment is empty (first opener wins);
+      // otherwise the existing shared content is the source of truth.
+      const fragment = hydrateElementText(collab.room, elementId, initialContent)
+      const aware = getAwareness(collab.room)
+      return [
+        ...bridgeExtensions(),
+        Collaboration.configure({ fragment }),
+        CollaborationCursor.configure({
+          provider: { awareness: aware } as unknown as Parameters<typeof CollaborationCursor.configure>[0]["provider"],
+          user: { name: collab.user.name, color: collab.user.color },
+        }),
+      ]
+    }
+    return bridgeExtensions()
+  })()
 
   const editor = useEditor({
-    extensions: bridgeExtensions(),
-    content: initialJSON,
+    extensions,
+    // In collab mode the content comes from the shared fragment; passing
+    // `content` would clobber it on every mount.
+    content: collab?.enabled ? undefined : initialJSON,
     autofocus: "end",
     editorProps: {
       attributes: {
         class: "tiptap-bridge-editor",
-        // Ensure the editor doesn't intercept selection-deselect on the canvas
-        // when the user is mid-edit.
         spellcheck: "true",
       },
     },
-  }, [])
+  }, [collab?.enabled])
 
   // Track previous JSON to skip no-op saves
   useEffect(() => {
