@@ -362,10 +362,10 @@ export default function ElementOverlay({
       }}
       onDoubleClick={(e) => {
         e.stopPropagation()
-        // BridgeText now renders natively as contentEditable inside the
-        // element body — its own click handler drives edit mode, no need
-        // for the legacy textarea overlay.
-        if (element.type === "BridgeText") return
+        // BridgeText and BridgeShape both render natively now — their own
+        // click handlers drive edit mode (Tiptap), so we skip the legacy
+        // textarea path entirely for those types.
+        if (element.type === "BridgeText" || element.type === "BridgeShape") return
         if (!isLocked && onInlineEdit && TEXT_TYPES.has(element.type)) {
           onInlineEdit(element.id)
         }

@@ -125,6 +125,38 @@
   }
   /* Tiptap renders inline color via element style — wire to our CSS var. */
   .ProseMirror .collaboration-cursor__caret[style*="--cursor-color"] {}
+
+  /* Default table styling for BridgeTable Tiptap renderer.
+     Element-style fills/borders override these per-element, but at minimum
+     a table reads as a table. */
+  .bridge-table {
+    border-collapse: collapse;
+    width: 100%;
+    table-layout: fixed;
+  }
+  .bridge-table td, .bridge-table th {
+    border: 1px solid var(--edge);
+    padding: 4px 6px;
+    vertical-align: top;
+    overflow: hidden;
+    word-break: break-word;
+  }
+  .bridge-table th { font-weight: 600; }
+  /* Selected cell highlight when editing */
+  .ProseMirror .selectedCell {
+    background: rgba(100, 162, 152, 0.15);
+  }
+  /* Column resize handle */
+  .ProseMirror .column-resize-handle {
+    position: absolute;
+    right: -2px;
+    top: 0;
+    bottom: 0;
+    width: 4px;
+    background: rgb(var(--champagne) / 0.6);
+    pointer-events: none;
+  }
+  .ProseMirror.resize-cursor { cursor: col-resize; }
 }
 
 @layer utilities {
