@@ -1,4 +1,5 @@
 import * as Y from "yjs"
+import { WebsocketProvider } from "y-websocket"
 
 /**
  * Yjs collaboration layer for Percy.
@@ -37,7 +38,17 @@ import * as Y from "yjs"
  * code never needs to know.
  */
 
-export type Transport = "local" | "broadcast"
+export type Transport = "local" | "broadcast" | "websocket"
+
+/**
+ * Where the websocket transport connects. Configurable at runtime via
+ * VITE_YJS_WS_URL; in production this would point at our Hocuspocus or
+ * y-websocket relay (or a Liveblocks-style provider URL).
+ *
+ * If unset, the websocket transport silently falls back to broadcast so the
+ * studio stays usable in local dev.
+ */
+const YJS_WS_URL = (typeof import.meta !== "undefined" && (import.meta as { env?: Record<string, string> }).env?.VITE_YJS_WS_URL) || ""
 
 export interface YjsRoom {
   doc:           Y.Doc
@@ -75,13 +86,22 @@ export function getYjsRoom(
   const meta      = doc.getMap<unknown>("meta")
 
   let cleanup: (() => void) | null = null
-  if (transport === "broadcast" && typeof BroadcastChannel !== "undefined") {
+  let effectiveTransport = transport
+  if (transport === "websocket") {
+    if (YJS_WS_URL) {
+      cleanup = wireWebsocket(YJS_WS_URL, roomId, doc)
+    } else {
+      // Server URL not configured — fall back so dev works.
+      effectiveTransport = "broadcast"
+    }
+  }
+  if (effectiveTransport === "broadcast" && typeof BroadcastChannel !== "undefined") {
     cleanup = wireBroadcastChannel(roomId, doc)
   }
 
   const room: YjsRoom = {
     doc,
-    transport,
+    transport: effectiveTransport,
     roomId,
     elements,
     meta,
@@ -114,6 +134,22 @@ export function getYjsRoom(
 // Encodes outgoing Yjs updates as Uint8Array and posts them on the channel.
 // Other tabs decode + apply. On open, exchange state vectors so freshly-opened
 // tabs catch up to whatever's already in flight.
+
+// ── WebSocket transport (cross-machine) ─────────────────────────────────────
+//
+// y-websocket is the simplest production transport. Stand up the server
+// with `npx y-websocket-server --port 1234` for dev, or run Hocuspocus
+// (drop-in replacement with persistence + auth) in production.
+//
+// VITE_YJS_WS_URL controls where this connects: e.g. "ws://localhost:1234".
+
+function wireWebsocket(wsUrl: string, roomId: string, doc: Y.Doc): () => void {
+  const provider = new WebsocketProvider(wsUrl, roomId, doc, { connect: true })
+  return () => {
+    provider.disconnect()
+    provider.destroy()
+  }
+}
 
 function wireBroadcastChannel(roomId: string, doc: Y.Doc): () => void {
   const channel = new BroadcastChannel(`percy-yjs:${roomId}`)

@@ -94,6 +94,37 @@
   }
 
   .hairline { border-color: var(--edge); }
+
+  /* ── Tiptap collaboration cursors ─────────────────────────────────────────
+     Each remote user gets a 2px-wide vertical cursor in their assigned color
+     (set on the cursor element via inline style by CollaborationCursor) plus
+     a small name pill above it. The pill appears for 2s on every move so it's
+     not always-visible noise. */
+  .ProseMirror .collaboration-cursor__caret {
+    border-left:  2px solid var(--cursor-color, #888);
+    border-right: 2px solid var(--cursor-color, #888);
+    margin-left:  -1px;
+    margin-right: -1px;
+    pointer-events: none;
+    position: relative;
+    word-break: normal;
+  }
+  .ProseMirror .collaboration-cursor__label {
+    position: absolute;
+    top: -1.4em;
+    left: -2px;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+    padding: 2px 4px;
+    color: white;
+    background: var(--cursor-color, #888);
+    user-select: none;
+    white-space: nowrap;
+    letter-spacing: 0.04em;
+  }
+  /* Tiptap renders inline color via element style — wire to our CSS var. */
+  .ProseMirror .collaboration-cursor__caret[style*="--cursor-color"] {}
 }
 
 @layer utilities {
