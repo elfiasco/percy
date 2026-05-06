@@ -151,6 +151,11 @@ class PercyCloudDemoStack(Stack):
 
         # ------------------------------------------------------------------
         # App Runner VPC connector
+        # AppRunner VpcConnectors are immutable post-creation. Any tag change
+        # via stack-level Tags.of(self).add() forces CloudFormation to
+        # replace the resource, and the replacement fails because the same
+        # {SGs, subnets} combo can't coexist on two connectors. Strip stack-
+        # level tags from this resource so it stays put across deploys.
         # ------------------------------------------------------------------
         vpc_connector = apprunner.CfnVpcConnector(
             self,
@@ -161,6 +166,8 @@ class PercyCloudDemoStack(Stack):
             security_groups=[apprunner_sg.security_group_id],
             vpc_connector_name="percy-cloud-vpc-connector",
         )
+        for stack_tag in ("App", "Env", "ManagedBy", "CostCenter"):
+            Tags.of(vpc_connector).remove(stack_tag)
 
         # ------------------------------------------------------------------
         # S3 artifacts bucket
