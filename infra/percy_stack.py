@@ -627,11 +627,16 @@ class PercyCloudDemoStack(Stack):
                                 value=f"{db.secret.secret_arn}:password::",
                             ),
                         ],
-                        # The container reads DATABASE_URL — provide it via
-                        # start command rather than redeclaring all the parts.
-                        # App Runner doesn't allow env interpolation, so the
-                        # entrypoint composes it. See server/collab/server.js.
-                        start_command="sh -c 'export DATABASE_URL=postgres://$DB_USER:$DB_PASSWORD@$DB_HOST:$DB_PORT/$DB_NAME; node server.js'",
+                        # No start_command override — use the Dockerfile's CMD
+                        # ("node server.js"). The earlier attempt at composing
+                        # DATABASE_URL via shell substitution hit AppRunner's
+                        # start_command quoting limits and the container died
+                        # immediately. server.js falls back to filesystem
+                        # snapshots when DATABASE_URL is unset, which is fine
+                        # for v1 — wire Postgres back in once we either (a)
+                        # compose DATABASE_URL inside server.js from the
+                        # individual DB_* vars or (b) write a small entrypoint
+                        # script in the image that does it cleanly.
                     ),
                 ),
             ),
