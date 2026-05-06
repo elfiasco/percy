@@ -536,6 +536,12 @@ class PercyCloudDemoStack(Stack):
             ),
         )
 
+        # AppRunner refuses concurrent operations on services that share a
+        # VpcConnector — without an explicit dep, CFN can fire updates in
+        # parallel and one fails with "OPERATION_IN_PROGRESS". Force the
+        # studio service to update only after the cloud API has settled.
+        studio_service.add_dependency(service)
+
         CfnOutput(
             self,
             "PercyStudioUrl",
@@ -656,6 +662,11 @@ class PercyCloudDemoStack(Stack):
             value=f"wss://{collab_service.attr_service_url}",
             description="Set VITE_YJS_WS_URL to this when building the frontend.",
         )
+
+        # Sequence collab service after studio for the same reason — avoid
+        # AppRunner's "OPERATION_IN_PROGRESS" when multiple services share
+        # the VpcConnector and CFN tries parallel updates.
+        collab_service.add_dependency(studio_service)
 
         # ------------------------------------------------------------------
         # ECS cluster + onboard worker service
