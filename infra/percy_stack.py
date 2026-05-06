@@ -804,13 +804,17 @@ class PercyCloudDemoStack(Stack):
         # One $200 budget with thresholds at 10/20/30/.../100% gives us alerts
         # at $20, $40, $60, $80, $100, $120, $140, $160, $180, $200 of GROSS
         # spend — every $20 step exactly as requested.
+        # Budget direct EMAIL subscriber is pinned to the FIRST alert email
+        # only. AWS Budgets refuses in-place subscriber-list mutation on an
+        # existing budget ("same name but different internalId"), so we keep
+        # the on-budget subscriber identical to what was originally deployed.
+        # All additional addresses receive alerts via the SNS topic, which
+        # fans out to every entry in alert_emails. Same end-result, no churn.
+        primary_budget_email = alert_emails[0]
         gross_budget_subscribers = [
-            *[
-                budgets.CfnBudget.SubscriberProperty(
-                    subscription_type="EMAIL", address=email,
-                )
-                for email in alert_emails
-            ],
+            budgets.CfnBudget.SubscriberProperty(
+                subscription_type="EMAIL", address=primary_budget_email,
+            ),
             budgets.CfnBudget.SubscriberProperty(
                 subscription_type="SNS", address=alerts_topic.topic_arn,
             ),
@@ -1057,6 +1061,15 @@ class PercyCloudDemoStack(Stack):
                 "PARAM_NAME": "/percy/spend/last-alert",
                 "STEP_USD": "20",
                 "STUDIO_URL": f"https://36kuepamyi.us-east-1.awsapprunner.com",
+                # ── Kill switch — pause services + stop RDS at $200 gross ──
+                "KILL_USD": "200",
+                "KILL_PARAM": "/percy/spend/kill-state",
+                "APPRUNNER_SERVICE_ARNS": ",".join([
+                    service.attr_service_arn,
+                    studio_service.attr_service_arn,
+                    collab_service.attr_service_arn,
+                ]),
+                "RDS_INSTANCE_IDS": db.instance_identifier,
             },
             log_retention=logs.RetentionDays.ONE_MONTH,
         )
@@ -1070,6 +1083,24 @@ class PercyCloudDemoStack(Stack):
             effect=iam.Effect.ALLOW,
             actions=["ssm:GetParameter", "ssm:PutParameter"],
             resources=[f"arn:aws:ssm:{self.region}:{self.account}:parameter/percy/spend/*"],
+        ))
+        # Kill-switch IAM — pause App Runner services (scoped), stop RDS instance
+        spend_monitor_lambda.add_to_role_policy(iam.PolicyStatement(
+            effect=iam.Effect.ALLOW,
+            actions=["apprunner:PauseService", "apprunner:ResumeService", "apprunner:DescribeService"],
+            resources=[
+                service.attr_service_arn,
+                studio_service.attr_service_arn,
+                collab_service.attr_service_arn,
+            ],
+        ))
+        spend_monitor_lambda.add_to_role_policy(iam.PolicyStatement(
+            effect=iam.Effect.ALLOW,
+            actions=["rds:StopDBInstance", "rds:StartDBInstance", "rds:DescribeDBInstances"],
+            # rds:StopDBInstance/StartDBInstance need both the db and any cluster ARN; scope to the db.
+            resources=[
+                f"arn:aws:rds:{self.region}:{self.account}:db:{db.instance_identifier}",
+            ],
         ))
         alerts_topic.grant_publish(spend_monitor_lambda)
 

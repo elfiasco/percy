@@ -299,6 +299,67 @@ _MIGRATIONS_COMMON = [
     """
     CREATE INDEX IF NOT EXISTS idx_studio_templates_owner ON studio_templates(owner_id);
     """,
+    """
+    CREATE TABLE IF NOT EXISTS studio_team_envs (
+        id                  TEXT PRIMARY KEY,
+        org_id              TEXT NOT NULL,
+        name                TEXT NOT NULL,
+        requirements        TEXT NOT NULL DEFAULT '',
+        env_vars            TEXT NOT NULL DEFAULT '{}',
+        package_index_url   TEXT,
+        package_index_user  TEXT,
+        package_index_token TEXT,
+        venv_path           TEXT,
+        status              TEXT NOT NULL DEFAULT 'unbuilt',
+        last_build_log      TEXT,
+        last_built_at       INTEGER,
+        created_by          TEXT NOT NULL,
+        created_at          INTEGER NOT NULL,
+        updated_at          INTEGER NOT NULL
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_team_envs_org ON studio_team_envs(org_id);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS studio_refresh_jobs (
+        id              TEXT PRIMARY KEY,
+        project_id      TEXT NOT NULL,
+        env_id          TEXT,
+        schedule        TEXT NOT NULL,
+        entry_point     TEXT NOT NULL DEFAULT 'refresh.py',
+        script_source   TEXT NOT NULL DEFAULT '',
+        extra_env       TEXT NOT NULL DEFAULT '{}',
+        enabled         INTEGER NOT NULL DEFAULT 1,
+        last_run_at     INTEGER,
+        next_run_at     INTEGER,
+        last_status     TEXT,
+        last_error      TEXT,
+        created_at      INTEGER NOT NULL,
+        updated_at      INTEGER NOT NULL
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_refresh_jobs_project ON studio_refresh_jobs(project_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_refresh_jobs_next    ON studio_refresh_jobs(next_run_at);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS studio_refresh_runs (
+        id           TEXT PRIMARY KEY,
+        job_id       TEXT NOT NULL,
+        project_id   TEXT NOT NULL,
+        started_at   INTEGER NOT NULL,
+        finished_at  INTEGER,
+        status       TEXT NOT NULL,
+        log          TEXT,
+        build_id     TEXT
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_refresh_runs_job ON studio_refresh_runs(job_id);
+    """,
 ]
 
 _PG_COLUMN_ADDS: list[str] = []  # No legacy schema reconciliation needed — studio_* tables are isolated
@@ -886,3 +947,205 @@ def update_template(template_id: str, **fields: Any) -> dict[str, Any] | None:
 def delete_template(template_id: str) -> None:
     with get_conn() as conn:
         conn.execute("DELETE FROM studio_templates WHERE id = ?", (template_id,))
+
+
+# ── Team environments ───────────────────────────────────────────────────────
+
+def _decode_team_env(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    try: row["env_vars"] = _json.loads(row["env_vars"]) if row.get("env_vars") else {}
+    except Exception: row["env_vars"] = {}
+    # Mask the token from any read; callers that need it use get_team_env_secret.
+    if row.get("package_index_token"):
+        row["package_index_token_set"] = True
+    row.pop("package_index_token", None)
+    return row
+
+
+def create_team_env(org_id: str, *, name: str, created_by: str) -> dict[str, Any]:
+    eid = _gen_id("env")
+    now = _now()
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO studio_team_envs (id, org_id, name, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (eid, org_id, name, created_by, now, now),
+        )
+    return get_team_env(eid) or {}
+
+
+def get_team_env(env_id: str) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM studio_team_envs WHERE id = ?", (env_id,)).fetchone()
+    return _decode_team_env(row)
+
+
+def get_team_env_secret(env_id: str) -> dict[str, Any] | None:
+    """Read includes the package_index_token. Use only inside the build worker."""
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM studio_team_envs WHERE id = ?", (env_id,)).fetchone()
+    if not row: return None
+    try: row["env_vars"] = _json.loads(row["env_vars"]) if row.get("env_vars") else {}
+    except Exception: row["env_vars"] = {}
+    return row
+
+
+def list_org_team_envs(org_id: str) -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM studio_team_envs WHERE org_id = ? ORDER BY updated_at DESC",
+            (org_id,),
+        ).fetchall()
+    return [d for d in (_decode_team_env(r) for r in rows) if d]
+
+
+def update_team_env(env_id: str, **fields: Any) -> dict[str, Any] | None:
+    if not fields:
+        return get_team_env(env_id)
+    if "env_vars" in fields and not isinstance(fields["env_vars"], str):
+        fields["env_vars"] = _json.dumps(fields["env_vars"])
+    fields["updated_at"] = _now()
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    with get_conn() as conn:
+        conn.execute(f"UPDATE studio_team_envs SET {cols} WHERE id = ?", (*fields.values(), env_id))
+    return get_team_env(env_id)
+
+
+def delete_team_env(env_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM studio_team_envs WHERE id = ?", (env_id,))
+
+
+# ── Refresh jobs ─────────────────────────────────────────────────────────────
+
+_SCHEDULE_INTERVALS = {
+    "hourly":  3600,
+    "daily":   86400,
+    "weekly":  604800,
+    "monthly": 2592000,  # 30 days, close enough for v1
+}
+
+
+def _next_run_for(schedule: str, *, after: int | None = None) -> int | None:
+    if schedule in (None, "", "on_demand"):
+        return None
+    base = after if after is not None else _now()
+    interval = _SCHEDULE_INTERVALS.get(schedule)
+    if interval is None:
+        return None
+    return base + interval
+
+
+def _decode_refresh_job(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row: return None
+    try: row["extra_env"] = _json.loads(row["extra_env"]) if row.get("extra_env") else {}
+    except Exception: row["extra_env"] = {}
+    row["enabled"] = bool(row.get("enabled"))
+    return row
+
+
+def create_refresh_job(project_id: str, *, schedule: str, env_id: str | None = None,
+                       entry_point: str = "refresh.py", script_source: str = "",
+                       extra_env: dict | None = None) -> dict[str, Any]:
+    jid = _gen_id("job")
+    now = _now()
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO studio_refresh_jobs (id, project_id, env_id, schedule, entry_point, script_source, extra_env, enabled, next_run_at, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)",
+            (jid, project_id, env_id, schedule, entry_point, script_source,
+             _json.dumps(extra_env or {}), _next_run_for(schedule), now, now),
+        )
+    return get_refresh_job(jid) or {}
+
+
+def get_refresh_job(job_id: str) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM studio_refresh_jobs WHERE id = ?", (job_id,)).fetchone()
+    return _decode_refresh_job(row)
+
+
+def get_project_refresh_job(project_id: str) -> dict[str, Any] | None:
+    """A project has at most one refresh job in v1."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM studio_refresh_jobs WHERE project_id = ? ORDER BY created_at DESC LIMIT 1",
+            (project_id,),
+        ).fetchone()
+    return _decode_refresh_job(row)
+
+
+def update_refresh_job(job_id: str, **fields: Any) -> dict[str, Any] | None:
+    if not fields:
+        return get_refresh_job(job_id)
+    if "extra_env" in fields and not isinstance(fields["extra_env"], str):
+        fields["extra_env"] = _json.dumps(fields["extra_env"])
+    if "enabled" in fields:
+        fields["enabled"] = 1 if fields["enabled"] else 0
+    if "schedule" in fields:
+        fields["next_run_at"] = _next_run_for(fields["schedule"])
+    fields["updated_at"] = _now()
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    with get_conn() as conn:
+        conn.execute(f"UPDATE studio_refresh_jobs SET {cols} WHERE id = ?", (*fields.values(), job_id))
+    return get_refresh_job(job_id)
+
+
+def delete_refresh_job(job_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM studio_refresh_jobs WHERE id = ?", (job_id,))
+
+
+def list_due_refresh_jobs(now: int | None = None) -> list[dict[str, Any]]:
+    cutoff = now if now is not None else _now()
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM studio_refresh_jobs WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?",
+            (cutoff,),
+        ).fetchall()
+    return [d for d in (_decode_refresh_job(r) for r in rows) if d]
+
+
+def mark_refresh_job_ran(job_id: str, *, status: str, error: str | None = None) -> None:
+    job = get_refresh_job(job_id)
+    if not job: return
+    next_run = _next_run_for(job["schedule"])
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE studio_refresh_jobs SET last_run_at = ?, last_status = ?, last_error = ?, next_run_at = ?, updated_at = ? WHERE id = ?",
+            (_now(), status, error, next_run, _now(), job_id),
+        )
+
+
+# ── Refresh runs ─────────────────────────────────────────────────────────────
+
+def create_refresh_run(job_id: str, project_id: str) -> dict[str, Any]:
+    rid = _gen_id("run")
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO studio_refresh_runs (id, job_id, project_id, started_at, status) VALUES (?, ?, ?, ?, 'running')",
+            (rid, job_id, project_id, _now()),
+        )
+    return get_refresh_run(rid) or {}
+
+
+def get_refresh_run(run_id: str) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM studio_refresh_runs WHERE id = ?", (run_id,)).fetchone()
+    return row
+
+
+def update_refresh_run(run_id: str, **fields: Any) -> None:
+    if not fields: return
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    with get_conn() as conn:
+        conn.execute(f"UPDATE studio_refresh_runs SET {cols} WHERE id = ?", (*fields.values(), run_id))
+
+
+def list_project_refresh_runs(project_id: str, *, limit: int = 25) -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM studio_refresh_runs WHERE project_id = ? ORDER BY started_at DESC LIMIT ?",
+            (project_id, limit),
+        ).fetchall()
+    return [r for r in rows if r]

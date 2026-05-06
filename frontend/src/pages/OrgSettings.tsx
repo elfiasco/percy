@@ -6,6 +6,7 @@ import {
 } from "../lib/authApi"
 import { useAuth } from "../auth/AuthContext"
 import { useToast, useDialog } from "../components/Toaster"
+import TeamEnvsPanel from "../components/TeamEnvsPanel"
 
 interface Props {
   org: Org
@@ -34,7 +35,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 export default function OrgSettings({ org, onClose }: Props) {
   const { user, refresh: refreshAuth } = useAuth()
-  const [tab, setTab] = useState<"members" | "invites" | "general">("general")
+  const [tab, setTab] = useState<"members" | "invites" | "general" | "envs">("general")
   const [orgName, setOrgName] = useState(org.name)
   const [savingName, setSavingName] = useState(false)
   const [members, setMembers] = useState<Member[]>([])
@@ -120,10 +121,13 @@ export default function OrgSettings({ org, onClose }: Props) {
           <button onClick={onClose} className="text-muted hover:text-slate-200 text-lg w-7 h-7 rounded hover:bg-white/10">×</button>
         </div>
         <div className="flex border-b border-edge px-3">
-          {(["general", "members", "invites"] as const).map((t) => (
+          {(["general", "members", "invites", "envs"] as const).map((t) => (
             <button key={t} onClick={() => setTab(t)}
               className={`px-3 py-2 text-xs capitalize ${tab === t ? "text-slate-200 border-b-2 border-accent" : "text-muted hover:text-slate-300"}`}>
-              {t === "general" ? "General" : t === "members" ? `Members · ${members.length}` : `Invites · ${invites.length}`}
+              {t === "general" ? "General"
+                : t === "members" ? `Members · ${members.length}`
+                : t === "invites" ? `Invites · ${invites.length}`
+                : "Environments"}
             </button>
           ))}
         </div>
@@ -257,6 +261,12 @@ export default function OrgSettings({ org, onClose }: Props) {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {tab === "envs" && (
+            <div className="h-full">
+              <TeamEnvsPanel orgId={org.id} isAdmin={isAdmin} />
             </div>
           )}
         </div>

@@ -70,10 +70,22 @@ app.add_middleware(
 # ── Auth + persistence (users, orgs, projects) ────────────────────────────────
 from app.backend import auth as _auth_mod, auth_db as _auth_db_mod  # noqa: E402
 from app.backend import workspace_api as _workspace_api  # noqa: E402
+from app.backend import team_envs_api as _team_envs_api  # noqa: E402
 _auth_db_mod.init_db()
 app.add_middleware(_auth_mod.AuthMiddleware)
 app.include_router(_auth_mod.router)
 app.include_router(_workspace_api.router)
+app.include_router(_team_envs_api.router)
+
+
+@app.on_event("startup")
+def _start_refresh_scheduler():
+    _team_envs_api.start_scheduler()
+
+
+@app.on_event("shutdown")
+def _stop_refresh_scheduler():
+    _team_envs_api.stop_scheduler()
 
 
 # ── Audit middleware (records every mutation on /api/docs/* and /api/agent/*) ──

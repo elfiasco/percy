@@ -74,3 +74,4 @@ percy_app.db-wal
 /outreach/tableau/
 /outreach/.rendercache/
 /outreach/.percy_workspace_history.json
+spec/

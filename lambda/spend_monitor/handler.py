@@ -42,6 +42,10 @@ log.setLevel(logging.INFO)
 
 PARAM_NAME = os.environ.get("PARAM_NAME", "/percy/spend/last-alert")
 STEP_USD = int(os.environ.get("STEP_USD", "20"))
+KILL_USD = int(os.environ.get("KILL_USD", "200"))
+KILL_PARAM = os.environ.get("KILL_PARAM", "/percy/spend/kill-state")
+APPRUNNER_SERVICE_ARNS = [s.strip() for s in os.environ.get("APPRUNNER_SERVICE_ARNS", "").split(",") if s.strip()]
+RDS_INSTANCE_IDS = [s.strip() for s in os.environ.get("RDS_INSTANCE_IDS", "").split(",") if s.strip()]
 
 
 def _gross_mtd_usd(ce_client) -> tuple[float, dict[str, float]]:
@@ -129,6 +133,106 @@ def _format_message(*, total: float, prev_threshold: int, new_threshold: int,
     return subject, "\n".join(lines)
 
 
+def _execute_kill(*, region: str, sns_client, topic_arn: str,
+                   total: float, by_service: dict[str, float]) -> dict:
+    """Pause every App Runner service + stop every RDS instance.
+
+    Reversible from the AWS console. App Runner pause preserves config and
+    container image; resume returns service to RUNNING. RDS stop pauses
+    instance-hour billing for up to 7 days, then RDS auto-restarts it.
+    Storage and NAT/VPC endpoint costs continue accruing at a much lower rate
+    (~$3/day) so this is a hard brake but not a complete spend stop.
+    """
+    apprunner = boto3.client("apprunner", region_name=region)
+    rds = boto3.client("rds", region_name=region)
+
+    paused: list[str] = []
+    pause_errors: list[str] = []
+    for arn in APPRUNNER_SERVICE_ARNS:
+        try:
+            apprunner.pause_service(ServiceArn=arn)
+            paused.append(arn.split("/")[-2] if "/" in arn else arn)
+            log.info("paused App Runner service %s", arn)
+        except apprunner.exceptions.InvalidStateException as exc:
+            log.info("App Runner %s already paused/transitioning: %s", arn, exc)
+            paused.append(f"{arn.split('/')[-2]} (already paused)")
+        except Exception as exc:
+            log.error("failed to pause App Runner %s: %s", arn, exc)
+            pause_errors.append(f"{arn}: {exc}")
+
+    stopped: list[str] = []
+    stop_errors: list[str] = []
+    for db_id in RDS_INSTANCE_IDS:
+        try:
+            rds.stop_db_instance(DBInstanceIdentifier=db_id)
+            stopped.append(db_id)
+            log.info("stopped RDS instance %s", db_id)
+        except rds.exceptions.InvalidDBInstanceStateFault as exc:
+            log.info("RDS %s already stopped/transitioning: %s", db_id, exc)
+            stopped.append(f"{db_id} (already stopped)")
+        except Exception as exc:
+            log.error("failed to stop RDS %s: %s", db_id, exc)
+            stop_errors.append(f"{db_id}: {exc}")
+
+    subject = f"[Percy] KILL SWITCH FIRED - gross ${total:.2f} crossed ${KILL_USD}"
+    paused_lines = [f"  - {n}" for n in paused] if paused else ["  (none configured)"]
+    stopped_lines = [f"  - {n}" for n in stopped] if stopped else ["  (none configured)"]
+    body_lines = [
+        f"AWS gross MTD spend hit ${total:.2f}, crossing the ${KILL_USD} kill threshold.",
+        "",
+        "App Runner services PAUSED:",
+        *paused_lines,
+        "",
+        "RDS instances STOPPED:",
+        *stopped_lines,
+    ]
+    if pause_errors or stop_errors:
+        body_lines += ["", "Errors:", *(f"  - {e}" for e in pause_errors + stop_errors)]
+    body_lines += [
+        "",
+        "Top services this month:",
+    ]
+    for svc, amt in sorted(by_service.items(), key=lambda x: -x[1])[:6]:
+        if amt > 0.01:
+            body_lines.append(f"  ${amt:>7.2f}  {svc}")
+    body_lines += [
+        "",
+        "To restore: AWS console → App Runner → Resume each service. RDS → Start.",
+        "Or run: aws apprunner resume-service --service-arn <ARN>",
+        "        aws rds start-db-instance --db-instance-identifier <ID>",
+        "",
+        f"Note: NAT gateway / VPC endpoints / storage continue accruing ~$3-4/day.",
+        "Edit KILL_USD env var on percy-spend-monitor-dev to raise the threshold.",
+    ]
+    sns_client.publish(TopicArn=topic_arn, Subject=subject, Message="\n".join(body_lines))
+
+    return {
+        "paused_services": paused, "stopped_dbs": stopped,
+        "pause_errors": pause_errors, "stop_errors": stop_errors,
+    }
+
+
+def _read_kill_state(ssm_client) -> dict:
+    try:
+        r = ssm_client.get_parameter(Name=KILL_PARAM)
+        return json.loads(r["Parameter"]["Value"])
+    except ssm_client.exceptions.ParameterNotFound:
+        return {"month": "", "fired": False}
+    except Exception as exc:
+        log.warning("could not read kill state: %s", exc)
+        return {"month": "", "fired": False}
+
+
+def _write_kill_state(ssm_client, month: str, fired: bool) -> None:
+    ssm_client.put_parameter(
+        Name=KILL_PARAM,
+        Value=json.dumps({"month": month, "fired": fired}),
+        Type="String",
+        Overwrite=True,
+        Tier="Standard",
+    )
+
+
 def lambda_handler(event, context):
     region = os.environ.get("AWS_REGION", "us-east-1")
     topic_arn = os.environ.get("ALERTS_TOPIC_ARN")
@@ -175,10 +279,27 @@ def lambda_handler(event, context):
 
     _write_state(ssm, current_month, new_threshold)
 
+    # Kill switch — fire once per calendar month if gross >= KILL_USD.
+    kill_result = None
+    if total >= KILL_USD:
+        kill_state = _read_kill_state(ssm)
+        already_fired_this_month = (
+            kill_state.get("month") == current_month and kill_state.get("fired")
+        )
+        if not already_fired_this_month:
+            log.warning("KILL THRESHOLD CROSSED — total=$%.2f killing services", total)
+            kill_result = _execute_kill(
+                region=region, sns_client=sns, topic_arn=topic_arn,
+                total=total, by_service=by_service,
+            )
+            _write_kill_state(ssm, current_month, True)
+
     return {
         "ok": True, "alerted": True,
         "gross_mtd_usd": round(total, 4),
         "prev_threshold_usd": prev_threshold,
         "new_threshold_usd": new_threshold,
         "alerted_boundaries": alerted_thresholds,
+        "kill_fired": kill_result is not None,
+        "kill_result": kill_result,
     }

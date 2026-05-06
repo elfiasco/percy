@@ -356,3 +356,111 @@ export async function detachProjectFromTemplate(templateId: string, projectId: s
 export async function extractTemplateBrand(templateId: string): Promise<Template> {
   return jfetch(`/api/templates/${templateId}/extract`, { method: "POST" })
 }
+
+
+// ── Team environments + refresh jobs ────────────────────────────────────────
+
+export type TeamEnvStatus = "unbuilt" | "building" | "ready" | "failed"
+
+export interface TeamEnv {
+  id: string
+  org_id: string
+  name: string
+  requirements: string
+  env_vars: Record<string, string>
+  package_index_url?: string | null
+  package_index_user?: string | null
+  package_index_token_set?: boolean
+  venv_path?: string | null
+  status: TeamEnvStatus
+  last_build_log?: string | null
+  last_built_at?: number | null
+  created_at: number
+  updated_at: number
+}
+
+export async function listTeamEnvs(orgId: string): Promise<{ envs: TeamEnv[] }> {
+  return jfetch(`/api/orgs/${orgId}/team-envs`)
+}
+
+export async function createTeamEnv(orgId: string, name: string): Promise<TeamEnv> {
+  return jfetch(`/api/team-envs`, { method: "POST", body: JSON.stringify({ org_id: orgId, name }) })
+}
+
+export async function getTeamEnv(envId: string): Promise<TeamEnv> {
+  return jfetch(`/api/team-envs/${envId}`)
+}
+
+export async function updateTeamEnv(envId: string, fields: Partial<TeamEnv> & { package_index_token?: string }): Promise<TeamEnv> {
+  return jfetch(`/api/team-envs/${envId}`, { method: "PATCH", body: JSON.stringify(fields) })
+}
+
+export async function deleteTeamEnv(envId: string): Promise<void> {
+  await jfetch(`/api/team-envs/${envId}`, { method: "DELETE" })
+}
+
+export async function buildTeamEnv(envId: string): Promise<TeamEnv> {
+  return jfetch(`/api/team-envs/${envId}/build`, { method: "POST" })
+}
+
+
+export type RefreshSchedule = "on_demand" | "hourly" | "daily" | "weekly" | "monthly"
+
+export interface RefreshJob {
+  id: string
+  project_id: string
+  env_id: string | null
+  schedule: RefreshSchedule
+  entry_point: string
+  script_source: string
+  extra_env: Record<string, string>
+  enabled: boolean
+  last_run_at: number | null
+  next_run_at: number | null
+  last_status: "success" | "failed" | null
+  last_error: string | null
+  created_at: number
+  updated_at: number
+}
+
+export interface RefreshRun {
+  id: string
+  job_id: string
+  project_id: string
+  started_at: number
+  finished_at: number | null
+  status: "running" | "success" | "failed"
+  log: string | null
+  build_id: string | null
+}
+
+export async function getProjectRefreshJob(projectId: string): Promise<{ job: RefreshJob | null }> {
+  return jfetch(`/api/projects/${projectId}/refresh-job`)
+}
+
+export async function createRefreshJob(opts: {
+  project_id: string
+  schedule: RefreshSchedule
+  env_id?: string | null
+  entry_point?: string
+  script_source?: string
+  extra_env?: Record<string, string>
+}): Promise<RefreshJob> {
+  return jfetch(`/api/refresh-jobs`, { method: "POST", body: JSON.stringify(opts) })
+}
+
+export async function updateRefreshJob(jobId: string, fields: Partial<RefreshJob>): Promise<RefreshJob> {
+  return jfetch(`/api/refresh-jobs/${jobId}`, { method: "PATCH", body: JSON.stringify(fields) })
+}
+
+export async function deleteRefreshJob(jobId: string): Promise<void> {
+  await jfetch(`/api/refresh-jobs/${jobId}`, { method: "DELETE" })
+}
+
+export async function runRefreshJobNow(jobId: string): Promise<{ status: string; run_id?: string; error?: string }> {
+  return jfetch(`/api/refresh-jobs/${jobId}/run`, { method: "POST" })
+}
+
+export async function listProjectRefreshRuns(projectId: string): Promise<{ runs: RefreshRun[] }> {
+  return jfetch(`/api/projects/${projectId}/refresh-runs`)
+}

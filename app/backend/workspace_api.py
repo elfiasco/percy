@@ -249,11 +249,11 @@ def trigger_build(request: Request, project_id: str, req: TriggerBuildRequest):
     if not valid_formats:
         raise HTTPException(status_code=400, detail=f"No supported formats requested. Pick from: {list(_BUILD_FORMATS)}")
 
-    if not project.get("doc_source"):
-        raise HTTPException(status_code=400, detail="Project has no source file; upload a .pptx first")
-
     # Lazy import host helpers
     from app.backend import main as _backend_main  # type: ignore
+
+    if not project.get("doc_source") and not project.get("doc_id"):
+        raise HTTPException(status_code=400, detail="Project has no source file or doc; upload a .pptx or open the studio first")
 
     # 1) Create the build row
     build = auth_db.create_build(
@@ -271,10 +271,29 @@ def trigger_build(request: Request, project_id: str, req: TriggerBuildRequest):
         # Onboard / fetch doc_id
         doc_id = project.get("doc_id")
         if not doc_id or doc_id not in _backend_main._docs:
-            result = _backend_main.onboard(_backend_main.OnboardRequest(path=str(project["doc_source"])))
-            doc_id = result.get("doc_id") if isinstance(result, dict) else getattr(result, "doc_id", None)
-            if not doc_id:
-                raise RuntimeError("Onboarding failed: no doc_id")
+            src = project.get("doc_source")
+            if src:
+                result = _backend_main.onboard(_backend_main.OnboardRequest(path=str(src)))
+                doc_id = result.get("doc_id") if isinstance(result, dict) else getattr(result, "doc_id", None)
+                if not doc_id:
+                    raise RuntimeError("Onboarding failed: no doc_id")
+            else:
+                # Blank project — mint a fresh empty doc using the project's saved canvas.
+                from app.backend.main import (  # type: ignore
+                    CreateBlankDocRequest as _CreateBlankDocRequest,
+                    create_blank_doc as _create_blank_doc,
+                )
+                meta = project.get("custom_properties") or {}
+                canvas = (meta.get("blank_canvas") if isinstance(meta, dict) else None) or {}
+                try:
+                    width  = float(canvas.get("width_in"))  if canvas.get("width_in")  is not None else 13.333
+                    height = float(canvas.get("height_in")) if canvas.get("height_in") is not None else 7.5
+                except (TypeError, ValueError):
+                    width, height = 13.333, 7.5
+                result = _create_blank_doc(_CreateBlankDocRequest(
+                    width_in=width, height_in=height, name=project["name"],
+                ))
+                doc_id = result["doc_id"]
             auth_db.update_project(project_id, doc_id=doc_id)
 
         outputs_dir = Path("uploads") / "builds" / build["id"]
@@ -283,6 +302,20 @@ def trigger_build(request: Request, project_id: str, req: TriggerBuildRequest):
 
         d = _backend_main._require(doc_id)
         doc = d["doc"]
+
+        # Render fresh slide PNGs into the build output dir when the formats
+        # that need them are requested (png_zip / html). For freshly-minted
+        # blank docs the in-memory bridge_paths is empty, so we always render
+        # if there's no existing snapshot.
+        bridge_paths: list[str] = list(d.get("bridge_paths") or [])
+        if ("png_zip" in valid_formats or "html" in valid_formats) and (
+            not bridge_paths or any(not Path(p).exists() for p in bridge_paths)
+        ):
+            try:
+                from percy.diagnostics.render_png import render_bridge_slides as _render
+                bridge_paths = [str(p) for p in _render(doc, outputs_dir / "_slides")]
+            except Exception as e:
+                log.warning("on-demand PNG render failed: %s", e)
 
         # Always rebuild the .pptx as the canonical artifact (other exports come from it)
         from percy.diagnostics.rebuild import rebuild_pptx as _rebuild_pptx
@@ -318,7 +351,6 @@ def trigger_build(request: Request, project_id: str, req: TriggerBuildRequest):
         if "png_zip" in valid_formats:
             try:
                 import zipfile as _zipfile
-                bridge_paths = d.get("bridge_paths") or []
                 zip_path = outputs_dir / f"{project['name'].replace(' ', '_')}-png.zip"
                 with _zipfile.ZipFile(zip_path, "w", _zipfile.ZIP_DEFLATED) as zf:
                     for i, p in enumerate(bridge_paths, start=1):
@@ -334,7 +366,7 @@ def trigger_build(request: Request, project_id: str, req: TriggerBuildRequest):
                 html_path = outputs_dir / f"{project['name'].replace(' ', '_')}.html"
                 slides_html = "\n".join(
                     f'<div class="slide"><img src="slide-{i:03d}.png" alt="Slide {i}"></div>'
-                    for i, _ in enumerate(d.get("bridge_paths") or [], start=1)
+                    for i, _ in enumerate(bridge_paths, start=1)
                 )
                 html_path.write_text(
                     "<!doctype html><html><head><meta charset='utf-8'><title>" + project["name"] + "</title>"

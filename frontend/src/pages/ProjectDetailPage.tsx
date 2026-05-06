@@ -5,6 +5,7 @@ import { setProjectSchedule, type Project } from "../lib/authApi"
 import Logo from "../components/Logo"
 import ThemeToggle from "../theme/ThemeToggle"
 import BuildTimeline from "../components/BuildTimeline"
+import RefreshJobPanel from "../components/RefreshJobPanel"
 
 const SCHEDULE_OPTIONS: Array<{ value: "on_demand" | "daily" | "weekly" | "monthly" | null; label: string; help: string }> = [
   { value: null,         label: "None",      help: "Manual builds only." },
@@ -147,6 +148,9 @@ export default function ProjectDetailPage() {
                   Cron-driven auto-refresh ships in phase 2. Until then, this is a label.
                 </div>
               </section>
+
+              {/* ── Refresh job (custom Python) ──────────────────────── */}
+              <RefreshJobPanel projectId={project.id} orgId={project.org_id} />
 
               {/* ── Build timeline ───────────────────────────────────── */}
               <section>
