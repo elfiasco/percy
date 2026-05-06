@@ -31,14 +31,14 @@ class PercyCloudDemoStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # ── Cost-allocation tags applied to every resource in this stack ──
-        # Activate these in Billing console → Cost allocation tags before they
-        # show up in cost reports. Once active, every dollar in a Cost Report
-        # can be filtered by App / Env / Component.
-        Tags.of(self).add("App", "Percy")
-        Tags.of(self).add("Env", "dev")
-        Tags.of(self).add("ManagedBy", "CDK")
-        Tags.of(self).add("CostCenter", "engineering")
+        # ── Cost-allocation tags ──
+        # We deliberately DON'T use Tags.of(self).add() here, because
+        # propagating tags to AppRunner Service / VpcConnector / etc. forces
+        # CloudFormation to replace those resources and the replacement fails
+        # with "name already exists". We tag individual safe resources below
+        # (S3, RDS, IAM roles, log groups) — those are the meaningful
+        # cost-attribution targets anyway. AppRunner already lets us split
+        # cost by service-name in Cost Reports without explicit tags.
 
         # ── Alerts SNS topic (declared early so studio service env can ref it) ──
         alerts_topic = sns.Topic(self, "PercyAlerts", display_name="Percy Dev Alerts")
@@ -166,8 +166,7 @@ class PercyCloudDemoStack(Stack):
             security_groups=[apprunner_sg.security_group_id],
             vpc_connector_name="percy-cloud-vpc-connector",
         )
-        for stack_tag in ("App", "Env", "ManagedBy", "CostCenter"):
-            Tags.of(vpc_connector).remove(stack_tag)
+        # No Tags.of() at stack level → nothing to remove here.
 
         # ------------------------------------------------------------------
         # S3 artifacts bucket
@@ -404,9 +403,10 @@ class PercyCloudDemoStack(Stack):
                 f"arn:aws:bedrock:*:{self.account}:inference-profile/anthropic.claude-*",
             ],
         ))
-        # Cost-allocation tag — every dollar through this role is attributable
-        # to the studio service.
+        # Cost-allocation tags — IAM roles are safe to tag (no replacement).
+        Tags.of(studio_instance_role).add("App", "Percy")
         Tags.of(studio_instance_role).add("Component", "studio")
+        Tags.of(studio_instance_role).add("Env", "dev")
 
         studio_service = apprunner.CfnService(
             self,
