@@ -184,6 +184,15 @@ class CallRecord:
 def record_call(rec: CallRecord, db_path: Path | None = None) -> str:
     cid = uuid.uuid4().hex
     cost = rec.cost()
+
+    # ── Real-time $20 boundary alert ──
+    # Compute the rolling 7-day account-wide LLM spend BEFORE this call and
+    # AFTER. If we crossed a $20 boundary, fire an SNS alert. This is
+    # complementary to AWS Budgets (which is delayed 24-48h and only tracks
+    # AWS infra cost — not LLM provider spend).
+    spend_before = _account_spend_last_n_days(7, db_path=db_path)
+    spend_after = spend_before + cost
+
     with _ensured(db_path) as c:
         c.execute(
             """
@@ -197,7 +206,56 @@ def record_call(rec: CallRecord, db_path: Path | None = None) -> str:
              rec.source, rec.input_tokens, rec.output_tokens, cost, rec.latency_ms,
              rec.action_id, 1 if rec.cached else 0, time.time()),
         )
+
+    # Fire alert if a $20 boundary was crossed (best-effort, swallows errors).
+    try:
+        before_band = int(spend_before // 20)
+        after_band = int(spend_after // 20)
+        if after_band > before_band:
+            _emit_spend_alert(boundary_usd=after_band * 20,
+                                spend_total=spend_after,
+                                latest_call=rec, latest_cost=cost)
+    except Exception as exc:
+        log.warning("cost_tracker: spend-alert emission failed: %s", exc)
+
     return cid
+
+
+def _account_spend_last_n_days(days: int, db_path: Path | None = None) -> float:
+    cutoff = time.time() - days * 86400
+    with _ensured(db_path) as c:
+        row = c.execute(
+            "SELECT COALESCE(SUM(cost_usd), 0) FROM llm_calls WHERE created_at >= ?",
+            (cutoff,),
+        ).fetchone()
+    return float(row[0] or 0.0)
+
+
+def _emit_spend_alert(*, boundary_usd: int, spend_total: float,
+                       latest_call: CallRecord, latest_cost: float) -> None:
+    """Publish to PERCY_ALERTS_TOPIC_ARN via SNS, log otherwise."""
+    msg = (
+        f"Percy LLM spend crossed ${boundary_usd}. "
+        f"Rolling 7-day total: ${spend_total:.2f}. "
+        f"Latest call: provider={latest_call.provider}, model={latest_call.model}, "
+        f"source={latest_call.source}, cost=${latest_cost:.4f}, "
+        f"org={latest_call.org_id}, user={latest_call.user_id}."
+    )
+    log.warning("SPEND_ALERT: %s", msg)
+
+    topic_arn = os.environ.get("PERCY_ALERTS_TOPIC_ARN")
+    if not topic_arn:
+        return
+    try:
+        import boto3
+        sns = boto3.client("sns", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+        sns.publish(
+            TopicArn=topic_arn,
+            Subject=f"[Percy] LLM spend crossed ${boundary_usd}",
+            Message=msg,
+        )
+    except Exception as exc:
+        log.warning("cost_tracker: SNS publish failed: %s", exc)
 
 
 # ── Aggregations ────────────────────────────────────────────────────────────

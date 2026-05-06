@@ -7520,6 +7520,80 @@ def update_element_text(doc_id: str, n: int, element_id: str, req: TextUpdateReq
     return _serialize_element_text_content(el, el.element_type)
 
 
+# ── Create a blank PercyDocument (for new-from-scratch projects) ─────────────
+
+class CreateBlankDocRequest(BaseModel):
+    """Mint a fresh, empty PercyDocument with the given canvas size.
+
+    Used when a user picks "scratch" in the new-project modal — there's no
+    .pptx to onboard, so we build one from nothing. One empty slide;
+    width/height in inches; subsequent edits in the studio mutate from there.
+
+    Standard sizes (defaults match PowerPoint / Google Slides):
+       16:9  → 13.333 × 7.5
+       4:3   → 10 × 7.5
+       Letter→ 11 × 8.5
+       A4    → 11.69 × 8.27
+       Square→ 10 × 10  (great for social)
+    """
+    width_in:  float = 13.333
+    height_in: float = 7.5
+    name:      str | None = None
+
+@app.post("/api/docs/create-blank")
+def create_blank_doc(req: CreateBlankDocRequest):
+    """Register a brand-new empty PercyDocument and return its doc_id."""
+    if req.width_in <= 0 or req.height_in <= 0:
+        raise HTTPException(400, "Canvas dimensions must be positive")
+    if req.width_in > 50 or req.height_in > 50:
+        raise HTTPException(400, "Canvas dimensions too large (max 50 inches each)")
+
+    doc_id = str(uuid.uuid4())[:8]
+    name   = (req.name or "Untitled").strip() or "Untitled"
+
+    doc = PercyDocument(
+        slides   = [BridgeSlide(slide_number=1, width=req.width_in, height=req.height_in)],
+        metadata = PresentationMetadata(
+            slide_width  = req.width_in,
+            slide_height = req.height_in,
+            slide_count  = 1,
+        ),
+    )
+
+    bridge_dir = _CACHE_DIR / doc_id / "bridge"
+    bridge_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        bridge_paths = _render_bridge(doc, bridge_dir)
+    except Exception as exc:
+        log.warning("create-blank: bridge render partial: %s", exc)
+        bridge_paths = []
+
+    _docs[doc_id] = {
+        "doc":           doc,
+        "source_path":   None,
+        "source_format": None,
+        "name":          name,
+        "slide_count":   1,
+        "bridge_paths":  bridge_paths,
+        "orig_paths":    [],
+        "rebuilt_path":  None,
+        "rebuilt_paths": [],
+        "diagnostics":   [],
+        "grades":        {},
+        "pixel_scores":  {},
+        "pdf_onboard_mode": None,
+    }
+    log.info("create-blank: doc_id=%s  size=%.3fx%.3f in  name=%s",
+             doc_id, req.width_in, req.height_in, name)
+    return {
+        "doc_id":       doc_id,
+        "name":         name,
+        "slide_count":  1,
+        "width_in":     req.width_in,
+        "height_in":    req.height_in,
+    }
+
+
 # ── Bulk text update (for collab server save-back) ───────────────────────────
 
 class BulkTextUpdateRequest(BaseModel):

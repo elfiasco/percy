@@ -4,6 +4,11 @@ WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --silent
 COPY frontend/ ./
+# VITE_YJS_WS_URL is baked into the bundle at build time. Set via Docker
+# build args (or leave empty for single-user mode + BroadcastChannel demo).
+#   docker build --build-arg VITE_YJS_WS_URL=wss://collab.percy.app ...
+ARG VITE_YJS_WS_URL=""
+ENV VITE_YJS_WS_URL=${VITE_YJS_WS_URL}
 RUN npm run build
 
 # Stage 2: Python workspace API

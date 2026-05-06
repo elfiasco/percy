@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from aws_cdk import BundlingOptions, CfnOutput, Duration, RemovalPolicy, Stack
+from aws_cdk import BundlingOptions, CfnOutput, Duration, RemovalPolicy, Stack, Tags
 from aws_cdk import aws_applicationautoscaling as autoscaling
 from aws_cdk import aws_apprunner as apprunner
 from aws_cdk import aws_budgets as budgets
@@ -30,6 +30,20 @@ DEFAULT_ALERT_EMAIL = "bensteel12@verizon.net"
 class PercyCloudDemoStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
+
+        # ── Cost-allocation tags applied to every resource in this stack ──
+        # Activate these in Billing console → Cost allocation tags before they
+        # show up in cost reports. Once active, every dollar in a Cost Report
+        # can be filtered by App / Env / Component.
+        Tags.of(self).add("App", "Percy")
+        Tags.of(self).add("Env", "dev")
+        Tags.of(self).add("ManagedBy", "CDK")
+        Tags.of(self).add("CostCenter", "engineering")
+
+        # ── Alerts SNS topic (declared early so studio service env can ref it) ──
+        alerts_topic = sns.Topic(self, "PercyAlerts", display_name="Percy Dev Alerts")
+        alert_email = self.node.try_get_context("alert_email") or DEFAULT_ALERT_EMAIL
+        alerts_topic.add_subscription(sns_subs.EmailSubscription(alert_email))
 
         repo_root = Path(__file__).resolve().parents[1]
 
@@ -363,6 +377,30 @@ class PercyCloudDemoStack(Stack):
         google_oauth_secret.grant_read(studio_instance_role)
         db.secret.grant_read(studio_instance_role)
 
+        # ── Bedrock access for Claude foundation models (enterprise LLM path) ──
+        # Grant invoke + streaming on Anthropic FMs. Cross-region inference
+        # profiles auto-route across us-east-1/us-west-2/us-east-2 — list those.
+        studio_instance_role.add_to_policy(iam.PolicyStatement(
+            effect=iam.Effect.ALLOW,
+            actions=[
+                "bedrock:InvokeModel",
+                "bedrock:InvokeModelWithResponseStream",
+                "bedrock:Converse",
+                "bedrock:ConverseStream",
+                "bedrock:ApplyGuardrail",
+            ],
+            resources=[
+                # Direct foundation-model invocations
+                f"arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
+                # Cross-region inference profiles (Sonnet 4.5+ defaults to these)
+                f"arn:aws:bedrock:*:{self.account}:inference-profile/us.anthropic.claude-*",
+                f"arn:aws:bedrock:*:{self.account}:inference-profile/anthropic.claude-*",
+            ],
+        ))
+        # Cost-allocation tag — every dollar through this role is attributable
+        # to the studio service.
+        Tags.of(studio_instance_role).add("Component", "studio")
+
         studio_service = apprunner.CfnService(
             self,
             "PercyStudio",
@@ -410,6 +448,32 @@ class PercyCloudDemoStack(Stack):
                             apprunner.CfnService.KeyValuePairProperty(
                                 name="GOOGLE_OAUTH_REDIRECT_URI",
                                 value="https://percy-studio-dev.us-east-1.awsapprunner.com/api/auth/google/callback",
+                            ),
+                            # ── Bedrock LLM provider (enterprise mode) ─────
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="PERCY_LLM_PROVIDER", value="bedrock",
+                            ),
+                            # Default model — switch via this env var without redeploying
+                            # code. Override per-call by setting body.context.model.
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="PERCY_BEDROCK_MODEL",
+                                # Cross-region inference profile (preferred) — auto-fails
+                                # over across us-east-1 / us-west-2 / us-east-2.
+                                value="us.anthropic.claude-sonnet-4-6-20250101-v1:0",
+                            ),
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="PERCY_BEDROCK_REGION", value=self.region,
+                            ),
+                            # ── Per-org budget defaults (enforced in app) ──
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="PERCY_DEFAULT_DAILY_USD_BUDGET", value="5",
+                            ),
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="PERCY_DEFAULT_MONTHLY_USD_BUDGET", value="50",
+                            ),
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="PERCY_ALERTS_TOPIC_ARN",
+                                value=alerts_topic.topic_arn,
                             ),
                         ],
                         runtime_environment_secrets=[
@@ -481,6 +545,109 @@ class PercyCloudDemoStack(Stack):
             "PercyGoogleOAuthSecretName",
             value="percy/google-oauth",
             description="Manually populate with JSON {client_id, client_secret} from Google Cloud Console.",
+        )
+
+        # ------------------------------------------------------------------
+        # Percy Collab — Yjs WebSocket relay for studio multiplayer
+        # ------------------------------------------------------------------
+        collab_image = ecr_assets.DockerImageAsset(
+            self,
+            "PercyCollabImage",
+            directory=str(repo_root / "server" / "collab"),
+            file="Dockerfile",
+        )
+
+        collab_instance_role = iam.Role(
+            self,
+            "PercyCollabInstanceRole",
+            assumed_by=iam.ServicePrincipal("tasks.apprunner.amazonaws.com"),
+        )
+        # Same secrets the studio uses — collab forwards user JWTs and reads
+        # the same DB. JWT_SECRET must match exactly so connections authenticate.
+        jwt_secret.grant_read(collab_instance_role)
+        db.secret.grant_read(collab_instance_role)
+        Tags.of(collab_instance_role).add("CostCenter", "percy-collab")
+
+        collab_service = apprunner.CfnService(
+            self,
+            "PercyCollab",
+            service_name="percy-collab-dev",
+            source_configuration=apprunner.CfnService.SourceConfigurationProperty(
+                authentication_configuration=apprunner.CfnService.AuthenticationConfigurationProperty(
+                    access_role_arn=access_role.role_arn,
+                ),
+                auto_deployments_enabled=False,
+                image_repository=apprunner.CfnService.ImageRepositoryProperty(
+                    image_identifier=collab_image.image_uri,
+                    image_repository_type="ECR",
+                    image_configuration=apprunner.CfnService.ImageConfigurationProperty(
+                        port="1234",
+                        runtime_environment_variables=[
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="NODE_ENV", value="production"
+                            ),
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="PERCY_API_BASE",
+                                value=f"https://{studio_service.attr_service_url}",
+                            ),
+                            # DB for snapshot persistence (same Postgres as the studio)
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="DB_HOST", value=db.db_instance_endpoint_address
+                            ),
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="DB_PORT", value=db.db_instance_endpoint_port
+                            ),
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="DB_NAME", value="percy"
+                            ),
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="DB_USER", value="percy"
+                            ),
+                        ],
+                        runtime_environment_secrets=[
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="PERCY_JWT_SECRET",
+                                value=jwt_secret.secret_arn,
+                            ),
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="DB_PASSWORD",
+                                value=f"{db.secret.secret_arn}:password::",
+                            ),
+                        ],
+                        # The container reads DATABASE_URL — provide it via
+                        # start command rather than redeclaring all the parts.
+                        # App Runner doesn't allow env interpolation, so the
+                        # entrypoint composes it. See server/collab/server.js.
+                        start_command="sh -c 'export DATABASE_URL=postgres://$DB_USER:$DB_PASSWORD@$DB_HOST:$DB_PORT/$DB_NAME; node server.js'",
+                    ),
+                ),
+            ),
+            instance_configuration=apprunner.CfnService.InstanceConfigurationProperty(
+                cpu="0.5 vCPU",
+                memory="1 GB",
+                instance_role_arn=collab_instance_role.role_arn,
+            ),
+            network_configuration=apprunner.CfnService.NetworkConfigurationProperty(
+                egress_configuration=apprunner.CfnService.EgressConfigurationProperty(
+                    egress_type="VPC",
+                    vpc_connector_arn=vpc_connector.attr_vpc_connector_arn,
+                ),
+            ),
+            health_check_configuration=apprunner.CfnService.HealthCheckConfigurationProperty(
+                protocol="HTTP",
+                path="/healthz",
+                interval=10,
+                timeout=5,
+                healthy_threshold=1,
+                unhealthy_threshold=5,
+            ),
+        )
+
+        CfnOutput(
+            self,
+            "PercyCollabUrl",
+            value=f"wss://{collab_service.attr_service_url}",
+            description="Set VITE_YJS_WS_URL to this when building the frontend.",
         )
 
         # ------------------------------------------------------------------
@@ -583,61 +750,111 @@ class PercyCloudDemoStack(Stack):
 
         # ------------------------------------------------------------------
         # Observability — CloudWatch alarms + AWS Budgets (cost guardrails)
+        # alerts_topic was declared at the top of this method so the studio
+        # service env config could reference it; the budgets/alarms below
+        # subscribe to it.
         # ------------------------------------------------------------------
-        alerts_topic = sns.Topic(self, "PercyAlerts", display_name="Percy Dev Alerts")
 
-        # Subscribe a real email so budget/billing alerts actually reach somebody.
-        alert_email = self.node.try_get_context("alert_email") or DEFAULT_ALERT_EMAIL
-        alerts_topic.add_subscription(sns_subs.EmailSubscription(alert_email))
-
-        # ── AWS Budgets — hard cost ceilings with email + SNS notification ──
-        # Tier 1: $25/month soft warning
-        # Tier 2: $100/month hard warning (treat as "investigate immediately")
-        # Tier 3: $500/month emergency (someone deploys a bug or LLM costs explode)
-        for amount, label in ((25, "Soft"), (100, "Hard"), (500, "Emergency")):
-            budgets.CfnBudget(
-                self, f"PercyMonthlyBudget{label}",
-                budget=budgets.CfnBudget.BudgetDataProperty(
-                    budget_name=f"percy-monthly-{label.lower()}",
-                    budget_type="COST",
-                    time_unit="MONTHLY",
-                    budget_limit=budgets.CfnBudget.SpendProperty(
-                        amount=amount, unit="USD",
+        # ── AWS Budgets — GROSS cost (pre-credit) with $20 increment alerts ──
+        # IncludeCredit=False makes this track real usage cost, NOT what you
+        # owe after AWS Activate credits. We want to know burn rate, not net.
+        #
+        # One $200 budget with thresholds at 10/20/30/.../100% gives us alerts
+        # at $20, $40, $60, $80, $100, $120, $140, $160, $180, $200 of GROSS
+        # spend — every $20 step exactly as requested.
+        gross_budget_subscribers = [
+            budgets.CfnBudget.SubscriberProperty(
+                subscription_type="EMAIL", address=alert_email,
+            ),
+            budgets.CfnBudget.SubscriberProperty(
+                subscription_type="SNS", address=alerts_topic.topic_arn,
+            ),
+        ]
+        gross_budget_notifications = []
+        for pct in (10, 20, 30, 40, 50, 60, 70, 80, 90, 100):
+            gross_budget_notifications.append(
+                budgets.CfnBudget.NotificationWithSubscribersProperty(
+                    notification=budgets.CfnBudget.NotificationProperty(
+                        notification_type="ACTUAL",
+                        comparison_operator="GREATER_THAN",
+                        threshold=pct,
+                        threshold_type="PERCENTAGE",
                     ),
-                ),
-                notifications_with_subscribers=[
-                    budgets.CfnBudget.NotificationWithSubscribersProperty(
-                        notification=budgets.CfnBudget.NotificationProperty(
-                            notification_type="ACTUAL",
-                            comparison_operator="GREATER_THAN",
-                            threshold=80,  # alert at 80% of the band
-                            threshold_type="PERCENTAGE",
-                        ),
-                        subscribers=[
-                            budgets.CfnBudget.SubscriberProperty(
-                                subscription_type="EMAIL", address=alert_email,
-                            ),
-                            budgets.CfnBudget.SubscriberProperty(
-                                subscription_type="SNS", address=alerts_topic.topic_arn,
-                            ),
-                        ],
-                    ),
-                    # Forecast crossing the band — earlier signal
-                    budgets.CfnBudget.NotificationWithSubscribersProperty(
-                        notification=budgets.CfnBudget.NotificationProperty(
-                            notification_type="FORECASTED",
-                            comparison_operator="GREATER_THAN",
-                            threshold=100,
-                            threshold_type="PERCENTAGE",
-                        ),
-                        subscribers=[
-                            budgets.CfnBudget.SubscriberProperty(
-                                subscription_type="EMAIL", address=alert_email,
-                            ),
-                        ],
-                    ),
-                ],
+                    subscribers=gross_budget_subscribers,
+                )
             )
+        # Plus a single FORECASTED 100% notification — early warning of trajectory
+        gross_budget_notifications.append(
+            budgets.CfnBudget.NotificationWithSubscribersProperty(
+                notification=budgets.CfnBudget.NotificationProperty(
+                    notification_type="FORECASTED",
+                    comparison_operator="GREATER_THAN",
+                    threshold=100,
+                    threshold_type="PERCENTAGE",
+                ),
+                subscribers=gross_budget_subscribers,
+            )
+        )
+
+        budgets.CfnBudget(
+            self, "PercyGrossSpendBudget",
+            budget=budgets.CfnBudget.BudgetDataProperty(
+                budget_name="percy-gross-monthly-200",
+                budget_type="COST",
+                time_unit="MONTHLY",
+                budget_limit=budgets.CfnBudget.SpendProperty(amount=200, unit="USD"),
+                # ── Track GROSS, not net ──
+                # By default, AWS Budgets includes credits (so a $7.58 spend
+                # covered by credits looks like $0). Turning credits off lets
+                # us see real burn so the credit cliff doesn't surprise us.
+                cost_types=budgets.CfnBudget.CostTypesProperty(
+                    include_credit=False,         # exclude AWS Activate credits
+                    include_discount=True,
+                    include_other_subscription=True,
+                    include_recurring=True,
+                    include_refund=False,
+                    include_subscription=True,
+                    include_support=True,
+                    include_tax=True,
+                    include_upfront=True,
+                    use_amortized=False,
+                    use_blended=False,
+                ),
+            ),
+            notifications_with_subscribers=gross_budget_notifications,
+        )
+
+        # Net-spend safety net at $500 — fires only when credits run out and
+        # actual money starts going out the door.
+        budgets.CfnBudget(
+            self, "PercyNetSpendEmergency",
+            budget=budgets.CfnBudget.BudgetDataProperty(
+                budget_name="percy-net-emergency-500",
+                budget_type="COST",
+                time_unit="MONTHLY",
+                budget_limit=budgets.CfnBudget.SpendProperty(amount=500, unit="USD"),
+            ),
+            notifications_with_subscribers=[
+                budgets.CfnBudget.NotificationWithSubscribersProperty(
+                    notification=budgets.CfnBudget.NotificationProperty(
+                        notification_type="ACTUAL",
+                        comparison_operator="GREATER_THAN",
+                        threshold=50,
+                        threshold_type="PERCENTAGE",
+                    ),
+                    subscribers=gross_budget_subscribers,
+                ),
+                budgets.CfnBudget.NotificationWithSubscribersProperty(
+                    notification=budgets.CfnBudget.NotificationProperty(
+                        notification_type="ACTUAL",
+                        comparison_operator="GREATER_THAN",
+                        threshold=100,
+                        threshold_type="PERCENTAGE",
+                    ),
+                    subscribers=gross_budget_subscribers,
+                ),
+            ],
+        )
 
         # ── CloudWatch billing alarm (us-east-1 only — that's where Billing
         #    metrics live) — fires when estimated charges exceed $50 in the
@@ -657,6 +874,48 @@ class PercyCloudDemoStack(Stack):
             treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
         )
         billing_alarm.add_alarm_action(cw_actions.SnsAction(alerts_topic))
+
+        # ── Bedrock model invocation logging ──
+        # Every Bedrock InvokeModel call writes to a CloudWatch log group AND
+        # an S3 bucket so we have a permanent compliance/audit trail of every
+        # prompt + response. Required for SOC 2; useful for debugging too.
+        bedrock_log_group = logs.LogGroup(
+            self, "BedrockInvocationLogs",
+            log_group_name="/aws/bedrock/percy-invocations",
+            retention=logs.RetentionDays.SIX_MONTHS,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        # IAM role Bedrock assumes to write to the log group + S3
+        bedrock_logging_role = iam.Role(
+            self, "BedrockLoggingRole",
+            assumed_by=iam.ServicePrincipal("bedrock.amazonaws.com"),
+            inline_policies={
+                "WriteLogs": iam.PolicyDocument(statements=[
+                    iam.PolicyStatement(
+                        effect=iam.Effect.ALLOW,
+                        actions=["logs:CreateLogStream", "logs:PutLogEvents"],
+                        resources=[bedrock_log_group.log_group_arn,
+                                    f"{bedrock_log_group.log_group_arn}:*"],
+                    ),
+                    iam.PolicyStatement(
+                        effect=iam.Effect.ALLOW,
+                        actions=["s3:PutObject"],
+                        resources=[f"{artifacts_bucket.bucket_arn}/bedrock-logs/*"],
+                    ),
+                ]),
+            },
+        )
+        # The actual ``bedrock:PutModelInvocationLoggingConfiguration`` call
+        # happens via a CloudFormation custom resource (CfnResource doesn't
+        # have a clean native binding for it yet). For now, we provision the
+        # log group + role; the user runs:
+        #
+        #   aws bedrock put-model-invocation-logging-configuration \
+        #     --logging-config '{"cloudWatchConfig":{"logGroupName":"/aws/bedrock/percy-invocations","roleArn":"<role>"}, "textDataDeliveryEnabled":true, "imageDataDeliveryEnabled":true, "embeddingDataDeliveryEnabled":false}'
+        #
+        # to flip on logging once. Output the role ARN so it's easy to copy.
+        CfnOutput(self, "BedrockLogGroupName", value=bedrock_log_group.log_group_name)
+        CfnOutput(self, "BedrockLoggingRoleArn", value=bedrock_logging_role.role_arn)
 
         # DLQ depth — any message here means a job failed 3x
         cloudwatch.Alarm(

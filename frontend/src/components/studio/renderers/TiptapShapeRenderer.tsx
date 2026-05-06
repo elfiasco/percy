@@ -197,8 +197,8 @@ function ShapeTextEditor({
       style={{
         width: "100%", height: "100%",
         boxSizing: "border-box",
-        outline: "2px solid var(--accent, #e8c97a)",
-        outlineOffset: "-2px",
+        outline: "1.5px solid rgb(var(--champagne) / 0.65)",
+        outlineOffset: "-1.5px",
         // Solid background that hides the PNG underneath while editing,
         // so the user sees only their live text. Use the surface color
         // of the current theme so it doesn't look out of place.

@@ -197,8 +197,8 @@ function RichTableEditor({
       onPointerDown={(e) => e.stopPropagation()}
       style={{
         ...containerStyle,
-        outline:       "2px solid var(--accent, #e8c97a)",
-        outlineOffset: "-2px",
+        outline:       "1.5px solid rgb(var(--champagne) / 0.65)",
+        outlineOffset: "-1.5px",
         cursor:        "text",
         userSelect:    "text",
       }}
