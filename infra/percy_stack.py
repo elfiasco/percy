@@ -450,11 +450,15 @@ class PercyCloudDemoStack(Stack):
                                 name="DB_USER", value="percy"
                             ),
                             # Google OAuth redirect points back at this same service.
-                            # Set the Authorized Redirect URI to this URL in Google Cloud
-                            # Console after the first deploy completes.
+                            # CFN can't self-reference `studio_service.attr_service_url`
+                            # in its own env vars (circular), so we hardcode the
+                            # *actual* App Runner-assigned URL. If the service is
+                            # ever recreated (different runtime ID), update this
+                            # string and re-add it as an Authorized Redirect URI
+                            # in Google Cloud Console.
                             apprunner.CfnService.KeyValuePairProperty(
                                 name="GOOGLE_OAUTH_REDIRECT_URI",
-                                value="https://percy-studio-dev.us-east-1.awsapprunner.com/api/auth/google/callback",
+                                value="https://36kuepamyi.us-east-1.awsapprunner.com/api/auth/google/callback",
                             ),
                             # ── Bedrock LLM provider (enterprise mode) ─────
                             apprunner.CfnService.KeyValuePairProperty(
