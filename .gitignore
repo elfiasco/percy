@@ -25,6 +25,7 @@ tags
 /frontend/node_modules/
 /infra/.tmp/
 /infra/cdk.out/
+/infra/cdk.out.tmp*/
 /infra/.venv/
 
 # Runtime logs

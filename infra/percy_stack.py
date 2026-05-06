@@ -22,9 +22,12 @@ from aws_cdk import aws_sqs as sqs
 from constructs import Construct
 
 
-# Email address that receives budget + billing alerts. Override at synth via:
-#   cdk deploy --context alert_email=you@example.com
-DEFAULT_ALERT_EMAIL = "bensteel12@verizon.net"
+# Email addresses that receive budget + billing alerts. Override at synth via:
+#   cdk deploy --context alert_emails=a@x.com,b@y.com
+DEFAULT_ALERT_EMAILS = [
+    "bensteel12@verizon.net",
+    "ben.steel@berkeley.edu",
+]
 
 
 class PercyCloudDemoStack(Stack):
@@ -42,8 +45,20 @@ class PercyCloudDemoStack(Stack):
 
         # ── Alerts SNS topic (declared early so studio service env can ref it) ──
         alerts_topic = sns.Topic(self, "PercyAlerts", display_name="Percy Dev Alerts")
-        alert_email = self.node.try_get_context("alert_email") or DEFAULT_ALERT_EMAIL
-        alerts_topic.add_subscription(sns_subs.EmailSubscription(alert_email))
+        # Accept either alert_emails (CSV) or alert_email (single) from --context
+        ctx_emails = (
+            self.node.try_get_context("alert_emails")
+            or self.node.try_get_context("alert_email")
+        )
+        if ctx_emails:
+            alert_emails = [e.strip() for e in str(ctx_emails).split(",") if e.strip()]
+        else:
+            alert_emails = list(DEFAULT_ALERT_EMAILS)
+        for email in alert_emails:
+            alerts_topic.add_subscription(sns_subs.EmailSubscription(email))
+        # Single primary used by Budget direct EMAIL subscribers (Budget supports
+        # multiple EMAIL subscribers — we add all of them via a list below).
+        alert_email = alert_emails[0]
 
         repo_root = Path(__file__).resolve().parents[1]
 
@@ -790,9 +805,12 @@ class PercyCloudDemoStack(Stack):
         # at $20, $40, $60, $80, $100, $120, $140, $160, $180, $200 of GROSS
         # spend — every $20 step exactly as requested.
         gross_budget_subscribers = [
-            budgets.CfnBudget.SubscriberProperty(
-                subscription_type="EMAIL", address=alert_email,
-            ),
+            *[
+                budgets.CfnBudget.SubscriberProperty(
+                    subscription_type="EMAIL", address=email,
+                )
+                for email in alert_emails
+            ],
             budgets.CfnBudget.SubscriberProperty(
                 subscription_type="SNS", address=alerts_topic.topic_arn,
             ),
@@ -1014,6 +1032,57 @@ class PercyCloudDemoStack(Stack):
         )
 
         CfnOutput(self, "PercyRefreshSchedulerArn", value=refresh_lambda.function_arn)
+
+        # ------------------------------------------------------------------
+        # Spend-monitor Lambda — $20-step alerts, uncapped past $200 (where
+        # the AWS Budget tops out). Runs every 4 hours, queries Cost Explorer
+        # for gross spend (RECORD_TYPE=Usage), tracks last-alerted threshold
+        # in SSM Parameter Store, publishes to SNS each $20 boundary crossed.
+        # SNS fans out to every subscribed email.
+        # ------------------------------------------------------------------
+        spend_monitor_lambda = lambda_.Function(
+            self,
+            "PercySpendMonitor",
+            function_name="percy-spend-monitor-dev",
+            runtime=lambda_.Runtime.PYTHON_3_13,
+            handler="handler.lambda_handler",
+            code=lambda_.Code.from_asset(
+                str(repo_root / "lambda" / "spend_monitor"),
+                # No deps to bundle — boto3 is provided by the Lambda runtime.
+            ),
+            timeout=Duration.minutes(2),
+            memory_size=256,
+            environment={
+                "ALERTS_TOPIC_ARN": alerts_topic.topic_arn,
+                "PARAM_NAME": "/percy/spend/last-alert",
+                "STEP_USD": "20",
+                "STUDIO_URL": f"https://36kuepamyi.us-east-1.awsapprunner.com",
+            },
+            log_retention=logs.RetentionDays.ONE_MONTH,
+        )
+        # IAM: Cost Explorer read, SSM parameter R/W (scoped), SNS publish
+        spend_monitor_lambda.add_to_role_policy(iam.PolicyStatement(
+            effect=iam.Effect.ALLOW,
+            actions=["ce:GetCostAndUsage", "ce:GetCostForecast"],
+            resources=["*"],  # CE doesn't support resource-level scoping
+        ))
+        spend_monitor_lambda.add_to_role_policy(iam.PolicyStatement(
+            effect=iam.Effect.ALLOW,
+            actions=["ssm:GetParameter", "ssm:PutParameter"],
+            resources=[f"arn:aws:ssm:{self.region}:{self.account}:parameter/percy/spend/*"],
+        ))
+        alerts_topic.grant_publish(spend_monitor_lambda)
+
+        # EventBridge — fire every 4 hours
+        events.Rule(
+            self,
+            "PercySpendMonitorSchedule",
+            rule_name="percy-spend-monitor-4h",
+            description="Triggers Percy spend monitor every 4 hours to check for $20 boundary crossings",
+            schedule=events.Schedule.rate(Duration.hours(4)),
+            targets=[events_targets.LambdaFunction(spend_monitor_lambda)],
+        )
+        CfnOutput(self, "PercySpendMonitorArn", value=spend_monitor_lambda.function_arn)
 
         CfnOutput(self, "PercyDbSecretArn", value=db.secret.secret_arn)
         CfnOutput(self, "PercyApiKeySecretArn", value=api_key_secret.secret_arn)
