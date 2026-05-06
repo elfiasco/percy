@@ -768,6 +768,7 @@ class UpdateProjectRequest(BaseModel):
     name: str | None = None
     folder_id: str | None = None  # use empty string "" to move to root
     doc_source: str | None = None
+    doc_id: str | None = None     # set when attaching a freshly-minted blank doc
 
 
 @router.patch("/api/projects/{project_id}")
@@ -787,6 +788,8 @@ def update_project(request: Request, project_id: str, req: UpdateProjectRequest)
             fields["folder_id"] = req.folder_id
     if req.doc_source is not None:
         fields["doc_source"] = req.doc_source
+    if req.doc_id is not None:
+        fields["doc_id"] = req.doc_id
     return auth_db.update_project(project_id, **fields)
 
 
@@ -833,7 +836,29 @@ def open_project(request: Request, project_id: str):
 
     src = project.get("doc_source")
     if not src:
-        raise HTTPException(status_code=400, detail="Project has no source file. Upload a .pptx or .pdf first.")
+        # Brand-new project with no source — mint a blank PercyDocument so the
+        # studio has something to open. Canvas size comes from the project's
+        # blank_canvas custom-properties dict (set when the project was
+        # created via the "scratch" mode of the new-project modal); falls back
+        # to 16:9 default.
+        from app.backend.main import (  # type: ignore
+            CreateBlankDocRequest as _CreateBlankDocRequest,
+            create_blank_doc as _create_blank_doc,
+        )
+        meta = project.get("custom_properties") or {}
+        canvas = (meta.get("blank_canvas") if isinstance(meta, dict) else None) or {}
+        try:
+            width  = float(canvas.get("width_in"))  if canvas.get("width_in")  is not None else 13.333
+            height = float(canvas.get("height_in")) if canvas.get("height_in") is not None else 7.5
+        except (TypeError, ValueError):
+            width, height = 13.333, 7.5
+        result = _create_blank_doc(_CreateBlankDocRequest(
+            width_in=width, height_in=height, name=project["name"],
+        ))
+        doc_id = result["doc_id"]
+        auth_db.update_project(project_id, doc_id=doc_id)
+        return {"doc_id": doc_id, "project": auth_db.get_project(project_id)}
+
     src_path = Path(src)
     if not src_path.exists():
         raise HTTPException(status_code=404, detail=f"Source file not found: {src}")

@@ -195,7 +195,7 @@ export async function createProject(orgId: string, name: string, folderId: strin
   })
 }
 
-export async function updateProject(projectId: string, fields: { name?: string; folder_id?: string | null; doc_source?: string }): Promise<Project> {
+export async function updateProject(projectId: string, fields: { name?: string; folder_id?: string | null; doc_source?: string; doc_id?: string }): Promise<Project> {
   return jfetch(`/api/projects/${projectId}`, { method: "PATCH", body: JSON.stringify(fields) })
 }
 
@@ -216,6 +216,29 @@ export async function uploadProjectFile(projectId: string, file: File): Promise<
 
 export async function openProject(projectId: string): Promise<{ doc_id: string; project: Project }> {
   return jfetch(`/api/projects/${projectId}/open`, { method: "POST" })
+}
+
+// ── Blank document creation (for "scratch" projects) ─────────────────────────
+
+export interface CanvasSize {
+  width_in:  number
+  height_in: number
+}
+
+export const CANVAS_PRESETS: { id: string; label: string; subtitle: string; size: CanvasSize }[] = [
+  { id: "widescreen",  label: "Widescreen 16:9", subtitle: "13.33″ × 7.5″ — modern default",   size: { width_in: 13.333, height_in: 7.5  } },
+  { id: "standard",    label: "Standard 4:3",    subtitle: "10″ × 7.5″ — legacy projector",     size: { width_in: 10,     height_in: 7.5  } },
+  { id: "letter",      label: "US Letter",       subtitle: "11″ × 8.5″ — print-ready",          size: { width_in: 11,     height_in: 8.5  } },
+  { id: "a4",          label: "A4 landscape",    subtitle: "11.69″ × 8.27″ — international",    size: { width_in: 11.69,  height_in: 8.27 } },
+  { id: "square",      label: "Square 1:1",      subtitle: "10″ × 10″ — social",                size: { width_in: 10,     height_in: 10   } },
+  { id: "portrait",    label: "Portrait",        subtitle: "7.5″ × 13.33″ — vertical decks",    size: { width_in: 7.5,    height_in: 13.333 } },
+]
+
+export async function createBlankDoc(size: CanvasSize, name?: string): Promise<{ doc_id: string; name: string; slide_count: number; width_in: number; height_in: number }> {
+  return jfetch("/api/docs/create-blank", {
+    method: "POST",
+    body:   JSON.stringify({ width_in: size.width_in, height_in: size.height_in, name }),
+  })
 }
 
 // ── Builds ────────────────────────────────────────────────────────────────────

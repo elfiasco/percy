@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "react"
-import { createProject, uploadProjectFile, type Project } from "../lib/authApi"
+import {
+  createProject, uploadProjectFile, createBlankDoc, updateProject,
+  CANVAS_PRESETS, type CanvasSize, type Project,
+} from "../lib/authApi"
 
 /**
  * NewProjectModal — three-mode project creation.
@@ -42,6 +45,8 @@ export default function NewProjectModal({ orgId, folderId, onClose, onCreated }:
   const [file, setFile]         = useState<File | null>(null)
   const [busy, setBusy]         = useState(false)
   const [error, setError]       = useState<string | null>(null)
+  const [canvas, setCanvas]     = useState<CanvasSize>(CANVAS_PRESETS[0].size)  // default 16:9
+  const [canvasPresetId, setCanvasPresetId] = useState(CANVAS_PRESETS[0].id)
   const fileInputRef            = useRef<HTMLInputElement>(null)
   const nameRef                 = useRef<HTMLInputElement>(null)
 
@@ -68,10 +73,20 @@ export default function NewProjectModal({ orgId, folderId, onClose, onCreated }:
     setBusy(true); setError(null)
     try {
       const p = await createProject(orgId, name.trim(), folderId ?? null)
+      if (mode === "scratch") {
+        // Mint an empty Bridge document at the chosen canvas size and attach
+        // it to the project, so opening the project goes straight to the
+        // studio with a real (empty) deck — not a 400 "no source" error.
+        try {
+          const blank = await createBlankDoc(canvas, name.trim())
+          await updateProject(p.id, { doc_id: blank.doc_id })
+        } catch (e) {
+          setError(`Project created but blank deck init failed: ${e instanceof Error ? e.message : String(e)}`)
+        }
+      }
       if (mode === "document" && file) {
         try { await uploadProjectFile(p.id, file) }
         catch (e) {
-          // Project exists but upload failed — still surface to caller
           setError(`Project created but upload failed: ${e instanceof Error ? e.message : String(e)}`)
         }
       }
@@ -197,9 +212,40 @@ export default function NewProjectModal({ orgId, folderId, onClose, onCreated }:
               )}
 
               {mode === "scratch" && (
-                <div className="text-[11px] text-muted leading-[1.7] border border-edge px-3 py-2.5 bg-ink/40">
-                  This project will start as a blank deck. Once your team has brand templates set up, the new-from-scratch flow will let you pick one — for now, scratch means scratch.
-                </div>
+                <Field label="Canvas size">
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                    {CANVAS_PRESETS.map((p) => {
+                      const active = p.id === canvasPresetId
+                      const aspect = p.size.width_in / p.size.height_in
+                      return (
+                        <button key={p.id} type="button"
+                          onClick={() => { setCanvasPresetId(p.id); setCanvas(p.size) }}
+                          className={`text-left p-3 border transition-colors ${
+                            active
+                              ? "border-paper bg-paper/5"
+                              : "border-edge hover:border-paper/30 hover:bg-paper/5"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 mb-1.5">
+                            {/* tiny canvas-shape preview */}
+                            <span
+                              className={`shrink-0 border ${active ? "border-paper bg-paper/30" : "border-muted bg-paper/10"}`}
+                              style={{
+                                width:  aspect >= 1 ? 24 : Math.round(24 * aspect),
+                                height: aspect >= 1 ? Math.round(24 / aspect) : 24,
+                              }}
+                            />
+                            <div className="text-[12px] font-semibold text-paper truncate">{p.label}</div>
+                          </div>
+                          <div className="text-[10px] tracking-[0.04em] text-muted">{p.subtitle}</div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <div className="text-[10px] text-muted/70 mt-2 leading-relaxed">
+                    All sizes are editable later from the studio's design panel. Once your team has brand templates, choosing one here will pre-populate colors, fonts, and a starter slide.
+                  </div>
+                </Field>
               )}
 
               {error && (
