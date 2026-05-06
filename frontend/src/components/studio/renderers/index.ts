@@ -1,7 +1,7 @@
-import { registerChartRenderer }     from "./ChartRenderer"
-import { registerTableRenderer }     from "./TableRenderer"
-import { registerConnectorRenderer } from "./ConnectorRenderer"
-import { registerTextRenderer }      from "./TextRenderer"
+import { registerChartRenderer }       from "./ChartRenderer"
+import { registerTableRenderer }       from "./TableRenderer"
+import { registerConnectorRenderer }   from "./ConnectorRenderer"
+import { registerTiptapTextRenderer }  from "./TiptapTextRenderer"
 
 let _setup = false
 
@@ -11,5 +11,5 @@ export function setupNativeRenderers(): void {
   registerChartRenderer()
   registerTableRenderer()
   registerConnectorRenderer()
-  registerTextRenderer()
+  registerTiptapTextRenderer()
 }

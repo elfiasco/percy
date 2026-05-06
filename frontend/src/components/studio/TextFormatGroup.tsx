@@ -6,28 +6,31 @@ import {
   COMMON_FONTS, COMMON_SIZES,
   type TextFormat, type ParagraphFormat,
 } from "../../lib/textFormat"
-import { tryApplyToSelection, getActiveEditor, subscribeSelectionChange, subscribeActiveEditor } from "../../lib/textEditingBus"
+import { getActiveTiptapEditor, subscribeActiveEditor } from "../../lib/bridge/activeEditor"
 
 /**
- * TextFormatGroup — PowerPoint-style text controls for the Home ribbon.
+ * TextFormatGroup — the ribbon's text-formatting controls.
  *
- * Visible only when a text-capable element is selected. Reads the current
- * text content on mount so toggle states (bold, italic, etc.) reflect the
- * element's actual format. Each control:
- *   1. fetches latest paragraphs (in case another part of the app changed them)
- *   2. mutates every run / paragraph
- *   3. saves back via updateElementText
+ * Two operating modes:
  *
- * Today this applies to the *whole element* (the inline text editor doesn't
- * yet support selection ranges). When the rich-text editor lands, swap in
- * applyFormatToRange — the ribbon's UX doesn't have to change.
+ *   1. **Selection mode** — when a Tiptap editor is active for this element,
+ *      every control dispatches a Tiptap command on the live selection.
+ *      Toggle indicators (B/I/U) reflect `editor.isActive(...)`. Font / size
+ *      / color reflect the textStyle mark on the current selection.
+ *
+ *   2. **Element mode** — when no editor is active (the user clicked an
+ *      element but isn't inside the text yet), apply formatting to every
+ *      run in the element via fetchElementText/updateElementText.
+ *
+ * The mode is determined entirely by `getActiveTiptapEditor()`. The ribbon
+ * UI is identical in both modes.
  */
 
 interface Props {
-  element:     StudioElement
-  docId:       string
-  slideN:      number
-  onCommit?:   () => void
+  element:    StudioElement
+  docId:      string
+  slideN:     number
+  onCommit?:  () => void
 }
 
 const TEXT_CAPABLE = new Set([
@@ -46,7 +49,7 @@ export default function TextFormatGroup({ element, docId, slideN, onCommit }: Pr
   const fontRef = useRef<HTMLDivElement>(null)
   const sizeRef = useRef<HTMLDivElement>(null)
 
-  // Pull current text on mount/element-change so toggle indicators are correct
+  // Pull element text on mount/element-change for element-mode default state
   useEffect(() => {
     let cancelled = false
     fetchElementText(docId, slideN, element.id)
@@ -59,7 +62,11 @@ export default function TextFormatGroup({ element, docId, slideN, onCommit }: Pr
     return () => { cancelled = true }
   }, [docId, slideN, element.id])
 
-  // Close popovers on outside click
+  // Re-render when active editor changes (selection move, mount, unmount)
+  const [, force] = useState(0)
+  useEffect(() => subscribeActiveEditor(() => force((v) => v + 1)), [])
+
+  // Close menus on outside click
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
       if (fontMenu && fontRef.current && !fontRef.current.contains(e.target as Node)) setFontMenu(false)
@@ -69,36 +76,60 @@ export default function TextFormatGroup({ element, docId, slideN, onCommit }: Pr
     return () => document.removeEventListener("mousedown", onDoc)
   }, [fontMenu, sizeMenu])
 
-  // Selection-aware format: when an editor is active for this element, mirror
-  // the *current selection's* format so toggles reflect what's selected, not
-  // just the element's first run. Bumps a version counter so we re-derive on
-  // selectionchange / editor-mount / editor-unmount.
-  const [selVersion, setSelVersion] = useState(0)
-  useEffect(() => {
-    const bump = () => setSelVersion((v) => v + 1)
-    const offSel    = subscribeSelectionChange(bump)
-    const offEditor = subscribeActiveEditor(bump)
-    return () => { offSel(); offEditor() }
-  }, [])
+  // ── derive UI state from whichever mode we're in ────────────────────────
+  const active = getActiveTiptapEditor()
+  const inSelectionMode = !!active && active.elementId === element.id
 
-  const elementCur = readCurrentFormat(content)
-  const liveCur = (() => {
-    const active = getActiveEditor()
-    if (!active || active.elementId !== element.id) return null
-    return active.readSelectionFormat?.() ?? null
+  const cur = (() => {
+    if (inSelectionMode && active) {
+      const e = active.editor
+      const ts = e.getAttributes("textStyle")
+      const para = e.getAttributes("paragraph")
+      return {
+        text: {
+          font_name:      typeof ts.fontName  === "string" ? ts.fontName  : null,
+          font_size:      typeof ts.fontSize  === "number" ? ts.fontSize  : null,
+          font_color:     typeof ts.fontColor === "string" ? ts.fontColor : null,
+          font_caps:      typeof ts.caps      === "string" ? ts.caps      : null,
+          font_bold:      e.isActive("bold"),
+          font_italic:    e.isActive("italic"),
+          font_underline: e.isActive("underline"),
+          strikethrough:  e.isActive("strike") ? "sng" : null,
+        } as TextFormat,
+        paragraph: {
+          alignment: typeof para.textAlign === "string" ? para.textAlign : null,
+        } as ParagraphFormat,
+      }
+    }
+    return readCurrentFormat(content)
   })()
-  // Use live selection format if available, else fall back to element-level format
-  const cur = liveCur ?? elementCur
-  void selVersion
 
+  // ── command dispatch ────────────────────────────────────────────────────
   const apply = useCallback(async (
     text: TextFormat = {},
     para: ParagraphFormat = {},
   ) => {
-    // If a contentEditable is currently active for this element, format the
-    // live selection inside it instead of rewriting every run on the server.
-    if (tryApplyToSelection(element.id, text, para)) return
+    const ed = getActiveTiptapEditor()
+    if (ed && ed.elementId === element.id) {
+      // Selection mode — Tiptap commands
+      const c = ed.editor.chain().focus()
+      if (text.font_bold      !== undefined) c.toggleBold()
+      if (text.font_italic    !== undefined) c.toggleItalic()
+      if (text.font_underline !== undefined) c.toggleUnderline()
+      if (text.strikethrough  !== undefined) c.toggleStrike()
+      if (text.font_name      !== undefined && text.font_name)  c.setMark("textStyle", { fontName:  text.font_name })
+      if (text.font_size      !== undefined && text.font_size != null) c.setMark("textStyle", { fontSize: text.font_size })
+      if (text.font_color     !== undefined) {
+        if (text.font_color) c.setMark("textStyle", { fontColor: text.font_color })
+        else                 c.unsetMark("textStyle")
+      }
+      if (text.font_caps      !== undefined) c.setMark("textStyle", { caps: text.font_caps })
+      if (para.alignment      !== undefined && para.alignment) c.setTextAlign(para.alignment)
+      c.run()
+      return
+    }
 
+    // Element mode — fetch/mutate/save the whole element's runs
     setBusy(true)
     try {
       const fresh = await fetchElementText(docId, slideN, element.id)
@@ -119,14 +150,13 @@ export default function TextFormatGroup({ element, docId, slideN, onCommit }: Pr
     }
   }, [docId, slideN, element.id, onCommit])
 
-  // ── derived UI state ─────────────────────────────────────────────────────
   const fontDisplay = cur.text.font_name || "Mixed"
   const sizeDisplay = cur.text.font_size != null ? String(cur.text.font_size) : "—"
   const align       = cur.paragraph.alignment ?? "left"
 
   return (
     <div className="flex h-full items-stretch gap-1 px-1 py-1.5">
-      {/* Font + size */}
+      {/* Font + alignment row */}
       <div className="flex flex-col gap-1 justify-center" ref={fontRef}>
         <div className="relative">
           <button
@@ -141,7 +171,8 @@ export default function TextFormatGroup({ element, docId, slideN, onCommit }: Pr
             <span className="text-muted text-[9px]">▾</span>
           </button>
           {fontMenu && (
-            <div className="absolute left-0 top-full mt-1 z-50 w-56 max-h-72 overflow-y-auto bg-surface border border-edge shadow-2xl">
+            <div className="absolute left-0 top-full mt-1 z-50 w-56 max-h-72 overflow-y-auto bg-surface border border-edge shadow-2xl"
+                 style={{ background: "rgb(var(--surface))" }}>
               {COMMON_FONTS.map((f) => (
                 <button key={f} onClick={() => { apply({ font_name: f }); setFontMenu(false) }}
                   className={`w-full text-left px-3 py-1.5 text-[12px] hover:bg-paper/10 transition-colors ${
@@ -155,8 +186,6 @@ export default function TextFormatGroup({ element, docId, slideN, onCommit }: Pr
             </div>
           )}
         </div>
-
-        {/* alignment row */}
         <div className="flex gap-0.5">
           {(["left", "center", "right", "justify"] as const).map((a) => (
             <button key={a}
@@ -196,7 +225,8 @@ export default function TextFormatGroup({ element, docId, slideN, onCommit }: Pr
               <span className="text-muted text-[9px]">▾</span>
             </button>
             {sizeMenu && (
-              <div className="absolute left-0 top-full mt-1 z-50 w-16 max-h-72 overflow-y-auto bg-surface border border-edge shadow-2xl">
+              <div className="absolute left-0 top-full mt-1 z-50 w-16 max-h-72 overflow-y-auto bg-surface border border-edge shadow-2xl"
+                   style={{ background: "rgb(var(--surface))" }}>
                 {COMMON_SIZES.map((s) => (
                   <button key={s} onClick={() => { apply({ font_size: s }); setSizeMenu(false) }}
                     className={`w-full text-left px-2 py-1 text-[11px] font-mono hover:bg-paper/10 ${
@@ -218,7 +248,6 @@ export default function TextFormatGroup({ element, docId, slideN, onCommit }: Pr
           >+</button>
         </div>
 
-        {/* emphasis row: B I U S */}
         <div className="flex gap-0.5">
           <EmphasisBtn label="B" active={!!cur.text.font_bold}      title="Bold (Ctrl+B)"
             onClick={() => apply({ font_bold:      !cur.text.font_bold })}      style={{ fontWeight: 700 }} />
@@ -243,7 +272,7 @@ export default function TextFormatGroup({ element, docId, slideN, onCommit }: Pr
               className="absolute inset-0 opacity-0 cursor-pointer"
             />
             <span className="h-6 w-12 px-1 bg-base border border-edge flex items-center justify-center gap-1">
-              <span className="text-[11px] text-paper" style={{ textShadow: "0 0 0 currentColor" }}>A</span>
+              <span className="text-[11px] text-paper">A</span>
               <span className="w-3 h-3 border border-edge" style={{ background: cur.text.font_color || "#000000" }} />
             </span>
           </label>
