@@ -371,16 +371,16 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
     return null
   })
 
-  // Yjs collaboration room for the current slide. Uses BroadcastChannel
-  // transport by default — converges between two studio tabs in the same
-  // browser without any server. Swap transport to "websocket" / "liveblocks"
-  // when we deploy a relay.
+  // Yjs collaboration room for the current slide. Tries WebSocket first
+  // (via VITE_YJS_WS_URL) so cross-machine multiplayer works as soon as
+  // the relay server is up; falls back to BroadcastChannel automatically
+  // when the env var isn't set, so dev keeps working without a server.
   const { remoteUserCount } = useStudioCollab(
     doc.doc_id,
     selectedSlide,
     authUser ? { id: authUser.id, name: authUser.display_name } : null,
     /* enabled */ true,
-    /* transport */ "broadcast",
+    /* transport */ "websocket",
   )
   const [connectModalElementId, setConnectModalElementId] = useState<string | null>(null)
   const [docConnects, setDocConnects] = useState<{ slide_n: number; element_id: string }[]>([])

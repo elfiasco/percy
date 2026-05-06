@@ -1,0 +1,20 @@
+{
+  "name": "percy-collab-server",
+  "version": "0.1.0",
+  "description": "Yjs WebSocket relay for Percy studio multiplayer",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev":   "node --watch server.js"
+  },
+  "dependencies": {
+    "ws":            "^8.18.0",
+    "yjs":           "^13.6.20",
+    "y-protocols":   "^1.0.6",
+    "lib0":          "^0.2.99"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
