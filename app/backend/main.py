@@ -7520,6 +7520,70 @@ def update_element_text(doc_id: str, n: int, element_id: str, req: TextUpdateReq
     return _serialize_element_text_content(el, el.element_type)
 
 
+# ── Bulk text update (for collab server save-back) ───────────────────────────
+
+class BulkTextUpdateRequest(BaseModel):
+    """One-shot text update for many elements on the same slide.
+
+    Used by the collab server's save-back loop: when multiple text elements
+    on the same slide go dirty within one debounce window, batching them
+    into a single round-trip is dramatically faster than N PATCH calls.
+
+    The map key is element id; the value is the same TextUpdateRequest
+    shape the singular endpoint accepts. The server snapshots ONCE for the
+    whole batch, applies updates in-order, and returns updated text content
+    for every element.
+    """
+    updates: dict[str, TextUpdateRequest]
+
+class BulkTextUpdateResponse(BaseModel):
+    updated:  dict[str, dict[str, Any]]
+    skipped:  dict[str, str]   # element_id → reason
+
+@app.patch("/api/docs/{doc_id}/slides/{n}/elements/text:bulk")
+def bulk_update_element_text(doc_id: str, n: int, req: BulkTextUpdateRequest) -> BulkTextUpdateResponse:
+    """Apply text updates to many elements on slide *n* in one transaction.
+
+    Snapshot is taken once. If an element is missing, it lands in
+    `skipped` with a reason and other elements still apply.
+    """
+    if not req.updates:
+        return BulkTextUpdateResponse(updated={}, skipped={})
+
+    d    = _require(doc_id)
+    doc  = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
+
+    _snapshot_doc(doc_id)
+
+    # Build an index from element_id → element for the slide. Cheaper than
+    # calling _find_element N times, which would walk the slide each call.
+    by_id: dict[str, Any] = {}
+    for i, e in enumerate(slide.elements):
+        by_id[_element_id(e, i)] = e
+
+    updated: dict[str, dict[str, Any]] = {}
+    skipped: dict[str, str] = {}
+
+    for element_id, update in req.updates.items():
+        el = by_id.get(element_id)
+        if el is None:
+            skipped[element_id] = "not_found"
+            continue
+        try:
+            _apply_text_update(el, el.element_type, update)
+            updated[element_id] = _serialize_element_text_content(el, el.element_type)
+        except Exception as exc:
+            skipped[element_id] = f"apply_failed: {exc}"
+            log.warning("bulk-text: %s on %s slide %d failed: %s", element_id, doc_id, n, exc)
+
+    log.info("studio: bulk text on slide %d of %s — %d updated, %d skipped",
+             n, doc_id, len(updated), len(skipped))
+    return BulkTextUpdateResponse(updated=updated, skipped=skipped)
+
+
 # ── Image replacement ─────────────────────────────────────────────────────────
 
 @app.post("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/replace-image")

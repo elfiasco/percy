@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from percy.agent import (
-    audit, brand_check, cost_tracker, deck_generator, diff_narrator,
+    audit, aws_cost, brand_check, cost_tracker, deck_generator, diff_narrator,
     metric_consistency, onboarding, refresh, templates,
 )
 from percy.agent.brand_check import BrandProfile
@@ -440,6 +440,22 @@ async def cost_summary_route(request: Request, doc_id: str | None = None):
     }
 
 
+@router.get("/api/agent/aws-cost")
+async def aws_cost_route(request: Request):
+    """Real AWS infra spend, gross-and-net, with VPC endpoint warnings.
+
+    This pulls live data from Cost Explorer + EC2 (via boto3). Falls back to
+    a degraded response if the runtime can't reach AWS (e.g. local dev without
+    `~/.aws/credentials`). Cached briefly to avoid CE rate limits.
+    """
+    profile = os.environ.get("PERCY_AWS_PROFILE")  # None in App Runner — uses task role
+    region  = os.environ.get("AWS_REGION", "us-east-1")
+    try:
+        return aws_cost.full_aws_cost_report(profile=profile, region=region)
+    except Exception as exc:
+        return {"available": False, "error": str(exc)}
+
+
 @router.put("/api/agent/cost-limits")
 async def set_cost_limits_route(request: Request):
     """Set per-org budget overrides. Body: {org_id, daily_tokens?, monthly_tokens?, daily_usd?, monthly_usd?}"""
@@ -459,7 +475,13 @@ async def set_cost_limits_route(request: Request):
         daily_usd=body.get("daily_usd"),
         monthly_usd=body.get("monthly_usd"),
     )
-    return {"ok": True, "limits": cost_tracker.get_org_limits(org_id).__dict__}
+    limits = cost_tracker.get_org_limits(org_id)
+    return {"ok": True, "limits": {
+        "daily_tokens": limits.daily_tokens,
+        "monthly_tokens": limits.monthly_tokens,
+        "daily_usd": limits.daily_usd,
+        "monthly_usd": limits.monthly_usd,
+    }}
 
 
 # ── Refresh agent ──────────────────────────────────────────────────────────
@@ -532,6 +554,9 @@ async def refresh_route(doc_id: str, request: Request):
         pass
 
     return report.to_dict()
+
+
+import os  # noqa: E402  (used by aws_cost_route)
 
 
 async def _parse_json(request: Request, allow_empty: bool = False) -> dict:

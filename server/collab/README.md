@@ -66,11 +66,15 @@ docker push <account>.dkr.ecr.us-east-1.amazonaws.com/percy-collab:latest
 |---|---|
 | `PERCY_API_BASE`      | URL of the existing FastAPI service (e.g. `https://abc.awsapprunner.com`) |
 | `PERCY_JWT_SECRET`    | **Same value** as FastAPI's `PERCY_JWT_SECRET`. Without this, all WebSocket connections are rejected. |
-| `DATABASE_URL`        | Same Postgres as FastAPI. Server creates `yjs_snapshots` automatically. |
+| `DATABASE_URL`        | Same Postgres as FastAPI. Server creates `yjs_snapshots` automatically (or run `migrations/001_yjs_snapshots.sql` once for explicit migration). |
 | `PERCY_SERVICE_TOKEN` | Optional — shared secret for service-level calls (forwarded as `X-Percy-Service-Token`). Useful for calls without a user JWT. |
 | `PORT`                | `1234` |
 | `SAVE_BACK_INTERVAL_MS` | Default `5000`. Lower = more frequent saves; higher = fewer round-trips. |
 | `SNAPSHOT_INTERVAL_MS`  | Default `5000`. Postgres snapshot debounce. |
+| `REDIS_URL` *(optional)* | If set, enables multi-instance fan-out via Redis pub/sub. Without it, server runs single-instance. Adds ~1-3ms to update propagation. |
+| `PERCY_RATELIMIT_MSG_PER_SEC` | Default `200`. Per-connection message rate cap. |
+| `PERCY_RATELIMIT_USER_CONNS`  | Default `8`.   Concurrent connections per user. |
+| `PERCY_RATELIMIT_MAX_ROOMS`   | Default `10000`. Server-wide concurrent rooms. |
 
 ### Wire the studio
 
@@ -144,16 +148,31 @@ WS_URL=ws://127.0.0.1:11237/test-room node smoke-test.js
 ## Files
 
 ```
-server.js              — entry point: HTTP + WebSocket + per-room state
-Dockerfile             — node:20-alpine
-apprunner.yaml         — App Runner config
+server.js                 — entry point: HTTP + WebSocket + per-room state
+Dockerfile                — node:20-alpine
+apprunner.yaml            — App Runner config
 .dockerignore
 package.json
-smoke-test.js          — tiny end-to-end verification
+smoke-test.js             — tiny end-to-end verification
+migrations/
+  001_yjs_snapshots.sql   — idempotent schema migration
+docs/
+  tls-and-domain.md       — App Runner / Caddy / nginx TLS guides
 lib/
-  extensions.js        — Tiptap extension set (mirror of frontend)
-  tiptapAdapter.js     — Bridge ↔ Tiptap JSON (mirror of frontend)
-  bridgeSync.js        — hydration in / save-back out + dirty tracking
-  fastapiClient.js     — typed wrappers for the FastAPI endpoints we call
-  persistence.js       — PostgresStore + FileStore for Y.Doc snapshots
+  extensions.js           — Tiptap extension set (mirror of frontend)
+  tiptapAdapter.js        — Bridge ↔ Tiptap JSON (mirror of frontend)
+  bridgeSync.js           — hydration in / save-back out + dirty tracking
+                            (with bulk-PATCH path when ≥2 dirty)
+  fastapiClient.js        — typed wrappers for the FastAPI endpoints we call
+  persistence.js          — PostgresStore + FileStore for Y.Doc snapshots
+  rateLimit.js            — token bucket per conn + concurrent-conn cap per user
+  backplane.js            — optional Redis pub/sub for multi-instance fan-out
 ```
+
+## Further reading
+
+- [TLS and custom domains](docs/tls-and-domain.md) — deploy to a `wss://` URL
+- [`migrations/001_yjs_snapshots.sql`](migrations/001_yjs_snapshots.sql) —
+  schema for the snapshot table
+- [Phase 5 plan](../../docs/plans/multiplayer-server-runbook.md) — the
+  original architecture write-up

@@ -49,9 +49,14 @@ import http from "http"
 import { URL as NodeURL } from "url"
 import jwt from "jsonwebtoken"
 
-import { pickStore } from "./lib/persistence.js"
 import {
-  fetchSlideElements, fetchElementText, patchElementText, verifyUser,
+  newConnectionBucket, trackUserConnection, checkRoomBudget, rateLimitConfig,
+} from "./lib/rateLimit.js"
+import { pickStore } from "./lib/persistence.js"
+import { getBackplane } from "./lib/backplane.js"
+import {
+  fetchSlideElements, fetchElementText, patchElementText,
+  bulkPatchElementText, verifyUser,
 } from "./lib/fastapiClient.js"
 import {
   RoomSaveTracker, hydrateRoom, saveBackRoom,
@@ -72,6 +77,8 @@ const MESSAGE_AWARENESS = 1
 
 // Single global persistence store, picked at startup.
 const store = await pickStore()
+// Optional Redis backplane for multi-instance fan-out. Null if REDIS_URL unset.
+const backplane = await getBackplane()
 
 // ── Room registry ───────────────────────────────────────────────────────────
 
@@ -172,9 +179,16 @@ class Room {
       return
     }
     try {
-      const saved = await saveBackRoom(this, this.tracker, async (elementId, bridge) => {
-        await patchElementText(this.docId, this.slideN, elementId, bridge, token)
-      })
+      const saved = await saveBackRoom(
+        this,
+        this.tracker,
+        async (elementId, bridge) => {
+          await patchElementText(this.docId, this.slideN, elementId, bridge, token)
+        },
+        async (updates) => {
+          return await bulkPatchElementText(this.docId, this.slideN, updates, token)
+        },
+      )
       if (saved > 0) {
         console.log(`[room ${this.name}] save-back persisted ${saved} element${saved === 1 ? "" : "s"}`)
       }
@@ -203,6 +217,7 @@ class Room {
     this._idleGCTimer = setTimeout(async () => {
       if (this.conns.size > 0) return
       await this.flush()
+      if (backplane) await backplane.leaveRoom(this.name).catch(() => {})
       this.doc.destroy()
       rooms.delete(this.name)
       console.log(`[room ${this.name}] idle-evicted`)
@@ -221,8 +236,21 @@ async function getOrCreateRoom(name) {
     room.cancelIdleGC()
     return room
   }
+  // Reject if the server is already at its room budget — keeps a runaway
+  // client from exhausting memory by opening thousands of unique rooms.
+  const budget = checkRoomBudget(rooms.size)
+  if (!budget.ok) {
+    const err = new Error(budget.reason)
+    err.code = "ROOM_BUDGET"
+    throw err
+  }
   room = new Room(name)
   rooms.set(name, room)
+  // Bind to backplane so updates fan out to other instances
+  if (backplane) {
+    await backplane.bindRoom(name, room.doc).catch((e) =>
+      console.warn(`backplane bind ${name} failed:`, e.message))
+  }
   return room
 }
 
@@ -278,11 +306,32 @@ async function handleConnection(conn, request, auth) {
   const url = new NodeURL(request.url, "http://localhost")
   const roomName = decodeURIComponent(url.pathname.slice(1)) || "default"
 
-  const room = await getOrCreateRoom(roomName)
+  // Cap concurrent connections per user (multi-tab is fine; bots are not)
+  const userTrack = trackUserConnection(auth.user.id)
+  if (!userTrack.ok) {
+    console.warn(`auth ok but user-cap exceeded: ${auth.user.id} — ${userTrack.reason}`)
+    try { conn.close(1008, "too many connections") } catch {}
+    return
+  }
+
+  let room
+  try {
+    room = await getOrCreateRoom(roomName)
+  } catch (e) {
+    if (e.code === "ROOM_BUDGET") {
+      try { conn.close(1013, "service overloaded") } catch {}
+      userTrack.release()
+      return
+    }
+    throw e
+  }
   await room.load()
   room.pushToken(auth.token)
   room.conns.add(conn)
   console.log(`[room ${roomName}] +1 (${room.conns.size}) — ${auth.user.name || auth.user.id}`)
+
+  // Per-connection rate limit — sized for ~200 msg/s with brief burst headroom
+  const bucket = newConnectionBucket()
 
   // Initial sync: send sync step 1 + initial awareness
   {
@@ -333,6 +382,15 @@ async function handleConnection(conn, request, auth) {
   conn.on("pong", () => { pongReceived = true })
 
   conn.on("message", (raw) => {
+    if (!bucket.consume()) {
+      // Drop this message; possibly close if the bucket has overflowed
+      // sustainedly (a client that's blasting at 5x limit for 30s is misbehaving).
+      if (bucket.shouldTerminate()) {
+        console.warn(`[room ${roomName}] terminating ${auth.user.id} for sustained rate violation`)
+        try { conn.close(1008, "rate limit") } catch {}
+      }
+      return
+    }
     try {
       const message = new Uint8Array(raw)
       const dec = decoding.createDecoder(message)
@@ -357,9 +415,9 @@ async function handleConnection(conn, request, auth) {
     awarenessProtocol.removeAwarenessStates(room.awareness, [conn._clientID].filter(Boolean), conn)
     room.conns.delete(conn)
     room.popToken(auth.token)
+    userTrack.release()
     console.log(`[room ${roomName}] -1 (${room.conns.size} remaining)`)
     if (room.conns.size === 0) {
-      // Last client out — flush save-back and snapshot, then schedule idle GC
       await room.flush()
       room.scheduleIdleGC()
     }
@@ -404,11 +462,14 @@ httpServer.on("upgrade", (request, socket, head) => {
 })
 
 httpServer.listen(PORT, HOST, () => {
+  const rl = rateLimitConfig()
   console.log(`Percy collab server on ws://${HOST}:${PORT}`)
   console.log(`  auth:        ${PERCY_JWT_SECRET ? "JWT verification enabled" : "DISABLED (set PERCY_JWT_SECRET)"}`)
   console.log(`  api base:    ${process.env.PERCY_API_BASE || "http://localhost:8000"}`)
   console.log(`  save-back:   every ${SAVE_BACK_INTERVAL}ms of activity`)
   console.log(`  snapshots:   every ${SNAPSHOT_INTERVAL}ms`)
+  console.log(`  rate limit:  ${rl.msgPerSec} msg/s/conn · ${rl.userConcurrentConns} conns/user · ${rl.maxRooms} rooms max`)
+  console.log(`  backplane:   ${backplane ? "Redis (multi-instance fan-out)" : "single-instance (set REDIS_URL to enable)"}`)
 })
 
 // ── Graceful shutdown ───────────────────────────────────────────────────────

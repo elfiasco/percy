@@ -47,7 +47,8 @@ class _Bucket:
     updated_at: float
 
     def take(self, n: float = 1.0, *, now: float | None = None) -> bool:
-        now = now or time.time()
+        if now is None:
+            now = time.time()
         elapsed = now - self.updated_at
         self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
         self.updated_at = now

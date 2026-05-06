@@ -730,5 +730,7 @@ async def _parse_json(request: Request) -> dict:
 
 def register_chat_router(app) -> None:
     audit.init_db()
+    from percy.agent import cost_tracker
+    cost_tracker.init_db()
     app.include_router(router)
     log.info("agent_chat: registered /api/agent/chat + /api/agent/actions routes")

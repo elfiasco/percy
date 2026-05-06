@@ -151,17 +151,66 @@ function sha1(s) {
  * actually saved. Caller throttles via a debounce timer — typically 5s
  * idle between calls, plus an immediate flush on disconnect.
  *
- * `apiPatchElementText(elementId, bridge)` is provided by the caller so
- * this module doesn't have to know how to authenticate to FastAPI.
+ * Two save paths:
+ *   - Singular PATCH per element when only 1 element is dirty (or as a
+ *     fallback if bulk is unavailable).
+ *   - Bulk PATCH when ≥2 elements are dirty — one round-trip, one snapshot.
+ *
+ * Callers provide both `apiPatchElementText(elementId, bridge)` and
+ * `apiBulkPatchElementText(updates)` so this module doesn't have to know
+ * how to authenticate to FastAPI.
  */
-export async function saveBackRoom(room, tracker, apiPatchElementText) {
+export async function saveBackRoom(room, tracker, apiPatchElementText, apiBulkPatchElementText = null) {
   const dirty = tracker.collectDirty(room)
   if (dirty.length === 0) return 0
 
+  // Bulk path: ≥2 dirty AND a bulk endpoint is available
+  if (dirty.length >= 2 && typeof apiBulkPatchElementText === "function") {
+    const filtered = dirty.filter((d) => !tracker._inflight.has(d.elementId))
+    if (filtered.length === 0) return 0
+    filtered.forEach((d) => tracker._inflight.add(d.elementId))
+
+    const updates = {}
+    for (const { elementId, bridge } of filtered) updates[elementId] = bridge
+
+    try {
+      const result = await apiBulkPatchElementText(updates)
+      const updated = result?.updated ?? {}
+      let saved = 0
+      for (const { elementId, hash } of filtered) {
+        if (Object.prototype.hasOwnProperty.call(updated, elementId)) {
+          tracker.markSaved(elementId, hash)
+          saved++
+        }
+      }
+      const skippedCount = Object.keys(result?.skipped ?? {}).length
+      if (skippedCount > 0) {
+        console.warn(`[room ${tracker.roomName}] bulk save-back skipped ${skippedCount} elements:`,
+          result.skipped)
+      }
+      return saved
+    } catch (e) {
+      // Bulk failed — fall back to per-element PATCHes so a single bad
+      // element doesn't block the rest.
+      console.warn(`[room ${tracker.roomName}] bulk save-back failed, falling back:`, e.message)
+      // Don't double-add to inflight; we already did
+      return await _saveBackSingular(filtered, tracker, apiPatchElementText, /* alreadyInflight */ true)
+    } finally {
+      filtered.forEach((d) => tracker._inflight.delete(d.elementId))
+    }
+  }
+
+  // Singular path
+  return await _saveBackSingular(dirty, tracker, apiPatchElementText, false)
+}
+
+async function _saveBackSingular(items, tracker, apiPatchElementText, alreadyInflight) {
   let saved = 0
-  await Promise.all(dirty.map(async ({ elementId, bridge, hash }) => {
-    if (tracker._inflight.has(elementId)) return
-    tracker._inflight.add(elementId)
+  await Promise.all(items.map(async ({ elementId, bridge, hash }) => {
+    if (!alreadyInflight) {
+      if (tracker._inflight.has(elementId)) return
+      tracker._inflight.add(elementId)
+    }
     try {
       await apiPatchElementText(elementId, bridge)
       tracker.markSaved(elementId, hash)
@@ -169,7 +218,7 @@ export async function saveBackRoom(room, tracker, apiPatchElementText) {
     } catch (e) {
       console.warn(`[room ${tracker.roomName}] save-back ${elementId} failed:`, e.message)
     } finally {
-      tracker._inflight.delete(elementId)
+      if (!alreadyInflight) tracker._inflight.delete(elementId)
     }
   }))
   return saved

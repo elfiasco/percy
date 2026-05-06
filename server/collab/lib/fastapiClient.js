@@ -54,6 +54,24 @@ export function patchElementText(docId, slideN, elementId, bridgeContent, userTo
 }
 
 /**
+ * Bulk text update — for save-back when multiple elements on the same slide
+ * are dirty in one cycle. One round-trip instead of N.
+ *
+ * `updates` is a map of element_id → bridge_content (same shape as the
+ * singular PATCH body).
+ *
+ * Returns { updated: {id: bridge}, skipped: {id: reason} }. Caller should
+ * mark `updated` as persisted and leave `skipped` for the next cycle.
+ */
+export function bulkPatchElementText(docId, slideN, updates, userToken) {
+  return request(
+    `/api/docs/${encodeURIComponent(docId)}/slides/${slideN}/elements/text:bulk`,
+    { method: "PATCH", body: JSON.stringify({ updates }) },
+    userToken,
+  )
+}
+
+/**
  * Verify a user's percy_session JWT by hitting /api/auth/me. Returns the
  * user object on success, throws on failure. Cheap (FastAPI's me endpoint
  * is a fast DB lookup).

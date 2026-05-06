@@ -61,6 +61,9 @@ export class PostgresStore {
     this.pool = pool
   }
   async ensureSchema() {
+    // Idempotent — usually runs after migrations/001_yjs_snapshots.sql has
+    // already created the table. Kept here as a safety net for fresh dev
+    // databases where the migration step was skipped.
     await this.pool.query(`
       CREATE TABLE IF NOT EXISTS yjs_snapshots (
         room_id    TEXT PRIMARY KEY,

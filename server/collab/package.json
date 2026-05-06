@@ -16,6 +16,7 @@
     "@tiptap/extension-text-style": "^3.22.5",
     "@tiptap/extension-underline": "^3.22.5",
     "@tiptap/starter-kit": "^3.22.5",
+    "ioredis": "^5.10.1",
     "jsonwebtoken": "^9.0.3",
     "lib0": "^0.2.99",
     "pg": "^8.20.0",

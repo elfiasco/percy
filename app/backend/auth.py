@@ -73,7 +73,7 @@ def _is_public_path(path: str) -> bool:
     for pat in _PUBLIC_PATTERNS:
         if pat.match(path):
             return True
-    if _DEV_PUBLIC and (path.startswith("/api/docs") or path.startswith("/api/workspace") or path.startswith("/api/upload") or path.startswith("/api/load-bundle") or path.startswith("/api/onboard") or path.startswith("/api/history") or path.startswith("/api/agent")):
+    if _DEV_PUBLIC and (path.startswith("/api/docs") or path.startswith("/api/workspace") or path.startswith("/api/upload") or path.startswith("/api/load-bundle") or path.startswith("/api/onboard") or path.startswith("/api/history") or path.startswith("/api/agent") or path.startswith("/api/mcp")):
         return True
     return False
 
