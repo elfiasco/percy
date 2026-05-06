@@ -1,0 +1,21 @@
+version: 1.0
+runtime: docker
+build:
+  commands:
+    pre-build: []
+    build: []
+    post-build: []
+run:
+  runtime-version: latest
+  command: node server.js
+  network:
+    port: 1234
+    env: PORT
+  env:
+    # Set in App Runner console:
+    #   PERCY_API_BASE       — https://<your-fastapi-runtime>.awsapprunner.com
+    #   PERCY_JWT_SECRET     — same value as the FastAPI service's PERCY_JWT_SECRET
+    #   DATABASE_URL         — same Postgres as FastAPI (or a read-write replica)
+    #   PERCY_SERVICE_TOKEN  — optional, shared secret for service-level calls
+    - name: NODE_ENV
+      value: production

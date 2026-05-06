@@ -81,6 +81,11 @@ from app.backend import audit_middleware as _audit_mw  # noqa: E402
 _audit_mw.install(app)
 
 
+# ── Rate limit middleware (token-bucket per user / per IP) ────────────────────
+from app.backend import rate_limit as _rate_limit  # noqa: E402
+_rate_limit.install(app)
+
+
 @app.get("/api/health", include_in_schema=False)
 def _health():
     """Liveness check used by App Runner. Always returns 200 — the auth middleware
@@ -158,6 +163,11 @@ _agent_secrets.register_secrets_router(app)
 # ── Advanced agent capabilities (brand check, diff narrator, deck generator) ──
 from app.backend import agent_advanced as _agent_advanced  # noqa: E402
 _agent_advanced.register_advanced_router(app)
+
+
+# ── MCP server adapter — expose manifest as MCP tools ─────────────────────
+from app.backend import mcp_server as _mcp_server  # noqa: E402
+_mcp_server.register_mcp_router(app)
 
 
 # ── SPA static serving (production) ───────────────────────────────────────────

@@ -3,6 +3,7 @@ from pathlib import Path
 from aws_cdk import BundlingOptions, CfnOutput, Duration, RemovalPolicy, Stack
 from aws_cdk import aws_applicationautoscaling as autoscaling
 from aws_cdk import aws_apprunner as apprunner
+from aws_cdk import aws_budgets as budgets
 from aws_cdk import aws_cloudwatch as cloudwatch
 from aws_cdk import aws_cloudwatch_actions as cw_actions
 from aws_cdk import aws_ec2 as ec2
@@ -16,8 +17,14 @@ from aws_cdk import aws_logs as logs
 from aws_cdk import aws_rds as rds
 from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_sns as sns
+from aws_cdk import aws_sns_subscriptions as sns_subs
 from aws_cdk import aws_sqs as sqs
 from constructs import Construct
+
+
+# Email address that receives budget + billing alerts. Override at synth via:
+#   cdk deploy --context alert_email=you@example.com
+DEFAULT_ALERT_EMAIL = "bensteel12@verizon.net"
 
 
 class PercyCloudDemoStack(Stack):
@@ -575,9 +582,81 @@ class PercyCloudDemoStack(Stack):
         )
 
         # ------------------------------------------------------------------
-        # Observability — CloudWatch alarms
+        # Observability — CloudWatch alarms + AWS Budgets (cost guardrails)
         # ------------------------------------------------------------------
         alerts_topic = sns.Topic(self, "PercyAlerts", display_name="Percy Dev Alerts")
+
+        # Subscribe a real email so budget/billing alerts actually reach somebody.
+        alert_email = self.node.try_get_context("alert_email") or DEFAULT_ALERT_EMAIL
+        alerts_topic.add_subscription(sns_subs.EmailSubscription(alert_email))
+
+        # ── AWS Budgets — hard cost ceilings with email + SNS notification ──
+        # Tier 1: $25/month soft warning
+        # Tier 2: $100/month hard warning (treat as "investigate immediately")
+        # Tier 3: $500/month emergency (someone deploys a bug or LLM costs explode)
+        for amount, label in ((25, "Soft"), (100, "Hard"), (500, "Emergency")):
+            budgets.CfnBudget(
+                self, f"PercyMonthlyBudget{label}",
+                budget=budgets.CfnBudget.BudgetDataProperty(
+                    budget_name=f"percy-monthly-{label.lower()}",
+                    budget_type="COST",
+                    time_unit="MONTHLY",
+                    budget_limit=budgets.CfnBudget.SpendProperty(
+                        amount=amount, unit="USD",
+                    ),
+                ),
+                notifications_with_subscribers=[
+                    budgets.CfnBudget.NotificationWithSubscribersProperty(
+                        notification=budgets.CfnBudget.NotificationProperty(
+                            notification_type="ACTUAL",
+                            comparison_operator="GREATER_THAN",
+                            threshold=80,  # alert at 80% of the band
+                            threshold_type="PERCENTAGE",
+                        ),
+                        subscribers=[
+                            budgets.CfnBudget.SubscriberProperty(
+                                subscription_type="EMAIL", address=alert_email,
+                            ),
+                            budgets.CfnBudget.SubscriberProperty(
+                                subscription_type="SNS", address=alerts_topic.topic_arn,
+                            ),
+                        ],
+                    ),
+                    # Forecast crossing the band — earlier signal
+                    budgets.CfnBudget.NotificationWithSubscribersProperty(
+                        notification=budgets.CfnBudget.NotificationProperty(
+                            notification_type="FORECASTED",
+                            comparison_operator="GREATER_THAN",
+                            threshold=100,
+                            threshold_type="PERCENTAGE",
+                        ),
+                        subscribers=[
+                            budgets.CfnBudget.SubscriberProperty(
+                                subscription_type="EMAIL", address=alert_email,
+                            ),
+                        ],
+                    ),
+                ],
+            )
+
+        # ── CloudWatch billing alarm (us-east-1 only — that's where Billing
+        #    metrics live) — fires when estimated charges exceed $50 in the
+        #    current month. Belt-and-suspenders alongside Budgets. ──
+        billing_alarm = cloudwatch.Alarm(
+            self, "PercyBillingAlarm",
+            alarm_name="percy-monthly-billing-50usd",
+            metric=cloudwatch.Metric(
+                namespace="AWS/Billing", metric_name="EstimatedCharges",
+                dimensions_map={"Currency": "USD"},
+                statistic="Maximum", period=Duration.hours(6),
+            ),
+            threshold=50,
+            evaluation_periods=1,
+            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+            alarm_description="Estimated AWS charges this month exceeded $50",
+            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+        )
+        billing_alarm.add_alarm_action(cw_actions.SnsAction(alerts_topic))
 
         # DLQ depth — any message here means a job failed 3x
         cloudwatch.Alarm(

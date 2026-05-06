@@ -1,9 +1,10 @@
 import StarterKit from "@tiptap/starter-kit"
-import Underline from "@tiptap/extension-underline"
 import TextAlign from "@tiptap/extension-text-align"
 import Color from "@tiptap/extension-color"
 import { BridgeParagraph }  from "./BridgeParagraph"
 import { BridgeTextStyle }  from "./BridgeTextStyle"
+// Underline is bundled in Tiptap 3 StarterKit — importing the standalone
+// extension causes a "duplicate extension" warning.
 
 /**
  * The standard Tiptap extension set used by every Bridge text-bearing
@@ -22,7 +23,6 @@ export function bridgeExtensions() {
     }),
     BridgeParagraph,
     BridgeTextStyle,
-    Underline,
     TextAlign.configure({
       types: ["paragraph"],
       alignments: ["left", "center", "right", "justify"],

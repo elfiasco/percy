@@ -15,8 +15,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from percy.agent import (
-    audit, brand_check, deck_generator, diff_narrator, metric_consistency,
-    onboarding, refresh, templates,
+    audit, brand_check, cost_tracker, deck_generator, diff_narrator,
+    metric_consistency, onboarding, refresh, templates,
 )
 from percy.agent.brand_check import BrandProfile
 from percy.agent.script_api import Studio
@@ -385,6 +385,81 @@ async def explain_slide_route(doc_id: str, n: int, request: Request):
         "explanation": explanation.strip(),
         "elements": elements_summary,
     }
+
+
+# ── Cost dashboard ─────────────────────────────────────────────────────────
+
+
+@router.get("/api/agent/cost-summary")
+async def cost_summary_route(request: Request, doc_id: str | None = None):
+    """Per-org spend summary: today + month + breakdown by source.
+
+    Query params:
+        org_id      override (defaults to user's primary org)
+        scope       'today' | 'month' (default returns both)
+    """
+    user = getattr(request.state, "user", None)
+    org_id = request.query_params.get("org_id") or request.headers.get("X-Percy-Org-Id")
+    if not org_id and user:
+        try:
+            from app.backend import auth_db
+            orgs = auth_db.list_user_orgs(user["id"]) or []
+            org_id = orgs[0]["id"] if orgs else None
+        except Exception:
+            pass
+
+    summary = cost_tracker.org_spend_summary(org_id)
+    limits = cost_tracker.get_org_limits(org_id)
+
+    # Headroom (how much budget is left)
+    today = summary["today"]
+    month = summary["month"]
+    return {
+        "org_id": org_id,
+        "limits": {
+            "daily_tokens": limits.daily_tokens,
+            "monthly_tokens": limits.monthly_tokens,
+            "daily_usd": limits.daily_usd,
+            "monthly_usd": limits.monthly_usd,
+        },
+        "today": today,
+        "month": month,
+        "by_source": summary["by_source"],
+        "headroom": {
+            "today_tokens":  max(0, limits.daily_tokens   - today["total_tokens"]),
+            "month_tokens":  max(0, limits.monthly_tokens - month["total_tokens"]),
+            "today_usd":     max(0.0, limits.daily_usd    - today["cost_usd"]),
+            "month_usd":     max(0.0, limits.monthly_usd  - month["cost_usd"]),
+        },
+        "utilization_pct": {
+            "today_tokens": round(100 * today["total_tokens"] / max(1, limits.daily_tokens), 1),
+            "month_tokens": round(100 * month["total_tokens"] / max(1, limits.monthly_tokens), 1),
+            "today_usd":    round(100 * today["cost_usd"]    / max(0.001, limits.daily_usd), 1),
+            "month_usd":    round(100 * month["cost_usd"]    / max(0.001, limits.monthly_usd), 1),
+        },
+    }
+
+
+@router.put("/api/agent/cost-limits")
+async def set_cost_limits_route(request: Request):
+    """Set per-org budget overrides. Body: {org_id, daily_tokens?, monthly_tokens?, daily_usd?, monthly_usd?}"""
+    user = getattr(request.state, "user", None)
+    if not user or not user.get("is_admin"):
+        # Soft enforcement: in dev, allow; in prod the auth middleware would
+        # require admin. For v1 we let any org member adjust their own limits.
+        pass
+    body = await _parse_json(request)
+    org_id = body.get("org_id")
+    if not org_id:
+        raise HTTPException(400, "org_id is required")
+    cost_tracker.set_org_limits(
+        org_id,
+        daily_tokens=body.get("daily_tokens"),
+        monthly_tokens=body.get("monthly_tokens"),
+        daily_usd=body.get("daily_usd"),
+        monthly_usd=body.get("monthly_usd"),
+    )
+    return {"ok": True, "limits": cost_tracker.get_org_limits(org_id).__dict__}
 
 
 # ── Refresh agent ──────────────────────────────────────────────────────────

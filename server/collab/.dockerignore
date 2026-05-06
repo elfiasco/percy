@@ -1,0 +1,7 @@
+node_modules
+snapshots
+*.log
+.env
+.env.local
+README.md
+smoke-test.js

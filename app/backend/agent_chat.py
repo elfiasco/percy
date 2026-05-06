@@ -75,17 +75,60 @@ def _main():
 def _make_llm_call(model_hint: str | None = None):
     """Return a callable ``(system, user) -> str`` that invokes the configured LLM.
 
-    Resolution order:
-      1. ANTHROPIC_API_KEY → Claude (Sonnet)
-      2. OPENAI_API_KEY    → OpenAI
-      3. localhost:1234    → LM Studio (no auth)
-      4. Raise: no LLM available
+    Resolution order (PERCY_LLM_PROVIDER env var overrides):
+      1. PERCY_LLM_PROVIDER=bedrock  → AWS Bedrock with Anthropic Claude (IAM auth)
+      2. PERCY_LLM_PROVIDER=anthropic  → direct Anthropic API
+      3. PERCY_LLM_PROVIDER=openai     → direct OpenAI
+      4. PERCY_LLM_PROVIDER=lmstudio   → local LM Studio
+      5. (auto)  ANTHROPIC_API_KEY → anthropic
+                  OPENAI_API_KEY    → openai
+                  AWS creds + Bedrock model env → bedrock
+                  else              → lmstudio
     """
-    if os.environ.get("ANTHROPIC_API_KEY"):
+    provider = os.environ.get("PERCY_LLM_PROVIDER", "").lower().strip()
+
+    if provider == "bedrock" or (not provider and os.environ.get("PERCY_BEDROCK_MODEL")):
+        return _bedrock_call(model_hint or os.environ.get("PERCY_BEDROCK_MODEL")
+                             or "anthropic.claude-sonnet-4-v1:0")
+    if provider == "anthropic" or (not provider and os.environ.get("ANTHROPIC_API_KEY")):
         return _anthropic_call(model_hint or "claude-sonnet-4-6")
-    if os.environ.get("OPENAI_API_KEY"):
+    if provider == "openai" or (not provider and os.environ.get("OPENAI_API_KEY")):
         return _openai_call(model_hint or "gpt-4o")
     return _lmstudio_call(model_hint or "qwen/qwen3-coder-30b")
+
+
+def _bedrock_call(model: str):
+    """Bedrock-backed Anthropic Claude. Requires AWS credentials (via the App
+    Runner instance role in prod, or PERCY_AWS_PROFILE locally).
+
+    Uses ``AnthropicBedrock`` from the official ``anthropic`` SDK so the rest
+    of the planner code (which expects ``messages.create``) works unchanged.
+    """
+    try:
+        from anthropic import AnthropicBedrock
+    except ImportError as exc:
+        raise RuntimeError(
+            "Bedrock requires the anthropic[bedrock] extra: "
+            "pip install 'anthropic[bedrock]>=0.40.0'"
+        ) from exc
+
+    region = os.environ.get("PERCY_BEDROCK_REGION", "us-east-1")
+    client = AnthropicBedrock(aws_region=region)
+
+    def call(system: str, user: str) -> str:
+        resp = client.messages.create(
+            model=model, max_tokens=2048,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        # Surface usage to the cost tracker via a thread-local hook
+        usage = getattr(resp, "usage", None)
+        if usage is not None:
+            _stash_usage("bedrock", model,
+                         getattr(usage, "input_tokens", 0),
+                         getattr(usage, "output_tokens", 0))
+        return next((b.text for b in resp.content if hasattr(b, "text")), "")
+    return call
 
 
 def _anthropic_call(model: str):
@@ -98,8 +141,37 @@ def _anthropic_call(model: str):
             system=system,
             messages=[{"role": "user", "content": user}],
         )
+        usage = getattr(resp, "usage", None)
+        if usage is not None:
+            _stash_usage("anthropic", model,
+                         getattr(usage, "input_tokens", 0),
+                         getattr(usage, "output_tokens", 0))
         return next((b.text for b in resp.content if hasattr(b, "text")), "")
     return call
+
+
+# ── Per-call usage tracking (thread-local stash, harvested by chat handler) ──
+
+import threading
+_USAGE_STASH = threading.local()
+
+
+def _stash_usage(provider: str, model: str, input_tokens: int, output_tokens: int) -> None:
+    """Called by the LLM-call wrappers; harvested by the chat handler when it
+    writes the audit + cost telemetry rows."""
+    bucket = getattr(_USAGE_STASH, "calls", None)
+    if bucket is None:
+        bucket = []
+        _USAGE_STASH.calls = bucket
+    bucket.append({"provider": provider, "model": model,
+                   "input_tokens": int(input_tokens or 0),
+                   "output_tokens": int(output_tokens or 0)})
+
+
+def _harvest_usage() -> list[dict]:
+    bucket = getattr(_USAGE_STASH, "calls", None) or []
+    _USAGE_STASH.calls = []
+    return bucket
 
 
 def _openai_call(model: str):
@@ -210,6 +282,29 @@ async def agent_chat(request: Request):
 
     helpers = _main()
     helpers["require"](doc_id)
+
+    # --- 0. Budget check ----------------------------------------------------
+    # Pre-flight: would this call exceed the org's daily/monthly token or $ budget?
+    from percy.agent import cost_tracker as _ct
+    org_id = _resolve_org_id(request)
+    budget_check = _ct.check_budget(
+        org_id, estimated_input_tokens=4500, estimated_output_tokens=800,
+    )
+    if not budget_check.allowed:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "budget_exceeded",
+                "message": budget_check.reason,
+                "headroom": {
+                    "today_usd": round(budget_check.headroom_today_usd, 4),
+                    "today_tokens": budget_check.headroom_today_tokens,
+                    "month_usd": round(budget_check.headroom_month_usd, 4),
+                    "month_tokens": budget_check.headroom_month_tokens,
+                },
+            },
+        )
+    _harvest_usage()  # clear any stale stash
 
     # --- 1. Classify mode ---------------------------------------------------
     t_start = time.time()
@@ -323,7 +418,7 @@ async def agent_chat(request: Request):
         elapsed_ms=int((time.time() - t_start) * 1000),
     )
 
-    # --- 6. Telemetry -------------------------------------------------------
+    # --- 6. Telemetry + cost tracking --------------------------------------
     audit.record_telemetry(
         user_id=user_id, doc_id=doc_id, prompt=user_prompt,
         mode_classified=decision.mode,
@@ -333,6 +428,16 @@ async def agent_chat(request: Request):
         executed=exec_result.ok, error=exec_result.error,
         latency_ms=int((time.time() - t_start) * 1000),
     )
+    # Harvest per-call usage emitted by the LLM wrappers and persist as
+    # individual rows so the cost dashboard can break down by source/model.
+    for usage in _harvest_usage():
+        _ct.record_call(_ct.CallRecord(
+            user_id=user_id, org_id=org_id, doc_id=doc_id,
+            provider=usage["provider"], model=usage["model"],
+            source="chat",
+            input_tokens=usage["input_tokens"], output_tokens=usage["output_tokens"],
+            action_id=action_id, latency_ms=int((time.time() - t_start) * 1000),
+        ))
 
     # --- 7. Reply -----------------------------------------------------------
     reply = _summarize_reply(decision, plan, exec_result)
@@ -543,6 +648,22 @@ def _studio_client(request: Request, doc_id: str) -> Studio:
 def _user_id(request: Request) -> str | None:
     user = getattr(request.state, "user", None)
     return user.get("id") if user else None
+
+
+def _resolve_org_id(request: Request) -> str | None:
+    """Best-effort: header > user's primary org."""
+    hdr = request.headers.get("X-Percy-Org-Id")
+    if hdr:
+        return hdr
+    user = getattr(request.state, "user", None)
+    if not user:
+        return None
+    try:
+        from app.backend import auth_db
+        orgs = auth_db.list_user_orgs(user["id"]) or []
+        return orgs[0]["id"] if orgs else None
+    except Exception:
+        return None
 
 
 def _deck_summary(doc_id: str) -> dict:

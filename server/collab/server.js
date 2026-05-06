@@ -1,48 +1,42 @@
 /**
- * Percy collaboration server — Yjs WebSocket relay.
+ * Percy collaboration server — production version.
  *
  * Architecture:
  *
  *   client (Tiptap + y-prosemirror + WebsocketProvider)
- *      ↕  WebSocket
- *   server (this file)
- *      ↕  Yjs sync protocol (binary frames)
- *   in-memory Y.Doc per room
- *      └── periodic snapshot to disk (./snapshots/<roomId>.bin)
+ *      ↕  WebSocket  (auth via percy_session cookie/token in query string)
+ *   collab server (this file)
+ *      ↕  Y.Doc per (docId, slideN) in memory
+ *      ├──→ FastAPI for hydration + save-back  (every text element)
+ *      └──→ Postgres for periodic Y.Doc snapshots (yjs_snapshots table)
  *
- * Each connection joins a room (the path of the WebSocket URL — e.g.
- * `ws://host/<docId>::slide-<n>`). Multiple connections to the same room
- * share a Y.Doc; Yjs handles conflict-free merges.
+ * Bridge JSON stays canonical. The Y.Doc is a transient editing cache.
  *
- * Persistence: simple file-based for now. On disconnect from an empty
- * room, snapshot the Y.Doc state vector to ./snapshots/<roomId>.bin.
- * On first connect to an empty room, load the snapshot if it exists.
+ *   Hydration (cold start, no snapshot):
+ *     1. fetchSlideElements(docId, slideN) → enumerate elements
+ *     2. fetchElementText(elId) for each text-bearing element
+ *     3. Seed each element's Y.XmlFragment with paragraphsToTiptap(content)
  *
- * # Run
+ *   Live editing:
+ *     - Yjs sync protocol updates flow between connected clients
+ *     - Each update is broadcast to other clients in the room
+ *     - Snapshot to Postgres every 5s (debounced)
  *
- *   cd server/collab
- *   npm install
- *   PORT=1234 node server.js
+ *   Save-back (every 5s of activity, plus on graceful disconnect):
+ *     - For each dirty element, yXmlFragmentToProsemirrorJSON → tiptapToParagraphs
+ *     - PATCH /api/docs/<id>/slides/<n>/elements/<el>/text
+ *     - Track per-element hashes so unchanged elements don't re-POST
  *
- * # Configure the studio to use it
+ * Configuration via env:
  *
- *   echo "VITE_YJS_WS_URL=ws://localhost:1234" >> frontend/.env.local
- *   # In Studio.tsx, change transport: "broadcast" → "websocket"
- *   npm run dev
- *
- * Two browser windows on different machines (or just two browsers on the
- * same machine) at the same studio URL will now sync.
- *
- * # Production hardening (not done here)
- *
- *   - Auth: validate the JWT in the connection's `token` query param against
- *     PERCY_JWT_SECRET, check user has access to the docId.
- *   - Persistence: swap the file-snapshot for Postgres (yjs_snapshots table).
- *   - Save back to Bridge: periodically run `tiptapToParagraphs` over each
- *     element's Y.XmlFragment and POST to the existing `/api/docs/.../text`
- *     endpoints, so the Y.Doc state and the Bridge JSON stay in sync.
- *   - Idle eviction: free Y.Docs after 5min of zero connections.
- *   - TLS: terminate at a reverse proxy (nginx, Caddy) or Cloudflare.
+ *   PORT                  — listening port (default 1234)
+ *   HOST                  — bind host (default 0.0.0.0)
+ *   PERCY_API_BASE        — FastAPI URL (default http://localhost:8000)
+ *   PERCY_JWT_SECRET      — same secret as the FastAPI backend (for auth)
+ *   PERCY_SERVICE_TOKEN   — optional, for service-level FastAPI calls
+ *   DATABASE_URL          — Postgres for snapshots; falls back to filesystem
+ *   SAVE_BACK_INTERVAL_MS — debounce for save-back (default 5000)
+ *   SNAPSHOT_INTERVAL_MS  — debounce for Y.Doc → Postgres (default 5000)
  */
 
 import { WebSocketServer } from "ws"
@@ -51,74 +45,171 @@ import * as syncProtocol      from "y-protocols/sync"
 import * as awarenessProtocol from "y-protocols/awareness"
 import * as encoding from "lib0/encoding"
 import * as decoding from "lib0/decoding"
-import { promises as fs } from "fs"
-import path  from "path"
-import http  from "http"
+import http from "http"
+import { URL as NodeURL } from "url"
+import jwt from "jsonwebtoken"
 
-const PORT          = parseInt(process.env.PORT || "1234", 10)
-const HOST          = process.env.HOST || "0.0.0.0"
-const SNAPSHOT_DIR  = process.env.SNAPSHOT_DIR || "./snapshots"
-const SNAPSHOT_DEBOUNCE_MS = 2000
-const PING_INTERVAL = 30_000
+import { pickStore } from "./lib/persistence.js"
+import {
+  fetchSlideElements, fetchElementText, patchElementText, verifyUser,
+} from "./lib/fastapiClient.js"
+import {
+  RoomSaveTracker, hydrateRoom, saveBackRoom,
+} from "./lib/bridgeSync.js"
 
-// ── Yjs protocol message types (from y-protocols) ───────────────────────────
+// ── Config ──────────────────────────────────────────────────────────────────
+
+const PORT                 = parseInt(process.env.PORT || "1234", 10)
+const HOST                 = process.env.HOST || "0.0.0.0"
+const PERCY_JWT_SECRET     = process.env.PERCY_JWT_SECRET || ""
+const SAVE_BACK_INTERVAL   = parseInt(process.env.SAVE_BACK_INTERVAL_MS || "5000", 10)
+const SNAPSHOT_INTERVAL    = parseInt(process.env.SNAPSHOT_INTERVAL_MS  || "5000", 10)
+const PING_INTERVAL        = 30_000
+const ROOM_IDLE_GC_MS      = 5 * 60 * 1000   // 5min with zero clients → free Y.Doc
+
 const MESSAGE_SYNC      = 0
 const MESSAGE_AWARENESS = 1
 
-// ── Room registry ────────────────────────────────────────────────────────────
+// Single global persistence store, picked at startup.
+const store = await pickStore()
+
+// ── Room registry ───────────────────────────────────────────────────────────
 
 class Room {
   constructor(name) {
     this.name      = name
     this.doc       = new Y.Doc()
     this.awareness = new awarenessProtocol.Awareness(this.doc)
-    this.awareness.setLocalState(null)   // server has no awareness state
+    this.awareness.setLocalState(null)
     this.conns     = new Set()
-    this.snapshotPath = path.join(SNAPSHOT_DIR, encodeURIComponent(name) + ".bin")
+
+    const { docId, slideN } = parseRoomName(name) || {}
+    this.docId  = docId  ?? null
+    this.slideN = slideN ?? null
+    this.tracker = new RoomSaveTracker(name, parseRoomName)
+
+    // Pick *some* user token for save-back (the most recently joined). When
+    // the user disconnects, we move to the next, or fall back to service
+    // token. This lets the audit log attribute most edits to the right user.
+    this._tokenStack = []
 
     this._snapshotTimer = null
-    const onUpdate = () => this._scheduleSnapshot()
-    this.doc.on("update", onUpdate)
+    this._saveBackTimer = null
+    this._idleGCTimer   = null
+    this._loaded        = false
+
+    this.doc.on("update", (_update, origin) => {
+      this._scheduleSnapshot()
+      // origin === conn means came from a client — that's the case where
+      // we need to save back. Local-server updates (hydration) don't trigger
+      // save-back to avoid an immediate POST after cold-start.
+      if (origin && origin !== this && origin !== "hydration") {
+        this._scheduleSaveBack()
+      }
+    })
   }
 
-  async loadSnapshot() {
+  /** Cold-start: load snapshot if it exists, else hydrate from FastAPI. */
+  async load() {
+    if (this._loaded) return
+    this._loaded = true
+
+    const data = await store.load(this.name).catch((e) => {
+      console.warn(`[room ${this.name}] snapshot load failed:`, e.message)
+      return null
+    })
+    if (data) {
+      Y.applyUpdate(this.doc, data, "hydration")
+      console.log(`[room ${this.name}] loaded snapshot (${data.length} bytes)`)
+      return
+    }
+
+    // No snapshot — hydrate from Bridge. Use the most-recent user token
+    // if we have one (we don't on first connect — handled in handleConnection).
+    if (this.docId == null || this.slideN == null) return
+    const token = this._tokenStack[this._tokenStack.length - 1] ?? null
     try {
-      const buf = await fs.readFile(this.snapshotPath)
-      Y.applyUpdate(this.doc, new Uint8Array(buf))
-      console.log(`[room ${this.name}] loaded snapshot (${buf.length} bytes)`)
+      const slidePayload = await fetchSlideElements(this.docId, this.slideN, token)
+      await hydrateRoom(this, slidePayload, async (elId) => {
+        return fetchElementText(this.docId, this.slideN, elId, token)
+      })
+      console.log(`[room ${this.name}] hydrated ${slidePayload.elements?.length ?? 0} elements from Bridge`)
     } catch (e) {
-      if (e.code !== "ENOENT") console.warn(`[room ${this.name}] snapshot load failed:`, e)
+      console.warn(`[room ${this.name}] hydration failed:`, e.message)
     }
   }
 
-  _scheduleSnapshot() {
-    if (this._snapshotTimer) clearTimeout(this._snapshotTimer)
-    this._snapshotTimer = setTimeout(() => this._writeSnapshot(), SNAPSHOT_DEBOUNCE_MS)
-  }
+  pushToken(t) { if (t) this._tokenStack.push(t) }
+  popToken(t)  { const i = this._tokenStack.lastIndexOf(t); if (i >= 0) this._tokenStack.splice(i, 1) }
+  currentToken() { return this._tokenStack[this._tokenStack.length - 1] ?? null }
 
+  // ── snapshot loop ────────────────────────────────────────────────────────
+  _scheduleSnapshot() {
+    if (this._snapshotTimer) return
+    this._snapshotTimer = setTimeout(() => this._writeSnapshot(), SNAPSHOT_INTERVAL)
+  }
   async _writeSnapshot() {
     this._snapshotTimer = null
     try {
       const update = Y.encodeStateAsUpdate(this.doc)
-      await fs.mkdir(SNAPSHOT_DIR, { recursive: true })
-      await fs.writeFile(this.snapshotPath, update)
+      await store.save(this.name, update)
     } catch (e) {
       console.error(`[room ${this.name}] snapshot write failed:`, e)
     }
   }
 
-  /** Broadcast a binary message to every connected client except `origin`. */
-  broadcast(origin, message) {
-    for (const conn of this.conns) {
-      if (conn === origin) continue
-      if (conn.readyState !== 1 /* OPEN */) continue
-      try { conn.send(message) } catch (e) { console.warn("broadcast failed:", e) }
+  // ── save-back loop ───────────────────────────────────────────────────────
+  _scheduleSaveBack() {
+    if (this._saveBackTimer) return
+    this._saveBackTimer = setTimeout(() => this._runSaveBack(), SAVE_BACK_INTERVAL)
+  }
+  async _runSaveBack() {
+    this._saveBackTimer = null
+    if (this.docId == null || this.slideN == null) return
+    const token = this.currentToken()
+    if (!token) {
+      // No authenticated user available — defer (stays dirty; will retry).
+      return
+    }
+    try {
+      const saved = await saveBackRoom(this, this.tracker, async (elementId, bridge) => {
+        await patchElementText(this.docId, this.slideN, elementId, bridge, token)
+      })
+      if (saved > 0) {
+        console.log(`[room ${this.name}] save-back persisted ${saved} element${saved === 1 ? "" : "s"}`)
+      }
+    } catch (e) {
+      console.error(`[room ${this.name}] save-back failed:`, e.message)
     }
   }
 
-  destroy() {
-    if (this._snapshotTimer) clearTimeout(this._snapshotTimer)
-    this.doc.destroy()
+  /** Force flush before disconnect / shutdown. */
+  async flush() {
+    if (this._saveBackTimer) {
+      clearTimeout(this._saveBackTimer)
+      this._saveBackTimer = null
+    }
+    await this._runSaveBack()
+    if (this._snapshotTimer) {
+      clearTimeout(this._snapshotTimer)
+      this._snapshotTimer = null
+    }
+    await this._writeSnapshot()
+  }
+
+  // ── idle GC ──────────────────────────────────────────────────────────────
+  scheduleIdleGC() {
+    if (this._idleGCTimer) clearTimeout(this._idleGCTimer)
+    this._idleGCTimer = setTimeout(async () => {
+      if (this.conns.size > 0) return
+      await this.flush()
+      this.doc.destroy()
+      rooms.delete(this.name)
+      console.log(`[room ${this.name}] idle-evicted`)
+    }, ROOM_IDLE_GC_MS)
+  }
+  cancelIdleGC() {
+    if (this._idleGCTimer) { clearTimeout(this._idleGCTimer); this._idleGCTimer = null }
   }
 }
 
@@ -126,147 +217,205 @@ const rooms = new Map()
 
 async function getOrCreateRoom(name) {
   let room = rooms.get(name)
-  if (room) return room
+  if (room) {
+    room.cancelIdleGC()
+    return room
+  }
   room = new Room(name)
   rooms.set(name, room)
-  await room.loadSnapshot()
   return room
 }
 
-// ── WebSocket handler ───────────────────────────────────────────────────────
+/**
+ * Room name parser. Studio sends `<docId>::slide-<n>`.
+ */
+function parseRoomName(name) {
+  const m = name.match(/^(.+)::slide-(\d+)$/)
+  if (!m) return null
+  return { docId: m[1], slideN: parseInt(m[2], 10) }
+}
 
-function handleConnection(conn, request) {
-  const url = new URL(request.url, "http://localhost")
-  // Room name is the URL path, stripped of leading slash.
-  // Studio sends `ws://host/<docId>::slide-<n>` so the path is the room id.
+// ── Auth ────────────────────────────────────────────────────────────────────
+
+async function authenticate(request) {
+  const url = new NodeURL(request.url, "http://localhost")
+  // Token can come from query string (the WebsocketProvider 'params' option
+  // appends them) OR the cookie header (browsers preserve cookies on WS).
+  let token = url.searchParams.get("token") || ""
+  if (!token) {
+    const cookie = request.headers.cookie ?? ""
+    const m = cookie.match(/percy_session=([^;]+)/)
+    if (m) token = m[1]
+  }
+  if (!token) {
+    // In dev with no JWT secret configured, allow connections through so
+    // the BroadcastChannel-style local demo still works against this server.
+    if (!PERCY_JWT_SECRET) {
+      return { token: null, user: { id: "anonymous", name: "Anonymous" } }
+    }
+    throw new Error("no auth token")
+  }
+  // Decode locally for fast path
+  let payload
+  try {
+    payload = jwt.verify(token, PERCY_JWT_SECRET)
+  } catch (e) {
+    throw new Error(`invalid token: ${e.message}`)
+  }
+  // Verify user exists (single round-trip; cached upstream by FastAPI)
+  let user
+  try {
+    user = await verifyUser(token)
+  } catch (e) {
+    throw new Error(`auth failed: ${e.message}`)
+  }
+  return { token, user, payload }
+}
+
+// ── Per-connection handler ──────────────────────────────────────────────────
+
+async function handleConnection(conn, request, auth) {
+  const url = new NodeURL(request.url, "http://localhost")
   const roomName = decodeURIComponent(url.pathname.slice(1)) || "default"
 
-  ;(async () => {
-    const room = await getOrCreateRoom(roomName)
-    room.conns.add(conn)
-    console.log(`[room ${roomName}] +1 client (${room.conns.size} total)`)
+  const room = await getOrCreateRoom(roomName)
+  await room.load()
+  room.pushToken(auth.token)
+  room.conns.add(conn)
+  console.log(`[room ${roomName}] +1 (${room.conns.size}) — ${auth.user.name || auth.user.id}`)
 
-    // Send initial sync step 1 — clients respond with their state vector
-    // so we know what updates to ship.
-    {
-      const enc = encoding.createEncoder()
-      encoding.writeVarUint(enc, MESSAGE_SYNC)
-      syncProtocol.writeSyncStep1(enc, room.doc)
-      conn.send(encoding.toUint8Array(enc))
-    }
-    // Send initial awareness state
-    {
-      const states = Array.from(room.awareness.getStates().keys())
-      if (states.length > 0) {
-        const enc = encoding.createEncoder()
-        encoding.writeVarUint(enc, MESSAGE_AWARENESS)
-        encoding.writeVarUint8Array(
-          enc,
-          awarenessProtocol.encodeAwarenessUpdate(room.awareness, states),
-        )
-        conn.send(encoding.toUint8Array(enc))
-      }
-    }
-
-    // Forward Yjs updates to other clients in the room
-    const onDocUpdate = (update, origin) => {
-      if (origin === conn) return  // don't echo
-      const enc = encoding.createEncoder()
-      encoding.writeVarUint(enc, MESSAGE_SYNC)
-      syncProtocol.writeUpdate(enc, update)
-      try { conn.send(encoding.toUint8Array(enc)) } catch {}
-    }
-    room.doc.on("update", onDocUpdate)
-
-    const onAwarenessUpdate = ({ added, updated, removed }, origin) => {
-      if (origin === conn) return
-      const changedClients = added.concat(updated).concat(removed)
+  // Initial sync: send sync step 1 + initial awareness
+  {
+    const enc = encoding.createEncoder()
+    encoding.writeVarUint(enc, MESSAGE_SYNC)
+    syncProtocol.writeSyncStep1(enc, room.doc)
+    conn.send(encoding.toUint8Array(enc))
+  }
+  {
+    const states = Array.from(room.awareness.getStates().keys())
+    if (states.length > 0) {
       const enc = encoding.createEncoder()
       encoding.writeVarUint(enc, MESSAGE_AWARENESS)
       encoding.writeVarUint8Array(
         enc,
-        awarenessProtocol.encodeAwarenessUpdate(room.awareness, changedClients),
+        awarenessProtocol.encodeAwarenessUpdate(room.awareness, states),
       )
-      try { conn.send(encoding.toUint8Array(enc)) } catch {}
+      conn.send(encoding.toUint8Array(enc))
     }
-    room.awareness.on("update", onAwarenessUpdate)
+  }
 
-    // Ping/pong to keep the connection alive through proxies
-    let pongReceived = true
-    const pingInterval = setInterval(() => {
-      if (!pongReceived) { conn.terminate(); return }
-      pongReceived = false
-      try { conn.ping() } catch { conn.terminate() }
-    }, PING_INTERVAL)
-    conn.on("pong", () => { pongReceived = true })
+  const onDocUpdate = (update, origin) => {
+    if (origin === conn) return
+    const enc = encoding.createEncoder()
+    encoding.writeVarUint(enc, MESSAGE_SYNC)
+    syncProtocol.writeUpdate(enc, update)
+    try { conn.send(encoding.toUint8Array(enc)) } catch {}
+  }
+  room.doc.on("update", onDocUpdate)
 
-    conn.on("message", (raw) => {
-      try {
-        const message = new Uint8Array(raw)
-        const dec = decoding.createDecoder(message)
-        const type = decoding.readVarUint(dec)
-        if (type === MESSAGE_SYNC) {
-          const enc = encoding.createEncoder()
-          encoding.writeVarUint(enc, MESSAGE_SYNC)
-          syncProtocol.readSyncMessage(dec, enc, room.doc, conn /* transactionOrigin */)
-          if (encoding.length(enc) > 1) {
-            conn.send(encoding.toUint8Array(enc))
-          }
-        } else if (type === MESSAGE_AWARENESS) {
-          awarenessProtocol.applyAwarenessUpdate(
-            room.awareness,
-            decoding.readVarUint8Array(dec),
-            conn,
-          )
-        }
-      } catch (e) {
-        console.error("message handler error:", e)
+  const onAwarenessUpdate = ({ added, updated, removed }, origin) => {
+    if (origin === conn) return
+    const changed = added.concat(updated).concat(removed)
+    const enc = encoding.createEncoder()
+    encoding.writeVarUint(enc, MESSAGE_AWARENESS)
+    encoding.writeVarUint8Array(enc, awarenessProtocol.encodeAwarenessUpdate(room.awareness, changed))
+    try { conn.send(encoding.toUint8Array(enc)) } catch {}
+  }
+  room.awareness.on("update", onAwarenessUpdate)
+
+  // Ping/pong
+  let pongReceived = true
+  const pingInterval = setInterval(() => {
+    if (!pongReceived) { conn.terminate(); return }
+    pongReceived = false
+    try { conn.ping() } catch { conn.terminate() }
+  }, PING_INTERVAL)
+  conn.on("pong", () => { pongReceived = true })
+
+  conn.on("message", (raw) => {
+    try {
+      const message = new Uint8Array(raw)
+      const dec = decoding.createDecoder(message)
+      const type = decoding.readVarUint(dec)
+      if (type === MESSAGE_SYNC) {
+        const enc = encoding.createEncoder()
+        encoding.writeVarUint(enc, MESSAGE_SYNC)
+        syncProtocol.readSyncMessage(dec, enc, room.doc, conn)
+        if (encoding.length(enc) > 1) conn.send(encoding.toUint8Array(enc))
+      } else if (type === MESSAGE_AWARENESS) {
+        awarenessProtocol.applyAwarenessUpdate(room.awareness, decoding.readVarUint8Array(dec), conn)
       }
-    })
+    } catch (e) {
+      console.error("message handler error:", e)
+    }
+  })
 
-    conn.on("close", () => {
-      clearInterval(pingInterval)
-      room.doc.off("update", onDocUpdate)
-      room.awareness.off("update", onAwarenessUpdate)
-      awarenessProtocol.removeAwarenessStates(room.awareness, [conn._clientID].filter(Boolean), conn)
-      room.conns.delete(conn)
-      console.log(`[room ${roomName}] -1 client (${room.conns.size} remaining)`)
-      // Force a final snapshot so disconnect-with-pending-changes persists.
-      room._scheduleSnapshot()
-    })
-  })().catch((e) => {
-    console.error("connection setup failed:", e)
-    try { conn.close() } catch {}
+  conn.on("close", async () => {
+    clearInterval(pingInterval)
+    room.doc.off("update", onDocUpdate)
+    room.awareness.off("update", onAwarenessUpdate)
+    awarenessProtocol.removeAwarenessStates(room.awareness, [conn._clientID].filter(Boolean), conn)
+    room.conns.delete(conn)
+    room.popToken(auth.token)
+    console.log(`[room ${roomName}] -1 (${room.conns.size} remaining)`)
+    if (room.conns.size === 0) {
+      // Last client out — flush save-back and snapshot, then schedule idle GC
+      await room.flush()
+      room.scheduleIdleGC()
+    }
   })
 }
 
 // ── HTTP + WebSocket startup ────────────────────────────────────────────────
 
 const httpServer = http.createServer((req, res) => {
-  // Tiny health endpoint
   if (req.url === "/healthz") {
     res.writeHead(200, { "content-type": "application/json" })
-    res.end(JSON.stringify({ ok: true, rooms: rooms.size, uptime: process.uptime() }))
+    res.end(JSON.stringify({
+      ok:        true,
+      rooms:     rooms.size,
+      uptime:    process.uptime(),
+      hasAuth:   !!PERCY_JWT_SECRET,
+      transport: "y-websocket-protocol",
+    }))
     return
   }
   res.writeHead(200, { "content-type": "text/plain" })
   res.end("Percy collaboration server. Connect via WebSocket.")
 })
 
-const wss = new WebSocketServer({ server: httpServer })
-wss.on("connection", handleConnection)
+const wss = new WebSocketServer({ noServer: true })
+
+httpServer.on("upgrade", (request, socket, head) => {
+  authenticate(request)
+    .then((auth) => {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        handleConnection(ws, request, auth).catch((e) => {
+          console.error("connection setup failed:", e)
+          try { ws.close() } catch {}
+        })
+      })
+    })
+    .catch((e) => {
+      console.warn("auth rejected:", e.message)
+      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n")
+      socket.destroy()
+    })
+})
 
 httpServer.listen(PORT, HOST, () => {
-  console.log(`Percy collab server listening on ws://${HOST}:${PORT}`)
-  console.log(`Snapshots → ${path.resolve(SNAPSHOT_DIR)}`)
+  console.log(`Percy collab server on ws://${HOST}:${PORT}`)
+  console.log(`  auth:        ${PERCY_JWT_SECRET ? "JWT verification enabled" : "DISABLED (set PERCY_JWT_SECRET)"}`)
+  console.log(`  api base:    ${process.env.PERCY_API_BASE || "http://localhost:8000"}`)
+  console.log(`  save-back:   every ${SAVE_BACK_INTERVAL}ms of activity`)
+  console.log(`  snapshots:   every ${SNAPSHOT_INTERVAL}ms`)
 })
 
 // ── Graceful shutdown ───────────────────────────────────────────────────────
 
 async function shutdown() {
   console.log("shutting down…")
-  // Force snapshot every active room
-  await Promise.all([...rooms.values()].map((r) => r._writeSnapshot()))
+  await Promise.all([...rooms.values()].map((r) => r.flush()))
   for (const conn of wss.clients) { try { conn.close() } catch {} }
   httpServer.close(() => process.exit(0))
 }
