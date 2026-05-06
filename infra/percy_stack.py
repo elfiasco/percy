@@ -777,31 +777,21 @@ class PercyCloudDemoStack(Stack):
                 subscription_type="SNS", address=alerts_topic.topic_arn,
             ),
         ]
-        gross_budget_notifications = []
-        for pct in (10, 20, 30, 40, 50, 60, 70, 80, 90, 100):
-            gross_budget_notifications.append(
-                budgets.CfnBudget.NotificationWithSubscribersProperty(
-                    notification=budgets.CfnBudget.NotificationProperty(
-                        notification_type="ACTUAL",
-                        comparison_operator="GREATER_THAN",
-                        threshold=pct,
-                        threshold_type="PERCENTAGE",
-                    ),
-                    subscribers=gross_budget_subscribers,
-                )
-            )
-        # Plus a single FORECASTED 100% notification — early warning of trajectory
-        gross_budget_notifications.append(
+        # AWS Budgets caps notifications at 10 per budget. Use all 10 for the
+        # actual-spend $20-increment alerts (10/20/.../100% of $200). The
+        # forecasted alert lives on the separate net-spend emergency budget.
+        gross_budget_notifications = [
             budgets.CfnBudget.NotificationWithSubscribersProperty(
                 notification=budgets.CfnBudget.NotificationProperty(
-                    notification_type="FORECASTED",
+                    notification_type="ACTUAL",
                     comparison_operator="GREATER_THAN",
-                    threshold=100,
+                    threshold=pct,
                     threshold_type="PERCENTAGE",
                 ),
                 subscribers=gross_budget_subscribers,
             )
-        )
+            for pct in (10, 20, 30, 40, 50, 60, 70, 80, 90, 100)
+        ]
 
         budgets.CfnBudget(
             self, "PercyGrossSpendBudget",
