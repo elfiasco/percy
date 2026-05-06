@@ -9,6 +9,7 @@ from aws_cdk import aws_cloudwatch_actions as cw_actions
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_ecr_assets as ecr_assets
 from aws_cdk import aws_ecs as ecs
+from aws_cdk import aws_efs as efs
 from aws_cdk import aws_events as events
 from aws_cdk import aws_events_targets as events_targets
 from aws_cdk import aws_iam as iam
@@ -423,6 +424,9 @@ class PercyCloudDemoStack(Stack):
         Tags.of(studio_instance_role).add("Component", "studio")
         Tags.of(studio_instance_role).add("Env", "dev")
 
+        # Studio dispatches team-env jobs onto the onboard SQS queue.
+        onboard_queue.grant_send_messages(studio_instance_role)
+
         studio_service = apprunner.CfnService(
             self,
             "PercyStudio",
@@ -500,6 +504,12 @@ class PercyCloudDemoStack(Stack):
                             apprunner.CfnService.KeyValuePairProperty(
                                 name="PERCY_ALERTS_TOPIC_ARN",
                                 value=alerts_topic.topic_arn,
+                            ),
+                            # Studio dispatches team-env eval/build/refresh jobs onto the
+                            # same SQS queue the onboard worker reads. The worker discriminates
+                            # on the message body's `kind` field.
+                            apprunner.CfnService.KeyValuePairProperty(
+                                name="SQS_ONBOARD_QUEUE_URL", value=onboard_queue.queue_url,
                             ),
                         ],
                         runtime_environment_secrets=[
@@ -740,6 +750,8 @@ class PercyCloudDemoStack(Stack):
                 "DB_PORT": db.db_instance_endpoint_port,
                 "DB_NAME": "percy",
                 "DB_USER": "percy",
+                # EFS-backed venv root (mounted via the task definition's volume).
+                "PERCY_TEAM_ENVS_DIR": "/efs/team-envs",
             },
             secrets={
                 "DB_PASSWORD": ecs.Secret.from_secrets_manager(db.secret, "password"),
@@ -759,20 +771,88 @@ class PercyCloudDemoStack(Stack):
             description="Worker to Postgres",
         )
 
+        # ─── EFS for persistent team-env venvs (Option C) ───────────────────
+        # The worker mounts an EFS access point at /efs/team-envs so each
+        # team's venv (built once, hundreds of MB of pip-installed deps)
+        # survives task restarts and is shared across worker instances.
+        efs_sg = ec2.SecurityGroup(
+            self, "TeamEnvsEfsSg",
+            vpc=vpc,
+            description="Percy team-envs EFS",
+            allow_all_outbound=True,
+        )
+        efs_sg.add_ingress_rule(
+            peer=worker_sg,
+            connection=ec2.Port.tcp(2049),
+            description="Worker to EFS NFS",
+        )
+        team_envs_fs = efs.FileSystem(
+            self, "TeamEnvsFs",
+            vpc=vpc,
+            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_ISOLATED),
+            security_group=efs_sg,
+            performance_mode=efs.PerformanceMode.GENERAL_PURPOSE,
+            throughput_mode=efs.ThroughputMode.BURSTING,
+            encrypted=True,
+            removal_policy=RemovalPolicy.RETAIN,
+            file_system_name="percy-team-envs",
+        )
+        team_envs_ap = efs.AccessPoint(
+            self, "TeamEnvsAp",
+            file_system=team_envs_fs,
+            path="/team-envs",
+            create_acl=efs.Acl(owner_uid="0", owner_gid="0", permissions="0755"),
+            posix_user=efs.PosixUser(uid="0", gid="0"),
+        )
+
+        worker_task.add_volume(
+            name="team-envs",
+            efs_volume_configuration=ecs.EfsVolumeConfiguration(
+                file_system_id=team_envs_fs.file_system_id,
+                transit_encryption="ENABLED",
+                authorization_config=ecs.AuthorizationConfig(
+                    access_point_id=team_envs_ap.access_point_id,
+                    iam="ENABLED",
+                ),
+            ),
+        )
+        worker_task.default_container.add_mount_points(  # type: ignore[union-attr]
+            ecs.MountPoint(
+                container_path="/efs/team-envs",
+                source_volume="team-envs",
+                read_only=False,
+            ),
+        )
+        # Task role needs permission to mount the EFS access point.
+        worker_task.task_role.add_to_principal_policy(iam.PolicyStatement(
+            effect=iam.Effect.ALLOW,
+            actions=[
+                "elasticfilesystem:ClientMount",
+                "elasticfilesystem:ClientWrite",
+                "elasticfilesystem:ClientRootAccess",
+            ],
+            resources=[team_envs_fs.file_system_arn],
+            conditions={
+                "StringEquals": {
+                    "elasticfilesystem:AccessPointArn": team_envs_ap.access_point_arn,
+                },
+            },
+        ))
+
         worker_service = ecs.FargateService(
             self,
             "OnboardWorkerService",
             cluster=cluster,
             task_definition=worker_task,
-            desired_count=0,
+            desired_count=1,  # keep one warm so eval/refresh latency is ~1-2s
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_ISOLATED),
             security_groups=[worker_sg],
             assign_public_ip=False,
         )
 
-        # Auto-scale 0→3 based on SQS queue depth
+        # Auto-scale 1→3 based on SQS queue depth
         scalable_target = worker_service.auto_scale_task_count(
-            min_capacity=0,
+            min_capacity=1,
             max_capacity=3,
         )
         scalable_target.scale_on_metric(
@@ -1108,9 +1188,9 @@ class PercyCloudDemoStack(Stack):
         events.Rule(
             self,
             "PercySpendMonitorSchedule",
-            rule_name="percy-spend-monitor-4h",
-            description="Triggers Percy spend monitor every 4 hours to check for $20 boundary crossings",
-            schedule=events.Schedule.rate(Duration.hours(4)),
+            rule_name="percy-spend-monitor-1h",
+            description="Triggers Percy spend monitor every hour to check for $20 boundary crossings + $200 kill switch",
+            schedule=events.Schedule.rate(Duration.hours(1)),
             targets=[events_targets.LambdaFunction(spend_monitor_lambda)],
         )
         CfnOutput(self, "PercySpendMonitorArn", value=spend_monitor_lambda.function_arn)
