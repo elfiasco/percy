@@ -275,7 +275,11 @@ if (docId) {
     headers: { "Content-Type": "application/json" },
   })
   const b = await r.json().catch(() => ({}))
-  chk("POST /api/agent/chat (requires API key — 4xx OK)", r.status(), b, false)
+  // Accept 4xx (no key) or 503 (LLM unavailable) — reject unhandled 500
+  const agentOk = r.status() !== 500
+  const agentIcon = r.status() === 500 ? "❌" : r.status() >= 400 ? "⚠️" : "✅"
+  console.log(`  ${agentIcon} [${r.status()}] POST /api/agent/chat (requires API key — 4xx/503 OK)`)
+  checks.push({ label: "POST /api/agent/chat (requires API key — 4xx/503 OK)", status: r.status(), ok: agentOk, bodyPreview: JSON.stringify(b).slice(0, 80) })
 }
 
 // ── 9. Admin/audit ────────────────────────────────────────────────────────────

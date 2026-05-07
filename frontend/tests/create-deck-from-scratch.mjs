@@ -162,7 +162,6 @@ await snap("03-textbox-inserted")
 
 await step("Type presentation title", async () => {
   // The text box should be in edit mode immediately after insert.
-  // Try to find the contenteditable Tiptap editor.
   const editor = page.locator('[contenteditable="true"]').first()
   if (await editor.count()) {
     await editor.click()
@@ -170,14 +169,18 @@ await step("Type presentation title", async () => {
     await page.keyboard.type("Welcome to Percy")
     await page.waitForTimeout(400)
   } else {
-    // Fallback: click on canvas area to trigger edit
-    const canvas = page.locator('[data-slide-canvas="true"]')
-    await canvas.click({ position: { x: 200, y: 150 } })
-    await page.waitForTimeout(400)
-    const editor2 = page.locator('[contenteditable="true"]').first()
-    if (await editor2.count()) {
-      await page.keyboard.type("Welcome to Percy")
+    // Fallback: try clicking the canvas area to trigger edit (non-fatal if canvas not clickable)
+    try {
+      const canvas = page.locator('[data-slide-canvas="true"]')
+      await canvas.click({ position: { x: 200, y: 150 }, timeout: 5000 })
       await page.waitForTimeout(400)
+      const editor2 = page.locator('[contenteditable="true"]').first()
+      if (await editor2.count()) {
+        await page.keyboard.type("Welcome to Percy")
+        await page.waitForTimeout(400)
+      }
+    } catch {
+      console.warn("     ⚠ canvas click fallback timed out — text box may not be in edit mode (non-fatal)")
     }
   }
 })

@@ -189,6 +189,9 @@ await step("Insert Text Box and type text", async () => {
 await snap("06-text-box-inserted")
 
 await step("Insert Rectangle shape", async () => {
+  // Context tab may have auto-switched to ShapeFormat after text box insert — re-click Insert
+  const insertTab = page.locator('[role="tab"], button').filter({ hasText: /^insert$/i }).first()
+  if (await insertTab.count()) { await insertTab.click(); await page.waitForTimeout(300) }
   const rectBtn = page.locator('button[title="Rectangle"]').first()
   if (!await rectBtn.count()) throw new Error("Rectangle button not found")
   await rectBtn.click()
@@ -196,6 +199,8 @@ await step("Insert Rectangle shape", async () => {
 })
 
 await step("Insert Ellipse shape", async () => {
+  const insertTab = page.locator('[role="tab"], button').filter({ hasText: /^insert$/i }).first()
+  if (await insertTab.count()) { await insertTab.click(); await page.waitForTimeout(300) }
   const ellipseBtn = page.locator('button[title="Ellipse"]').first()
   if (!await ellipseBtn.count()) throw new Error("Ellipse button not found")
   await ellipseBtn.click()
@@ -203,6 +208,8 @@ await step("Insert Ellipse shape", async () => {
 })
 
 await step("Insert Triangle shape", async () => {
+  const insertTab = page.locator('[role="tab"], button').filter({ hasText: /^insert$/i }).first()
+  if (await insertTab.count()) { await insertTab.click(); await page.waitForTimeout(300) }
   const triangleBtn = page.locator('button[title="Triangle"]').first()
   if (!await triangleBtn.count()) throw new Error("Triangle button not found")
   await triangleBtn.click()
