@@ -1,0 +1,145 @@
+{
+  "kind": "adversarial-users",
+  "base": "https://36kuepamyi.us-east-1.awsapprunner.com",
+  "lmUrl": "http://localhost:1234",
+  "runTs": "2026-05-07T03:33:58.060Z",
+  "summary": {
+    "total": 17,
+    "pass": 17,
+    "warn": 0,
+    "fail": 0
+  },
+  "results": [
+    {
+      "category": "sql-injection",
+      "input": "'; DROP TABLE users; --",
+      "expect": "graceful_error",
+      "outcome": "PASS_GRACEFUL",
+      "detail": "handled without crash",
+      "jsErrors": []
+    },
+    {
+      "category": "xss-basic",
+      "input": "<script>alert(\"xss\")</script>",
+      "expect": "graceful_error",
+      "outcome": "PASS_GRACEFUL",
+      "detail": "handled without crash",
+      "jsErrors": []
+    },
+    {
+      "category": "xss-attr",
+      "input": "\" onmouseover=\"alert(1)\"",
+      "expect": "graceful_error",
+      "outcome": "PASS_GRACEFUL",
+      "detail": "handled without crash",
+      "jsErrors": []
+    },
+    {
+      "category": "very-long",
+      "input": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "expect": "graceful_error",
+      "outcome": "PASS_GRACEFUL",
+      "detail": "handled without crash",
+      "jsErrors": []
+    },
+    {
+      "category": "unicode-rtl",
+      "input": "‮test‬@evil.com",
+      "expect": "graceful_error",
+      "outcome": "PASS_GRACEFUL",
+      "detail": "handled without crash",
+      "jsErrors": []
+    },
+    {
+      "category": "emoji",
+      "input": "user🔥💀@test.com",
+      "expect": "graceful_error",
+      "outcome": "PASS_GRACEFUL",
+      "detail": "handled without crash",
+      "jsErrors": []
+    },
+    {
+      "category": "null-byte",
+      "input": "test\u0000@example.com",
+      "expect": "graceful_error",
+      "outcome": "PASS_GRACEFUL",
+      "detail": "handled without crash",
+      "jsErrors": []
+    },
+    {
+      "category": "crlf-injection",
+      "input": "test\r\nX-Injected: header",
+      "expect": "graceful_error",
+      "outcome": "PASS_GRACEFUL",
+      "detail": "handled without crash",
+      "jsErrors": []
+    },
+    {
+      "category": "path-traversal",
+      "input": "../../../etc/passwd",
+      "expect": "graceful_error",
+      "outcome": "PASS_GRACEFUL",
+      "detail": "handled without crash",
+      "jsErrors": []
+    },
+    {
+      "category": "html-entities",
+      "input": "&lt;img src=x onerror=alert(1)&gt;",
+      "expect": "accept",
+      "outcome": "PASS_GRACEFUL",
+      "detail": "handled without crash",
+      "jsErrors": []
+    },
+    {
+      "category": "blank-display-name",
+      "input": "   ",
+      "expect": "graceful_error",
+      "outcome": "PASS_GRACEFUL",
+      "detail": "handled without crash",
+      "jsErrors": []
+    },
+    {
+      "category": "homoglyph-email",
+      "input": "аdmin@example.com",
+      "expect": "graceful_error",
+      "outcome": "PASS_GRACEFUL",
+      "detail": "handled without crash",
+      "jsErrors": []
+    },
+    {
+      "category": "api-direct",
+      "input": "signup with SQL injection display_name",
+      "expect": "graceful_error",
+      "outcome": "PASS_OK (200)",
+      "detail": "HTTP 200"
+    },
+    {
+      "category": "api-direct",
+      "input": "signup with oversized email (1000 chars)",
+      "expect": "graceful_error",
+      "outcome": "PASS_REJECTED (422)",
+      "detail": "HTTP 422"
+    },
+    {
+      "category": "api-direct",
+      "input": "login with null password",
+      "expect": "graceful_error",
+      "outcome": "PASS_REJECTED (422)",
+      "detail": "HTTP 422"
+    },
+    {
+      "category": "api-direct",
+      "input": "create project with XSS name",
+      "expect": "graceful_error",
+      "outcome": "PASS_REJECTED (404)",
+      "detail": "HTTP 404"
+    },
+    {
+      "category": "api-direct",
+      "input": "doc create with negative dimensions",
+      "expect": "graceful_error",
+      "outcome": "PASS_REJECTED (400)",
+      "detail": "HTTP 400"
+    }
+  ]
+}

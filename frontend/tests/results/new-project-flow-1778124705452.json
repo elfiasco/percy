@@ -1,0 +1,113 @@
+{
+  "kind": "new-project-flow",
+  "base": "https://36kuepamyi.us-east-1.awsapprunner.com",
+  "runTs": "2026-05-07T03:32:09.862Z",
+  "summary": {
+    "total": 20,
+    "passed": 20,
+    "failed": 0,
+    "totalMs": 23685
+  },
+  "steps": [
+    {
+      "label": "Owner: signup via API",
+      "ok": true,
+      "ms": 735
+    },
+    {
+      "label": "Owner: login page → form submit → dashboard",
+      "ok": true,
+      "ms": 2322
+    },
+    {
+      "label": "Create project via API",
+      "ok": true,
+      "ms": 118
+    },
+    {
+      "label": "Create blank slide deck + link to project",
+      "ok": true,
+      "ms": 277
+    },
+    {
+      "label": "Project detail page renders",
+      "ok": true,
+      "ms": 995
+    },
+    {
+      "label": "Navigate to studio",
+      "ok": true,
+      "ms": 4725
+    },
+    {
+      "label": "Canvas is visible",
+      "ok": true,
+      "ms": 18
+    },
+    {
+      "label": "Studio has slide strip or slide navigation",
+      "ok": true,
+      "ms": 2
+    },
+    {
+      "label": "Insert → add text element",
+      "ok": true,
+      "ms": 1332
+    },
+    {
+      "label": "Add slide via API + navigate to it",
+      "ok": true,
+      "ms": 3410
+    },
+    {
+      "label": "Studio still renders after slide add",
+      "ok": true,
+      "ms": 16
+    },
+    {
+      "label": "Signup collaborator account",
+      "ok": true,
+      "ms": 734
+    },
+    {
+      "label": "Owner invites collaborator to org",
+      "ok": true,
+      "ms": 110
+    },
+    {
+      "label": "Collaborator accepts invite",
+      "ok": true,
+      "ms": 447
+    },
+    {
+      "label": "Both users load studio simultaneously",
+      "ok": true,
+      "ms": 8109
+    },
+    {
+      "label": "Both pages show canvas without crash",
+      "ok": true,
+      "ms": 31
+    },
+    {
+      "label": "No console errors on owner page",
+      "ok": true,
+      "ms": 4
+    },
+    {
+      "label": "Slide background color can be set",
+      "ok": true,
+      "ms": 107
+    },
+    {
+      "label": "Slide notes can be read and written",
+      "ok": true,
+      "ms": 95
+    },
+    {
+      "label": "Text search endpoint responds",
+      "ok": true,
+      "ms": 98
+    }
+  ]
+}

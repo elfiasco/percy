@@ -1,0 +1,162 @@
+[
+  {
+    "ts": "2026-05-07T03:26:52.658Z",
+    "suite": "new-project-flow",
+    "base": "https://36kuepamyi.us-east-1.awsapprunner.com",
+    "summary": {
+      "total": 20,
+      "passed": 19,
+      "failed": 1,
+      "totalMs": 24660
+    },
+    "file": "tests/results/new-project-flow-1778124387501.json"
+  },
+  {
+    "ts": "2026-05-07T03:28:41.072Z",
+    "suite": "adversarial-users",
+    "base": "https://36kuepamyi.us-east-1.awsapprunner.com",
+    "summary": {
+      "total": 17,
+      "pass": 16,
+      "warn": 0,
+      "fail": 1
+    },
+    "file": "tests/results/adversarial-1778124412913.json"
+  },
+  {
+    "ts": "2026-05-07T03:29:54.665Z",
+    "suite": "vision-critique",
+    "base": "https://36kuepamyi.us-east-1.awsapprunner.com",
+    "summary": {
+      "pagesScored": 4,
+      "avgScore": "6.8"
+    },
+    "file": "tests/results/vision-critique-1778124521494.json"
+  },
+  {
+    "ts": "2026-05-07T03:29:54.695Z",
+    "runId": 1778124351783,
+    "suite": "full-run",
+    "base": "https://36kuepamyi.us-east-1.awsapprunner.com",
+    "lmUrl": "http://localhost:1234",
+    "suites": [
+      {
+        "suite": "holistic-ui",
+        "critical": true,
+        "ok": true,
+        "exitCode": 0,
+        "ms": 35467
+      },
+      {
+        "suite": "new-project-flow",
+        "critical": true,
+        "ok": false,
+        "exitCode": 1,
+        "ms": 25414
+      },
+      {
+        "suite": "adversarial-users",
+        "critical": false,
+        "ok": false,
+        "exitCode": 1,
+        "ms": 108432
+      },
+      {
+        "suite": "vision-critique",
+        "critical": false,
+        "ok": true,
+        "exitCode": 0,
+        "ms": 73593
+      }
+    ],
+    "allPassed": false,
+    "critFailed": [
+      "new-project-flow"
+    ],
+    "totalMs": 242906
+  },
+  {
+    "ts": "2026-05-07T03:32:09.862Z",
+    "suite": "new-project-flow",
+    "base": "https://36kuepamyi.us-east-1.awsapprunner.com",
+    "summary": {
+      "total": 20,
+      "passed": 20,
+      "failed": 0,
+      "totalMs": 23685
+    },
+    "file": "tests/results/new-project-flow-1778124705452.json"
+  },
+  {
+    "ts": "2026-05-07T03:33:58.060Z",
+    "suite": "adversarial-users",
+    "base": "https://36kuepamyi.us-east-1.awsapprunner.com",
+    "summary": {
+      "total": 17,
+      "pass": 17,
+      "warn": 0,
+      "fail": 0
+    },
+    "file": "tests/results/adversarial-1778124730127.json"
+  },
+  {
+    "ts": "2026-05-07T03:35:10.331Z",
+    "suite": "vision-critique",
+    "base": "https://36kuepamyi.us-east-1.awsapprunner.com",
+    "summary": {
+      "pagesScored": 1,
+      "avgScore": "7.0"
+    },
+    "file": "tests/results/vision-critique-1778124838462.json"
+  },
+  {
+    "ts": "2026-05-07T03:35:10.353Z",
+    "runId": 1778124663667,
+    "suite": "full-run",
+    "base": "https://36kuepamyi.us-east-1.awsapprunner.com",
+    "lmUrl": "http://localhost:1234",
+    "suites": [
+      {
+        "suite": "holistic-ui",
+        "critical": true,
+        "ok": true,
+        "exitCode": 0,
+        "ms": 41533
+      },
+      {
+        "suite": "new-project-flow",
+        "critical": true,
+        "ok": true,
+        "exitCode": 0,
+        "ms": 24670
+      },
+      {
+        "suite": "adversarial-users",
+        "critical": false,
+        "ok": true,
+        "exitCode": 0,
+        "ms": 108223
+      },
+      {
+        "suite": "vision-critique",
+        "critical": false,
+        "ok": true,
+        "exitCode": 0,
+        "ms": 72249
+      }
+    ],
+    "allPassed": true,
+    "critFailed": [],
+    "totalMs": 246675
+  },
+  {
+    "ts": "2026-05-07T03:38:02.150Z",
+    "suite": "vision-critique",
+    "base": "https://36kuepamyi.us-east-1.awsapprunner.com",
+    "summary": {
+      "pagesScored": 9,
+      "avgScore": "6.9"
+    },
+    "file": "tests/results/vision-critique-1778125011493.json"
+  }
+]
