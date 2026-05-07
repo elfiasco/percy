@@ -13,6 +13,7 @@ import { hydrateElementText } from "../../../lib/collab/bridgeYjsSync"
 import { getAwareness, setLocalEditing } from "../../../lib/collab/awareness"
 import { registerRenderer, type NativeRendererProps } from "./RendererRegistry"
 import { yXmlFragmentToProsemirrorJSON } from "y-prosemirror"
+import { consumePendingAutoEdit } from "../../../lib/pendingAutoEdit"
 
 /**
  * TiptapShapeRenderer — composite renderer for BridgeShape.
@@ -55,6 +56,11 @@ function TiptapShapeRendererImpl({
   }, [docId, slideN, element.id, renderKey])
 
   useEffect(() => { if (!selected && editing) setEditing(false) }, [selected, editing])
+
+  // Auto-enter edit mode when this element was just inserted (text box insert)
+  useEffect(() => {
+    if (selected && consumePendingAutoEdit(element.id)) setEditing(true)
+  }, [selected, element.id])
 
   // Broadcast edit-presence so peers know we're typing here.
   useEffect(() => {
