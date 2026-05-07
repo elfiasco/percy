@@ -71,11 +71,21 @@ app.add_middleware(
 from app.backend import auth as _auth_mod, auth_db as _auth_db_mod  # noqa: E402
 from app.backend import workspace_api as _workspace_api  # noqa: E402
 from app.backend import team_envs_api as _team_envs_api  # noqa: E402
+from app.backend import assets_api as _assets_api  # noqa: E402
+from app.backend import sharing_api as _sharing_api  # noqa: E402
+from app.backend import billing_api as _billing_api  # noqa: E402
+from app.backend import sso_api as _sso_api  # noqa: E402
+from app.backend import admin_api as _admin_api  # noqa: E402
 _auth_db_mod.init_db()
 app.add_middleware(_auth_mod.AuthMiddleware)
 app.include_router(_auth_mod.router)
 app.include_router(_workspace_api.router)
 app.include_router(_team_envs_api.router)
+app.include_router(_assets_api.router)
+app.include_router(_sharing_api.router)
+app.include_router(_billing_api.router)
+app.include_router(_sso_api.router)
+app.include_router(_admin_api.router)
 
 
 @app.on_event("startup")

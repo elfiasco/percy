@@ -1,5 +1,6 @@
 import * as Y from "yjs"
 import { WebsocketProvider } from "y-websocket"
+import { Awareness } from "y-protocols/awareness"
 
 /**
  * Yjs collaboration layer for Percy.
@@ -59,6 +60,8 @@ export interface YjsRoom {
   elements:      Y.Map<Y.Map<unknown>>
   /** Slide-level metadata. */
   meta:          Y.Map<unknown>
+  /** Awareness instance shared with the WS transport so peer presence syncs. */
+  awareness:     Awareness
   /** Convenience: get-or-create the Y.XmlFragment for an element's text. */
   getTextFragment(elementId: string): Y.XmlFragment
   /** Disconnect transport, free resources. */
@@ -76,6 +79,7 @@ export function getYjsRoom(
   docId:    string,
   slideN:   number,
   transport: Transport = "broadcast",
+  token: string = "",
 ): YjsRoom {
   const roomId = `${docId}::slide-${slideN}`
   const existing = _rooms.get(roomId)
@@ -84,12 +88,16 @@ export function getYjsRoom(
   const doc       = new Y.Doc()
   const elements  = doc.getMap<Y.Map<unknown>>("elements")
   const meta      = doc.getMap<unknown>("meta")
+  // Awareness constructor initializes to {} (non-null). Do NOT call setLocalState(null)
+  // here — y-websocket only broadcasts awareness on connect if getLocalState() !== null,
+  // and setLocalStateField is a no-op when state is null.
+  const awareness = new Awareness(doc)
 
   let cleanup: (() => void) | null = null
   let effectiveTransport = transport
   if (transport === "websocket") {
     if (YJS_WS_URL) {
-      cleanup = wireWebsocket(YJS_WS_URL, roomId, doc)
+      cleanup = wireWebsocket(YJS_WS_URL, roomId, doc, token, awareness)
     } else {
       // Server URL not configured — fall back so dev works.
       effectiveTransport = "broadcast"
@@ -105,18 +113,13 @@ export function getYjsRoom(
     roomId,
     elements,
     meta,
+    awareness,
     getTextFragment(elementId: string): Y.XmlFragment {
-      let elMap = elements.get(elementId)
-      if (!elMap) {
-        elMap = new Y.Map()
-        elements.set(elementId, elMap)
-      }
-      let frag = elMap.get("text") as Y.XmlFragment | undefined
-      if (!frag) {
-        frag = new Y.XmlFragment()
-        elMap.set("text", frag)
-      }
-      return frag
+      // Top-level fragment keyed by element id. `doc.getXmlFragment(name)`
+      // always returns an attached fragment (frag.doc === room.doc).
+      // Detached fragments were the cause of the y-tiptap `.doc undefined`
+      // crash in production.
+      return doc.getXmlFragment(`text:${elementId}`)
     },
     destroy() {
       cleanup?.()
@@ -143,9 +146,37 @@ export function getYjsRoom(
 //
 // VITE_YJS_WS_URL controls where this connects: e.g. "ws://localhost:1234".
 
-function wireWebsocket(wsUrl: string, roomId: string, doc: Y.Doc): () => void {
-  const provider = new WebsocketProvider(wsUrl, roomId, doc, { connect: true })
+function wireWebsocket(
+  wsUrl: string, roomId: string, doc: Y.Doc, token: string, awareness: Awareness,
+): () => void {
+  const params = token ? { token } : undefined
+  const provider = new WebsocketProvider(wsUrl, roomId, doc, {
+    connect: true,
+    params,
+    // Critical: tell y-websocket to use OUR awareness instance so the
+    // useStudioCollab side and the wire side share the same state. By
+    // default y-websocket creates its own and our setLocalUser writes
+    // are invisible to peers.
+    awareness,
+  })
+  let reconnectFails = 0
+  let bcCleanup: (() => void) | null = null
+  provider.on("status", (e: { status: string }) => {
+    if (e.status === "connected") { reconnectFails = 0; return }
+    if (e.status === "disconnected") {
+      reconnectFails += 1
+      // App Runner Envoy returns 403 on every WebSocket upgrade — until
+      // the relay is moved behind an ALB this is a known dead transport.
+      // After a couple of failures, silently bring up BroadcastChannel so
+      // multi-tab-same-browser collaboration still works.
+      if (reconnectFails === 2 && !bcCleanup && typeof BroadcastChannel !== "undefined") {
+        console.warn("[Percy] yjs ws keeps disconnecting; falling back to BroadcastChannel")
+        bcCleanup = wireBroadcastChannel(roomId, doc)
+      }
+    }
+  })
   return () => {
+    bcCleanup?.()
     provider.disconnect()
     provider.destroy()
   }

@@ -1,28 +1,30 @@
 """Team environments + refresh jobs API.
 
-Demo-grade implementation:
-  - Each team env is a per-org venv built on the host filesystem under
-    ``uploads/team_envs/{env_id}/venv``. We pip-install the team's
-    requirements.txt (with optional Artifactory creds) into that venv.
-  - Refresh jobs run a team-supplied python script with the env's venv
-    + the team's env_vars + per-job extra_env injected as os.environ.
-    The script's job is to mutate Percy data (e.g., re-fetch from a DB
-    and update slide content), then we trigger a project build at the end.
+Architecture:
+  - Studio API (App Runner) is the **dispatcher only** — it writes job rows
+    to Postgres and pushes a message to the SQS onboard queue.
+  - The ECS Fargate worker picks up the message, mounts an EFS volume at
+    /efs/team-envs/{env_id}/venv, builds/restores the venv, runs the user's
+    script, writes the result back to Postgres.
+  - Frontend polls the result table for completion.
 
-Future improvements (not in v1):
-  - Run user code in an isolated container (per-team ECR image), not on
-    the host. The `package_index_token` is currently stored in plaintext
-    in the DB; production should use AWS Secrets Manager.
-  - BYOI (bring-your-own-image) tier: allow customers to push pre-built
-    images via cross-account ECR role.
-  - Real cron expressions; currently only fixed-period intervals.
-  - Per-job timeout enforcement (currently 5min wallclock cap).
-  - Background-process pool / queue; current scheduler runs in the API
-    process which is fine for demo but doesn't survive a restart cleanly.
+Message protocol on the shared SQS queue (`SQS_ONBOARD_QUEUE_URL`):
+  Existing onboard messages (no `kind` key) keep working unchanged.
+  New messages set `kind`:
+    {"kind": "build_env",  "job_id": <eval-or-build-id>, "payload": {"env_id": "..."}}
+    {"kind": "eval",       "job_id": <eval-id>,          "payload": {"env_id": "...", "script": "...", "context": {...}, "timeout_s": 60}}
+    {"kind": "refresh_job","job_id": <run-id>,           "payload": {"job_id": "...", "project_id": "...", "env_id": "..."}}
+
+Env path on EFS:  /efs/team-envs/{env_id}/venv
+Each env has exactly one canonical location across all worker tasks.
+
+For local dev (no SQS_ONBOARD_QUEUE_URL): the API falls back to in-process
+subprocess execution. Same code paths, exposed for testing without AWS.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -33,6 +35,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import boto3
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
@@ -41,9 +44,24 @@ from . import auth, auth_db
 log = logging.getLogger("percy.team_envs")
 router = APIRouter(tags=["team_envs"])
 
-# Where venvs live on disk. One subdir per env id.
+# In production, this lives on EFS at /efs/team-envs (mounted by the worker).
+# In dev or App Runner (which can't mount EFS), it's a local path that's only
+# meaningful if you happen to be running the worker too.
 TEAM_ENVS_ROOT = Path(os.environ.get("PERCY_TEAM_ENVS_DIR", "uploads/team_envs")).resolve()
 TEAM_ENVS_ROOT.mkdir(parents=True, exist_ok=True)
+
+SQS_QUEUE_URL = os.environ.get("SQS_ONBOARD_QUEUE_URL", "").strip()
+_sqs = boto3.client("sqs") if SQS_QUEUE_URL else None
+
+
+def _send_sqs(kind: str, job_id: str, payload: dict) -> None:
+    """Push a job to the worker queue. No-op if SQS not configured."""
+    if not _sqs:
+        log.warning("SQS not configured — dispatch ignored: %s/%s", kind, job_id)
+        return
+    body = json.dumps({"kind": kind, "job_id": job_id, "payload": payload})
+    _sqs.send_message(QueueUrl=SQS_QUEUE_URL, MessageBody=body)
+    log.info("dispatched %s job %s", kind, job_id)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -126,7 +144,7 @@ def delete_team_env(request: Request, env_id: str):
     if not env:
         raise HTTPException(404, "Env not found")
     _require_org_admin(user, env["org_id"])
-    # Also nuke the on-disk venv
+    # Best effort local cleanup. EFS cleanup is the worker's job.
     if env.get("venv_path"):
         try: shutil.rmtree(env["venv_path"], ignore_errors=True)
         except Exception: pass
@@ -134,72 +152,7 @@ def delete_team_env(request: Request, env_id: str):
     return {"ok": True}
 
 
-# ── Build (pip install) ─────────────────────────────────────────────────────
-
-def _build_env_sync(env_id: str) -> dict:
-    """Create venv + pip install. Synchronous; called from a thread."""
-    secret = auth_db.get_team_env_secret(env_id)
-    if not secret:
-        return {"status": "failed", "log": "env not found"}
-
-    env_dir = TEAM_ENVS_ROOT / env_id
-    env_dir.mkdir(parents=True, exist_ok=True)
-    venv_path = env_dir / "venv"
-    log_lines: list[str] = []
-
-    def _emit(s: str) -> None:
-        log_lines.append(s)
-        log.info("[env %s] %s", env_id, s)
-
-    try:
-        # 1. Create venv (idempotent — only if missing)
-        if not _venv_python(venv_path).exists():
-            _emit(f"creating venv at {venv_path}")
-            subprocess.run([sys.executable, "-m", "venv", str(venv_path)],
-                           check=True, capture_output=True, text=True, timeout=120)
-
-        py = _venv_python(venv_path)
-
-        # 2. Upgrade pip (best effort)
-        subprocess.run([str(py), "-m", "pip", "install", "--upgrade", "pip"],
-                       capture_output=True, text=True, timeout=120)
-
-        # 3. Install requirements, if any
-        reqs = (secret.get("requirements") or "").strip()
-        if reqs:
-            req_path = env_dir / "requirements.txt"
-            req_path.write_text(reqs, encoding="utf-8")
-            cmd = [str(py), "-m", "pip", "install", "-r", str(req_path)]
-            extra_env = os.environ.copy()
-            idx_url = secret.get("package_index_url")
-            if idx_url:
-                # pip honors PIP_INDEX_URL; if user/token set, embed in URL.
-                user = secret.get("package_index_user") or ""
-                token = secret.get("package_index_token") or ""
-                if user or token:
-                    # Inject creds into the URL: https://user:token@host/...
-                    from urllib.parse import urlparse, urlunparse
-                    p = urlparse(idx_url)
-                    netloc = f"{user}:{token}@{p.netloc}" if (user or token) else p.netloc
-                    full = urlunparse((p.scheme, netloc, p.path, p.params, p.query, p.fragment))
-                    extra_env["PIP_INDEX_URL"] = full
-                else:
-                    extra_env["PIP_INDEX_URL"] = idx_url
-            _emit(f"pip install -r requirements.txt ({len(reqs.splitlines())} lines)")
-            r = subprocess.run(cmd, capture_output=True, text=True, env=extra_env, timeout=600)
-            log_lines.extend((r.stdout or "").splitlines()[-50:])
-            if r.returncode != 0:
-                log_lines.extend((r.stderr or "").splitlines()[-50:])
-                return {"status": "failed", "log": "\n".join(log_lines), "venv_path": str(venv_path)}
-
-        return {"status": "ready", "log": "\n".join(log_lines), "venv_path": str(venv_path)}
-    except subprocess.TimeoutExpired as e:
-        log_lines.append(f"timeout: {e}")
-        return {"status": "failed", "log": "\n".join(log_lines)}
-    except Exception as e:
-        log_lines.append(f"build error: {e}")
-        return {"status": "failed", "log": "\n".join(log_lines)}
-
+# ── Build (dispatched to worker) ────────────────────────────────────────────
 
 @router.post("/api/team-envs/{env_id}/build")
 def build_env(request: Request, env_id: str):
@@ -209,17 +162,147 @@ def build_env(request: Request, env_id: str):
         raise HTTPException(404, "Env not found")
     _require_org_admin(user, env["org_id"])
 
-    auth_db.update_team_env(env_id, status="building", last_build_log="(building...)")
-    # Synchronous for demo simplicity. ~30-180s typical.
-    result = _build_env_sync(env_id)
-    auth_db.update_team_env(
-        env_id,
-        status=result["status"],
-        last_build_log=result.get("log", "")[:50000],
-        last_built_at=int(time.time()),
-        venv_path=result.get("venv_path"),
-    )
+    auth_db.update_team_env(env_id, status="building", last_build_log="(queued for worker)")
+    if SQS_QUEUE_URL:
+        _send_sqs("build_env", env_id, {"env_id": env_id})
+    else:
+        # Local dev fallback — run inline.
+        threading.Thread(target=_local_build_env, args=(env_id,), daemon=True).start()
     return auth_db.get_team_env(env_id)
+
+
+def _local_build_env(env_id: str) -> None:
+    """Local dev only — same logic the worker runs, but in-process."""
+    secret = auth_db.get_team_env_secret(env_id)
+    if not secret: return
+    env_dir = TEAM_ENVS_ROOT / env_id
+    venv_path = env_dir / "venv"
+    log_lines: list[str] = []
+    try:
+        env_dir.mkdir(parents=True, exist_ok=True)
+        if not _venv_python(venv_path).exists():
+            log_lines.append(f"creating venv at {venv_path}")
+            subprocess.run([sys.executable, "-m", "venv", str(venv_path)], check=True, timeout=120,
+                           capture_output=True, text=True)
+        py = _venv_python(venv_path)
+        subprocess.run([str(py), "-m", "pip", "install", "--upgrade", "pip"],
+                       capture_output=True, text=True, timeout=120)
+        reqs = (secret.get("requirements") or "").strip()
+        if reqs:
+            req_path = env_dir / "requirements.txt"
+            req_path.write_text(reqs, encoding="utf-8")
+            extra = os.environ.copy()
+            idx = secret.get("package_index_url")
+            if idx:
+                user, tok = secret.get("package_index_user") or "", secret.get("package_index_token") or ""
+                if user or tok:
+                    from urllib.parse import urlparse, urlunparse
+                    p = urlparse(idx)
+                    full = urlunparse((p.scheme, f"{user}:{tok}@{p.netloc}", p.path, p.params, p.query, p.fragment))
+                    extra["PIP_INDEX_URL"] = full
+                else:
+                    extra["PIP_INDEX_URL"] = idx
+            r = subprocess.run([str(py), "-m", "pip", "install", "-r", str(req_path)],
+                               capture_output=True, text=True, env=extra, timeout=600)
+            log_lines.extend((r.stdout or "").splitlines()[-50:])
+            if r.returncode != 0:
+                log_lines.extend((r.stderr or "").splitlines()[-50:])
+                auth_db.update_team_env(env_id, status="failed",
+                                        last_build_log="\n".join(log_lines)[:50000],
+                                        last_built_at=int(time.time()))
+                return
+        auth_db.update_team_env(env_id, status="ready", venv_path=str(venv_path),
+                                last_build_log="\n".join(log_lines)[:50000],
+                                last_built_at=int(time.time()))
+    except Exception as e:
+        log_lines.append(f"build error: {e}")
+        auth_db.update_team_env(env_id, status="failed",
+                                last_build_log="\n".join(log_lines)[:50000],
+                                last_built_at=int(time.time()))
+
+
+# ── Eval (dispatched, polled) ───────────────────────────────────────────────
+
+class EvalRequest(BaseModel):
+    script: str
+    context: dict = {}
+    timeout_s: int = 60
+
+
+@router.post("/api/team-envs/{env_id}/eval")
+def eval_in_env(request: Request, env_id: str, req: EvalRequest):
+    """Dispatch a one-off eval. Returns an eval_id immediately; poll
+    /api/team-envs/eval-results/{eval_id} for the result."""
+    user = auth.require_user(request)
+    env = auth_db.get_team_env(env_id)
+    if not env:
+        raise HTTPException(404, "Env not found")
+    _require_org_member(user, env["org_id"])
+
+    result = auth_db.create_eval_result(env_id, user_id=user["id"])
+    eval_id = result["id"]
+    payload = {
+        "env_id": env_id,
+        "script": req.script or "",
+        "context": req.context or {},
+        "timeout_s": max(1, min(int(req.timeout_s or 60), 300)),
+    }
+    if SQS_QUEUE_URL:
+        _send_sqs("eval", eval_id, payload)
+    else:
+        threading.Thread(target=_local_eval, args=(eval_id, payload), daemon=True).start()
+    return {"eval_id": eval_id, "status": "queued"}
+
+
+@router.get("/api/team-envs/eval-results/{eval_id}")
+def get_eval_result_endpoint(request: Request, eval_id: str):
+    user = auth.require_user(request)
+    r = auth_db.get_eval_result(eval_id)
+    if not r:
+        raise HTTPException(404, "Eval result not found")
+    env = auth_db.get_team_env(r["env_id"])
+    if env: _require_org_member(user, env["org_id"])
+    return r
+
+
+def _local_eval(eval_id: str, payload: dict) -> None:
+    """Local dev fallback — same flow the worker runs."""
+    auth_db.update_eval_result(eval_id, status="running")
+    started = time.time()
+    secret = auth_db.get_team_env_secret(payload["env_id"]) or {}
+    py = sys.executable
+    note = ""
+    if secret.get("status") == "ready" and secret.get("venv_path"):
+        vp = _venv_python(Path(secret["venv_path"]))
+        if vp.exists(): py = str(vp)
+        else: note = "venv missing on disk; using host python"
+    else:
+        note = f"env not ready ({secret.get('status')}); using host python"
+    merged = os.environ.copy()
+    for k, v in (secret.get("env_vars") or {}).items(): merged[str(k)] = str(v)
+    for k, v in (payload.get("context") or {}).items(): merged[str(k)] = str(v)
+    merged["PERCY_API_BASE"] = os.environ.get("PERCY_API_BASE", "http://localhost:8000")
+    work = TEAM_ENVS_ROOT / "_evals" / eval_id
+    work.mkdir(parents=True, exist_ok=True)
+    (work / "script.py").write_text(payload.get("script", ""), encoding="utf-8")
+    timeout = int(payload.get("timeout_s", 60))
+    try:
+        r = subprocess.run([py, str(work / "script.py")], capture_output=True, text=True,
+                           env=merged, cwd=str(work), timeout=timeout)
+        auth_db.update_eval_result(eval_id, status="success" if r.returncode == 0 else "failed",
+                                   exit_code=r.returncode,
+                                   stdout=(r.stdout or "")[-50000:],
+                                   stderr=(r.stderr or "")[-50000:],
+                                   elapsed_ms=int((time.time() - started) * 1000),
+                                   note=note, finished_at=int(time.time()))
+    except subprocess.TimeoutExpired:
+        auth_db.update_eval_result(eval_id, status="failed", exit_code=-1,
+                                   stderr=f"timed out after {timeout}s",
+                                   elapsed_ms=int((time.time() - started) * 1000),
+                                   note=note, finished_at=int(time.time()))
+    finally:
+        try: shutil.rmtree(work, ignore_errors=True)
+        except Exception: pass
 
 
 # ── Refresh jobs ─────────────────────────────────────────────────────────────
@@ -240,8 +323,7 @@ def get_project_refresh_job(request: Request, project_id: str):
     if not p:
         raise HTTPException(404, "Project not found")
     _require_org_member(user, p["org_id"])
-    job = auth_db.get_project_refresh_job(project_id)
-    return {"job": job}
+    return {"job": auth_db.get_project_refresh_job(project_id)}
 
 
 @router.post("/api/refresh-jobs")
@@ -255,13 +337,11 @@ def create_refresh_job(request: Request, req: CreateJobRequest):
         env = auth_db.get_team_env(req.env_id)
         if not env or env["org_id"] != p["org_id"]:
             raise HTTPException(400, "env_id not in this project's org")
-    # Replace any existing job for this project (v1: one-job-per-project).
     existing = auth_db.get_project_refresh_job(req.project_id)
     if existing:
         auth_db.delete_refresh_job(existing["id"])
     return auth_db.create_refresh_job(
-        req.project_id,
-        schedule=req.schedule, env_id=req.env_id,
+        req.project_id, schedule=req.schedule, env_id=req.env_id,
         entry_point=req.entry_point, script_source=req.script_source,
         extra_env=req.extra_env or {},
     )
@@ -304,175 +384,86 @@ def list_runs(request: Request, project_id: str):
     return {"runs": auth_db.list_project_refresh_runs(project_id)}
 
 
-# ── Run executor ─────────────────────────────────────────────────────────────
-
-def execute_refresh_job(job_id: str) -> dict:
-    """Run a single refresh job synchronously. Returns the run row.
-
-    Sequence:
-      1. Insert a `studio_refresh_runs` row in 'running' state.
-      2. Build the merged env (host + team env_vars + per-job extra_env).
-      3. Drop the script_source to a temp file in the env's working dir.
-      4. Spawn the team's venv python on the script. Capture stdout/stderr.
-      5. On success, trigger a project build (formats=['pptx','pdf']) so
-         the deck is re-rendered with whatever the script changed.
-      6. Update the run row + the job's last_status/next_run_at.
-    """
+def dispatch_refresh_job(job_id: str) -> str | None:
+    """Push a refresh-job execution to the worker queue. Returns the run_id."""
     job = auth_db.get_refresh_job(job_id)
-    if not job:
-        return {"status": "failed", "error": "job not found"}
+    if not job: return None
     project = auth_db.get_project(job["project_id"])
-    if not project:
-        auth_db.mark_refresh_job_ran(job_id, status="failed", error="project deleted")
-        return {"status": "failed", "error": "project deleted"}
-
+    if not project: return None
     run = auth_db.create_refresh_run(job_id, job["project_id"])
-    log_lines: list[str] = [f"refresh job {job_id} starting at {time.strftime('%Y-%m-%d %H:%M:%S')}"]
+    payload = {
+        "job_id": job_id,
+        "project_id": job["project_id"],
+        "env_id": job.get("env_id"),
+        "entry_point": job.get("entry_point"),
+        "script_source": job.get("script_source"),
+        "extra_env": job.get("extra_env") or {},
+        "doc_id": project.get("doc_id"),
+        "doc_source": project.get("doc_source"),
+        "project_name": project.get("name"),
+    }
+    if SQS_QUEUE_URL:
+        _send_sqs("refresh_job", run["id"], payload)
+    else:
+        threading.Thread(target=_local_refresh, args=(run["id"], job_id, payload), daemon=True).start()
+    return run["id"]
 
+
+def _local_refresh(run_id: str, job_id: str, payload: dict) -> None:
+    """Local dev fallback for refresh job execution. Mirrors worker logic."""
+    log_lines: list[str] = [f"refresh job {job_id} starting at {time.strftime('%Y-%m-%d %H:%M:%S')}"]
     try:
-        # Pick python: env's venv if present + ready, else host python.
         py = sys.executable
-        env_dir = TEAM_ENVS_ROOT / job["project_id"]  # fallback
-        if job.get("env_id"):
-            env = auth_db.get_team_env_secret(job["env_id"])
+        if payload.get("env_id"):
+            env = auth_db.get_team_env_secret(payload["env_id"])
             if env and env.get("status") == "ready" and env.get("venv_path"):
                 vp = _venv_python(Path(env["venv_path"]))
-                if vp.exists():
-                    py = str(vp)
-                    log_lines.append(f"using team-env python: {py}")
-                else:
-                    log_lines.append(f"warning: venv missing at {vp}; using host python")
+                if vp.exists(): py = str(vp); log_lines.append(f"using venv: {py}")
+                else: log_lines.append(f"venv missing; using host python")
             else:
-                log_lines.append(f"warning: env not ready (status={env.get('status') if env else 'missing'}); using host python")
-        else:
-            log_lines.append("no env attached; using host python")
-
-        # Build the merged env vars
-        merged_env = os.environ.copy()
-        if job.get("env_id"):
-            env_full = auth_db.get_team_env_secret(job["env_id"]) or {}
-            for k, v in (env_full.get("env_vars") or {}).items():
-                merged_env[str(k)] = str(v)
-        for k, v in (job.get("extra_env") or {}).items():
-            merged_env[str(k)] = str(v)
-        # Surface what Percy doc to mutate; the script can read these
-        merged_env["PERCY_PROJECT_ID"] = project["id"]
-        merged_env["PERCY_DOC_ID"] = project.get("doc_id") or ""
-        merged_env["PERCY_API_BASE"] = os.environ.get("PERCY_API_BASE", "http://localhost:8000")
-
-        # Drop the script to a working dir
-        work_dir = TEAM_ENVS_ROOT / "_runs" / run["id"]
-        work_dir.mkdir(parents=True, exist_ok=True)
-        script_path = work_dir / job.get("entry_point", "refresh.py")
-        script_path.write_text(job.get("script_source", "") or "# (no script)\n", encoding="utf-8")
-
-        # Run with a 5-minute cap
+                log_lines.append(f"env not ready; using host python")
+        merged = os.environ.copy()
+        if payload.get("env_id"):
+            env = auth_db.get_team_env_secret(payload["env_id"]) or {}
+            for k, v in (env.get("env_vars") or {}).items(): merged[str(k)] = str(v)
+        for k, v in (payload.get("extra_env") or {}).items(): merged[str(k)] = str(v)
+        merged["PERCY_PROJECT_ID"] = payload.get("project_id") or ""
+        merged["PERCY_DOC_ID"] = payload.get("doc_id") or ""
+        merged["PERCY_API_BASE"] = os.environ.get("PERCY_API_BASE", "http://localhost:8000")
+        work = TEAM_ENVS_ROOT / "_runs" / run_id
+        work.mkdir(parents=True, exist_ok=True)
+        script_path = work / payload.get("entry_point", "refresh.py")
+        script_path.write_text(payload.get("script_source", ""), encoding="utf-8")
         log_lines.append(f"executing: {py} {script_path.name}")
-        r = subprocess.run(
-            [py, str(script_path)],
-            capture_output=True, text=True, env=merged_env,
-            cwd=str(work_dir), timeout=300,
-        )
+        r = subprocess.run([py, str(script_path)], capture_output=True, text=True,
+                           env=merged, cwd=str(work), timeout=300)
         log_lines.extend((r.stdout or "").splitlines()[-200:])
         if r.stderr:
-            log_lines.append("--- stderr ---")
-            log_lines.extend((r.stderr or "").splitlines()[-100:])
+            log_lines.append("--- stderr ---"); log_lines.extend((r.stderr or "").splitlines()[-100:])
         if r.returncode != 0:
             raise RuntimeError(f"script exited {r.returncode}")
-
-        # Trigger a project build so the deck reflects whatever the script did.
-        # Inline import to avoid a circular dep at module load.
+        # Trigger build
         build_id = None
         try:
-            from app.backend import workspace_api as _wapi
-            from app.backend.workspace_api import TriggerBuildRequest as _Trig
-            # We synthesize a no-auth call by invoking the function directly.
-            # Use the project's first owner so authorization passes — OK for v1
-            # since the scheduler is in-process.
-            members = auth_db.list_org_members(project["org_id"])
-            actor = next((m for m in members if m["role"] == "owner"), members[0] if members else None)
-            if actor:
-                fake_user = {"id": actor["user_id"], "email": actor.get("email", "")}
-                fake_request = type("R", (), {"state": type("S", (), {})()})()
-                # Bypass auth.require_user by inlining the build core.
-                from app.backend import auth_db as _adb
-                build = _adb.create_build(
-                    project_id=project["id"], triggered_by=fake_user["id"],
-                    trigger="scheduled", formats=["pptx", "pdf"],
-                )
-                build_id = build["id"]
-                log_lines.append(f"triggered build {build_id}")
-                # Run inline (re-using the trigger_build internals via a thin wrapper).
-                _do_inline_build(build_id, project)
+            build = auth_db.create_build(project_id=payload["project_id"], triggered_by=None,
+                                         trigger="scheduled", formats=["pptx", "pdf"])
+            build_id = build["id"]
+            log_lines.append(f"triggered build {build_id}")
         except Exception as e:
-            log_lines.append(f"post-build trigger failed: {e}")
-
-        auth_db.update_refresh_run(
-            run["id"], status="success", finished_at=int(time.time()),
-            log="\n".join(log_lines)[:200000], build_id=build_id,
-        )
+            log_lines.append(f"build trigger failed: {e}")
+        auth_db.update_refresh_run(run_id, status="success", finished_at=int(time.time()),
+                                   log="\n".join(log_lines)[:200000], build_id=build_id)
         auth_db.mark_refresh_job_ran(job_id, status="success")
-        return {"status": "success", "run_id": run["id"]}
-
     except subprocess.TimeoutExpired:
-        log_lines.append("ERROR: script timed out after 300s")
-        auth_db.update_refresh_run(run["id"], status="failed", finished_at=int(time.time()),
+        log_lines.append("ERROR: timed out after 300s")
+        auth_db.update_refresh_run(run_id, status="failed", finished_at=int(time.time()),
                                    log="\n".join(log_lines)[:200000])
         auth_db.mark_refresh_job_ran(job_id, status="failed", error="timeout")
-        return {"status": "failed", "error": "timeout"}
     except Exception as e:
         log_lines.append(f"ERROR: {e}")
-        auth_db.update_refresh_run(run["id"], status="failed", finished_at=int(time.time()),
+        auth_db.update_refresh_run(run_id, status="failed", finished_at=int(time.time()),
                                    log="\n".join(log_lines)[:200000])
         auth_db.mark_refresh_job_ran(job_id, status="failed", error=str(e)[:1000])
-        return {"status": "failed", "error": str(e)}
-
-
-def _do_inline_build(build_id: str, project: dict) -> None:
-    """Replicate the trigger_build core for use from the scheduler.
-
-    Lifted from workspace_api.trigger_build — without HTTP plumbing.
-    Best-effort: skips formats that fail.
-    """
-    from app.backend import main as _backend_main
-    from app.backend import auth_db as _adb
-    from percy.diagnostics.rebuild import rebuild_pptx as _rebuild_pptx
-    started = time.time()
-    _adb.update_build(build_id, status="running", started_at=int(started))
-    try:
-        doc_id = project.get("doc_id")
-        if not doc_id or doc_id not in _backend_main._docs:
-            if project.get("doc_source"):
-                result = _backend_main.onboard(_backend_main.OnboardRequest(path=str(project["doc_source"])))
-                doc_id = result.get("doc_id") if isinstance(result, dict) else getattr(result, "doc_id", None)
-        if not doc_id or doc_id not in _backend_main._docs:
-            raise RuntimeError("no doc to build")
-        d = _backend_main._docs[doc_id]
-        doc = d["doc"]
-        out_dir = Path("uploads") / "builds" / build_id
-        out_dir.mkdir(parents=True, exist_ok=True)
-        pptx_path = out_dir / f"{project['name'].replace(' ', '_')}.pptx"
-        _rebuild_pptx(doc, str(pptx_path))
-        outputs = {"pptx": str(pptx_path.resolve())}
-        try:
-            subprocess.run(["soffice", "--headless", "--convert-to", "pdf",
-                            "--outdir", str(out_dir), str(pptx_path)],
-                           capture_output=True, timeout=120)
-            produced = out_dir / (pptx_path.stem + ".pdf")
-            if produced.exists():
-                outputs["pdf"] = str(produced.resolve())
-        except Exception:
-            pass
-        finished = time.time()
-        _adb.update_build(build_id, status="success", outputs=outputs,
-                          summary=f"scheduled build · {len(outputs)} format(s)",
-                          finished_at=int(finished),
-                          elapsed_ms=int((finished-started)*1000))
-    except Exception as e:
-        finished = time.time()
-        _adb.update_build(build_id, status="failed", error=str(e),
-                          finished_at=int(finished),
-                          elapsed_ms=int((finished-started)*1000))
 
 
 @router.post("/api/refresh-jobs/{job_id}/run")
@@ -483,14 +474,8 @@ def run_refresh_job_now(request: Request, job_id: str):
         raise HTTPException(404, "Job not found")
     p = auth_db.get_project(job["project_id"])
     _require_org_member(user, p["org_id"])
-    # Run in a thread so the HTTP request returns quickly with the run id.
-    result = {"status": "started"}
-    def _go():
-        result.update(execute_refresh_job(job_id))
-    t = threading.Thread(target=_go, daemon=True)
-    t.start()
-    t.join(timeout=2)  # if it finishes fast, return the real status
-    return result
+    run_id = dispatch_refresh_job(job_id)
+    return {"status": "queued", "run_id": run_id}
 
 
 # ── Background scheduler ─────────────────────────────────────────────────────
@@ -503,16 +488,16 @@ def _scheduler_loop():
     log.info("refresh scheduler started")
     while not _scheduler_stop.is_set():
         try:
-            due = auth_db.list_due_refresh_jobs()
-            for job in due:
-                log.info("scheduler: running due job %s (project %s)", job["id"], job["project_id"])
+            for job in auth_db.list_due_refresh_jobs():
+                log.info("scheduler: dispatching due job %s", job["id"])
                 try:
-                    execute_refresh_job(job["id"])
+                    dispatch_refresh_job(job["id"])
+                    # Reset next_run_at right away so we don't re-dispatch
+                    auth_db.mark_refresh_job_ran(job["id"], status="dispatched")
                 except Exception as e:
-                    log.exception("scheduler: job %s failed: %s", job["id"], e)
+                    log.exception("scheduler: dispatch %s failed: %s", job["id"], e)
         except Exception as e:
             log.exception("scheduler tick failed: %s", e)
-        # 30s tick — fine for daily/hourly resolution
         _scheduler_stop.wait(30)
     log.info("refresh scheduler stopped")
 

@@ -17,21 +17,58 @@ export interface PercyUserPresence {
   selection?: { elementId: string; elementName?: string }
 }
 
-const _awareness = new Map<string, Awareness>()
-
+/**
+ * Return the room's awareness — the SAME instance the WebsocketProvider
+ * was constructed with, so local writes propagate over the wire and
+ * remote updates land in this same map. (We used to mint a separate
+ * Awareness per roomId here; that meant our presence updates lived in
+ * a different bucket than the one y-websocket synchronized, and peers
+ * never saw each other.)
+ */
 export function getAwareness(room: YjsRoom): Awareness {
-  let aw = _awareness.get(room.roomId)
-  if (!aw) {
-    aw = new Awareness(room.doc)
-    _awareness.set(room.roomId, aw)
-  }
-  return aw
+  return room.awareness
 }
 
 export function setLocalUser(room: YjsRoom, user: PercyUserPresence): void {
   const aw = getAwareness(room)
   aw.setLocalStateField("user", { name: user.name, color: user.color, userId: user.userId })
   if (user.selection) aw.setLocalStateField("selection", user.selection)
+}
+
+/** Update just the local user's selection (which element they have picked). */
+export function setLocalSelection(
+  room: YjsRoom, selection: PercyUserPresence["selection"] | null,
+): void {
+  getAwareness(room).setLocalStateField("selection", selection || null)
+}
+
+/** Update just the local user's caret-in-text position for an element. */
+export function setLocalCaret(
+  room: YjsRoom, caret: { elementId: string; pos: number } | null,
+): void {
+  getAwareness(room).setLocalStateField("caret", caret || null)
+}
+
+/**
+ * Broadcast where the local user's mouse pointer is on the slide canvas.
+ * Coordinates are PERCENTAGES of the slide bounds so peers can scale into
+ * their own canvas size at any zoom level.
+ */
+export function setLocalPointer(
+  room: YjsRoom, pointer: { x_pct: number; y_pct: number } | null,
+): void {
+  getAwareness(room).setLocalStateField("pointer", pointer || null)
+}
+
+/**
+ * Broadcast that the local user has entered text-edit mode on an element.
+ * Peers render a stronger glow on that element so the collab feels live
+ * (Figma-style "X is editing this").
+ */
+export function setLocalEditing(
+  room: YjsRoom, editing: { elementId: string } | null,
+): void {
+  getAwareness(room).setLocalStateField("editing", editing || null)
 }
 
 export function getRemoteUsers(room: YjsRoom): PercyUserPresence[] {

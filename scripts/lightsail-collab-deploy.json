@@ -1,0 +1,25 @@
+{
+  "containers": {
+    "collab": {
+      "image": ":percy-collab.collab.1",
+      "ports": { "1234": "HTTP" },
+      "environment": {
+        "NODE_ENV": "production",
+        "PORT": "1234",
+        "PERCY_API_BASE": "https://36kuepamyi.us-east-1.awsapprunner.com"
+      }
+    }
+  },
+  "publicEndpoint": {
+    "containerName": "collab",
+    "containerPort": 1234,
+    "healthCheck": {
+      "path": "/healthz",
+      "intervalSeconds": 10,
+      "timeoutSeconds": 5,
+      "healthyThreshold": 2,
+      "unhealthyThreshold": 3,
+      "successCodes": "200"
+    }
+  }
+}

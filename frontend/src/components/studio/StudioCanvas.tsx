@@ -5,6 +5,13 @@ import { CanvasContext } from "./CanvasContext"
 import ElementOverlay from "./ElementOverlay"
 import InlineTextEditor from "./InlineTextEditor"
 import AnnotationOverlay from "./AnnotationOverlay"
+import { getCollabContext } from "../../lib/collab/collabContext"
+import { hydrateSlide, observeElement, observeSlideElements, readElementScalar, updateElementFields } from "../../lib/collab/bridgeYjsAdapter"
+import type { YjsRoom } from "../../lib/collab/yjsRoom"
+import * as Y from "yjs"
+import { setLocalSelection, setLocalPointer } from "../../lib/collab/awareness"
+import RemotePresenceLayer from "./RemotePresenceLayer"
+import LiveCursorLayer from "./LiveCursorLayer"
 
 interface Props {
   docId: string
@@ -62,6 +69,13 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
   // Keep selectedIdsRef in sync for use in keyboard handler
   useEffect(() => { selectedIdsRef.current = selectedIds }, [selectedIds])
 
+  // ── Phase B: subscribe to Y.Doc for live element updates ─────────────────
+  // The collab context is a module-singleton set by Studio.tsx via
+  // useStudioCollab. We pull it on every render but treat null as "collab
+  // off" — in that case we fall back to the API-driven path entirely.
+  const collab = getCollabContext()
+  const room: YjsRoom | null = collab?.enabled ? collab.room : null
+
   // ── fetch elements when slide changes or parent refreshes ─────────────────
   useEffect(() => {
     let cancelled = false
@@ -74,6 +88,12 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
           elementsRef.current = res.elements
           setBgColor(res.background_color)
           setLoading(false)
+          // Hydrate Y.Doc with the freshly-fetched element fields. Idempotent
+          // (won't clobber live remote edits already in the room).
+          if (room) {
+            try { hydrateSlide(room, res.elements, res.background_color) }
+            catch (e) { console.warn("[Percy] Y.Doc hydrate failed:", e) }
+          }
           // bump all render keys so every element PNG reloads
           setRenderKeys((prev) => {
             const next: Record<string, number> = {}
@@ -93,10 +113,64 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
     return () => { cancelled = true }
   }, [docId, slideN, refreshKey])
 
+  // ── Y.Doc live subscription: when any element's scalar fields change in
+  //    the Y.Doc (local edit OR remote peer), re-render that element. The
+  //    initial setElements above is what makes the elements list visible;
+  //    after that, Y.Doc is the live source of truth for transforms.
+  useEffect(() => {
+    if (!room) return
+    const unsubs: Array<() => void> = []
+    // Top-level: when the elements MAP itself changes (add/remove), refresh
+    // the per-element observers list.
+    const wireElement = (id: string) => {
+      const off = observeElement(room, id, (snap) => {
+        setElements((prev) => {
+          const idx = prev.findIndex((e) => e.id === id)
+          if (idx < 0) return prev
+          const merged = { ...prev[idx], ...snap }
+          merged.left_pct   = (merged.left_in   / slideWidthIn)  * 100
+          merged.top_pct    = (merged.top_in    / slideHeightIn) * 100
+          merged.width_pct  = (merged.width_in  / slideWidthIn)  * 100
+          merged.height_pct = (merged.height_in / slideHeightIn) * 100
+          const next = prev.slice()
+          next[idx] = merged
+          elementsRef.current = next
+          return next
+        })
+      })
+      unsubs.push(off)
+      // Phase C — watch revision counters; when a peer bumps style/text/
+      // render_rev we bump renderKey so the renderer re-fetches via API.
+      const elementsMap = room.doc.getMap("elements") as unknown as { get: (k: string) => Y.Map<unknown> | undefined }
+      const elMap = elementsMap.get(id)
+      if (elMap) {
+        const onRev = (ev: Y.YMapEvent<unknown>) => {
+          let bump = false
+          ev.changes.keys.forEach((_, key) => {
+            if (key === "style_rev" || key === "text_rev" || key === "render_rev") bump = true
+          })
+          if (bump) setRenderKeys((prev) => ({ ...prev, [id]: (prev[id] ?? 0) + 1 }))
+        }
+        elMap.observe(onRev)
+        unsubs.push(() => elMap.unobserve(onRev))
+      }
+    }
+    const offTop = observeSlideElements(room, (ids) => {
+      // (Re)wire per-element observers each time the set changes.
+      while (unsubs.length > 1) { const u = unsubs.pop(); u?.() }
+      for (const id of ids) wireElement(id)
+    })
+    unsubs.push(offTop)
+    return () => { for (const u of unsubs) u() }
+  }, [room, slideWidthIn, slideHeightIn])
+
   // ── keyboard: Escape deselects, G=grid, S=snap ───────────────────────────
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (["INPUT", "TEXTAREA", "SELECT"].includes((e.target as HTMLElement).tagName)) return
+      const tgt = e.target as HTMLElement
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(tgt.tagName)) return
+      // contenteditable (Tiptap, ProseMirror) — let the editor handle the key
+      if (tgt.isContentEditable || tgt.closest('[contenteditable="true"]')) return
       if (e.key === "Escape") { setSelectedIds(new Set()); onSelectElement(null); onMultiSelect?.(new Set()) }
       if (e.key === "g" || e.key === "G") { if (!e.ctrlKey && !e.metaKey) setGridOn((v) => !v) }
       if (e.key === "s" || e.key === "S") { if (!e.ctrlKey && !e.metaKey) setSnapOn((v) => !v) }
@@ -142,6 +216,10 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
             newZ = below ? below.z_index - 0.5 : minZ
           }
           if (newZ !== null && newZ !== el.z_index) {
+            if (room) {
+              try { updateElementFields(room, el.id, { z_index: newZ }) }
+              catch { /* no-op */ }
+            }
             updateElementPosition(docId, slideN, el.id, { z_index: newZ })
               .then((updated) => {
                 setElements((prev) => prev.map((e) => e.id === el.id ? updated : e))
@@ -186,19 +264,26 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
       if (next.size === 1) {
         const el = elements.find((e) => e.id === [...next][0]) ?? null
         onSelectElement(el)
+        // Phase E: broadcast selection so peers see a colored ring + name tag
+        if (room && el) {
+          try { setLocalSelection(room, { elementId: el.id, elementName: el.name }) }
+          catch { /* no-op */ }
+        }
       } else {
         onSelectElement(null)
+        if (room) { try { setLocalSelection(room, null) } catch { /* no-op */ } }
       }
       onMultiSelect?.(next)
       return next
     })
-  }, [elements, onSelectElement, onMultiSelect])
+  }, [elements, onSelectElement, onMultiSelect, room])
 
   const handleDeselect = useCallback(() => {
     setSelectedIds(new Set())
     onSelectElement(null)
     onMultiSelect?.(new Set())
-  }, [onSelectElement, onMultiSelect])
+    if (room) { try { setLocalSelection(room, null) } catch { /* no-op */ } }
+  }, [onSelectElement, onMultiSelect, room])
 
   const snap = useCallback((v: number) => snapOn ? Math.round(v / GRID_IN) * GRID_IN : v, [snapOn, GRID_IN])
 
@@ -206,24 +291,48 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
     id: string,
     leftIn: number, topIn: number, widthIn: number, heightIn: number,
   ) => {
+    const fields = {
+      left_in:   snap(leftIn),
+      top_in:    snap(topIn),
+      width_in:  snap(widthIn),
+      height_in: snap(heightIn),
+    }
+    // Phase B: write Y.Doc FIRST so UI + remote peers update instantly.
+    if (room) {
+      try { updateElementFields(room, id, fields) }
+      catch (e) { console.warn("[Percy] Y.Doc position write failed:", e) }
+    }
+    // Persistence still goes through the API for now — server collab worker
+    // will take this over in Phase D. Treat the API response as a no-op
+    // (Y.Doc subscription already updated React state).
     try {
-      const updated = await updateElementPosition(docId, slideN, id, {
-        left_in:   snap(leftIn),
-        top_in:    snap(topIn),
-        width_in:  snap(widthIn),
-        height_in: snap(heightIn),
-      })
-      setElements((prev) => prev.map((el) => el.id === id ? updated : el))
+      const updated = await updateElementPosition(docId, slideN, id, fields)
       if (selectedIds.size <= 1) onSelectElement(updated)
       setRenderKeys((prev) => ({ ...prev, [id]: (prev[id] ?? 0) + 1 }))
     } catch (e) {
-      console.error("element update failed:", e)
+      console.error("element update (persistence) failed:", e)
     }
-  }, [docId, slideN, onSelectElement, snap, selectedIds])
+  }, [room, docId, slideN, onSelectElement, snap, selectedIds])
 
   const handleMultiMove = useCallback(async (deltaLeftIn: number, deltaTopIn: number) => {
     const ids = [...selectedIds]
     const currentElements = elementsRef.current
+    // Phase B: batch the Y.Doc writes in one transaction so peers see one
+    // event for the whole multi-move, not N.
+    if (room) {
+      try {
+        room.doc.transact(() => {
+          for (const id of ids) {
+            const el = currentElements.find((e) => e.id === id)
+            if (!el) continue
+            updateElementFields(room, id, {
+              left_in: snap(el.left_in + deltaLeftIn),
+              top_in:  snap(el.top_in  + deltaTopIn),
+            })
+          }
+        })
+      } catch (e) { console.warn("[Percy] multi-move Y.Doc write failed:", e) }
+    }
     try {
       const updates = await Promise.all(
         ids.map((id) => {
@@ -236,21 +345,22 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
         })
       )
       const valid = updates.filter((u): u is NonNullable<typeof u> => u !== null)
-      setElements((prev) => {
-        const map = new Map(valid.map((u) => [u.id, u]))
-        return prev.map((el) => map.get(el.id) ?? el)
-      })
       setRenderKeys((prev) => {
         const next = { ...prev }
         for (const u of valid) next[u.id] = (prev[u.id] ?? 0) + 1
         return next
       })
     } catch (e) {
-      console.error("multi-move failed:", e)
+      console.error("multi-move (persistence) failed:", e)
     }
-  }, [docId, slideN, selectedIds, snap])
+  }, [room, docId, slideN, selectedIds, snap])
 
   const handleRotate = useCallback(async (id: string, rotation: number) => {
+    // Write to Y.Doc first so peers see the rotation immediately.
+    if (room) {
+      try { updateElementFields(room, id, { rotation }) }
+      catch (e) { console.warn("[Percy] Y.Doc rotation write failed:", e) }
+    }
     try {
       const updated = await updateElementPosition(docId, slideN, id, { rotation })
       setElements((prev) => prev.map((el) => el.id === id ? updated : el))
@@ -260,10 +370,19 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
     } catch (e) {
       console.error("rotation update failed:", e)
     }
-  }, [docId, slideN, onSelectElement, onElementRotated])
+  }, [room, docId, slideN, onSelectElement, onElementRotated])
 
   const handleCanvasPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return
+    // Only start a rubber-band selection when the pointerdown actually
+    // originated on the empty canvas — not on an element overlay or any
+    // descendant. Otherwise calling setPointerCapture here steals the click
+    // away from the element (pointerup + click get redirected to the canvas
+    // div), so left-clicks on text boxes silently do nothing while right-
+    // clicks work. The element overlay walks up to the canvas via
+    // closest('[data-element]') so we look for that.
+    const target = e.target as HTMLElement
+    if (target && target.closest('[data-element="true"]')) return
     const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect()
     const x = ((e.clientX - rect.left) / rect.width) * 100
     const y = ((e.clientY - rect.top)  / rect.height) * 100
@@ -377,18 +496,37 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
 
         {/* canvas wrapper — maintains slide aspect ratio */}
         <div
+          data-slide-canvas="true"
           className="relative shadow-2xl shrink-0"
           style={{
             aspectRatio: `${aspectRatio}`,
             height: `${zoom * 85}vh`,
             minWidth: 0,
             overflow: rulerOn ? "visible" : "hidden",
+            backgroundColor: "white",
+            // PowerPoint-style: stronger drop shadow so the slide reads as a
+            // discrete object floating above the workspace.
+            boxShadow: "0 14px 40px -10px rgba(0,0,0,0.30), 0 4px 12px -2px rgba(0,0,0,0.12)",
           }}
           onClick={handleDeselect}
           onContextMenu={(e) => {
             if ((e.target as Element).closest("[data-element]")) return
             e.preventDefault()
             onSlideContextMenu?.(e.clientX, e.clientY)
+          }}
+          onPointerMoveCapture={(e) => {
+            // Broadcast local mouse position as a percent of the slide
+            // bounds. Awareness updates throttle naturally; LiveCursorLayer
+            // smooths the rendered position.
+            if (!room) return
+            const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect()
+            const x_pct = ((e.clientX - rect.left) / rect.width) * 100
+            const y_pct = ((e.clientY - rect.top)  / rect.height) * 100
+            if (x_pct < 0 || x_pct > 100 || y_pct < 0 || y_pct > 100) return
+            try { setLocalPointer(room, { x_pct, y_pct }) } catch { /* no-op */ }
+          }}
+          onPointerLeave={() => {
+            if (room) { try { setLocalPointer(room, null) } catch { /* no-op */ } }
           }}
         >
           {/* rulers */}
@@ -531,6 +669,27 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
                   )
                 )}
               </svg>
+            )}
+
+            {/* Phase E: remote collaborators' selection rings + live cursors */}
+            <RemotePresenceLayer elements={elements} />
+            <LiveCursorLayer room={room} />
+
+            {/* PowerPoint-style empty-state hint when slide has no elements */}
+            {!loading && elements.length === 0 && (
+              <div
+                className="absolute inset-0 flex items-center justify-center pointer-events-none"
+                style={{ zIndex: 1 }}
+              >
+                <div className="text-center select-none" style={{ color: "rgba(0,0,0,0.30)" }}>
+                  <div style={{ fontSize: "clamp(18px, 2.4vw, 32px)", fontWeight: 300, letterSpacing: "-0.01em" }}>
+                    Click to add a text box
+                  </div>
+                  <div className="mt-2 text-[11px] uppercase tracking-[0.16em]" style={{ opacity: 0.6 }}>
+                    or use the Insert tab to add shapes, charts, images
+                  </div>
+                </div>
+              </div>
             )}
 
             {/* element overlays — each carries its own render PNG */}

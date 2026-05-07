@@ -3,22 +3,32 @@ import { Link } from "react-router-dom"
 import ThemeToggle from "../theme/ThemeToggle"
 import Logo from "../components/Logo"
 
-/**
- * Placeholder until the backend reset endpoint exists. Submitting always
- * shows the same "if an account exists, we sent a link" copy — the right
- * UX even when the real flow ships, since it doesn't leak which emails
- * are registered.
- */
 export default function ForgotPassword() {
   const [email,     setEmail]     = useState("")
   const [submitted, setSubmitted] = useState(false)
+  const [loading,   setLoading]   = useState(false)
+  const [error,     setError]     = useState("")
 
-  const onSubmit = (e: FormEvent) => {
+  const onSubmit = async (e: FormEvent) => {
     e.preventDefault()
     if (!email) return
-    // Backend hook would go here. For now, we don't actually send anything;
-    // the messaging is identical regardless.
-    setSubmitted(true)
+    setLoading(true)
+    setError("")
+    try {
+      await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ email }),
+      })
+      // Always show "sent" regardless of whether the account exists,
+      // to avoid leaking which emails are registered.
+      setSubmitted(true)
+    } catch {
+      setError("Something went wrong. Please try again.")
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -57,6 +67,9 @@ export default function ForgotPassword() {
                 Enter your email and we'll send you a link to set a new one.
               </p>
               <form onSubmit={onSubmit} className="space-y-3">
+                {error && (
+                  <div className="text-[11px] text-bad bg-bad/10 border border-bad/30 px-2 py-1.5">{error}</div>
+                )}
                 <input
                   type="email" required autoFocus
                   placeholder="you@example.com"
@@ -64,9 +77,9 @@ export default function ForgotPassword() {
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full text-sm bg-ink border border-edge px-3 py-2 text-paper focus:outline-none focus:border-paper/40"
                 />
-                <button type="submit"
-                  className="w-full text-[12px] tracking-[0.16em] uppercase py-2 bg-paper text-ink hover:bg-paper/90 transition-colors font-medium">
-                  Send reset link
+                <button type="submit" disabled={loading}
+                  className="w-full text-[12px] tracking-[0.16em] uppercase py-2 bg-paper text-ink hover:bg-paper/90 transition-colors disabled:opacity-50 font-medium">
+                  {loading ? "Sending…" : "Send reset link"}
                 </button>
               </form>
             </>

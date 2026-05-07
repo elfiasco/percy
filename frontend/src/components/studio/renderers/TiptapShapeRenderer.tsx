@@ -1,4 +1,5 @@
-import { useEffect, useState, useCallback, useRef } from "react"
+import { useEffect, useMemo, useState, useCallback, useRef } from "react"
+import TextBubbleMenu from "../TextBubbleMenu"
 import { useEditor, EditorContent, generateHTML } from "@tiptap/react"
 import Collaboration from "@tiptap/extension-collaboration"
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor"
@@ -9,8 +10,9 @@ import { bridgeExtensions } from "../../../lib/bridge/extensions"
 import { setActiveTiptapEditor } from "../../../lib/bridge/activeEditor"
 import { getCollabContext } from "../../../lib/collab/collabContext"
 import { hydrateElementText } from "../../../lib/collab/bridgeYjsSync"
-import { getAwareness } from "../../../lib/collab/awareness"
+import { getAwareness, setLocalEditing } from "../../../lib/collab/awareness"
 import { registerRenderer, type NativeRendererProps } from "./RendererRegistry"
+import { yXmlFragmentToProsemirrorJSON } from "y-prosemirror"
 
 /**
  * TiptapShapeRenderer — composite renderer for BridgeShape.
@@ -54,6 +56,36 @@ function TiptapShapeRendererImpl({
 
   useEffect(() => { if (!selected && editing) setEditing(false) }, [selected, editing])
 
+  // Broadcast edit-presence so peers know we're typing here.
+  useEffect(() => {
+    const collab = getCollabContext()
+    if (!collab?.enabled || !collab.room) return
+    setLocalEditing(collab.room, editing ? { elementId: element.id } : null)
+  }, [editing, element.id])
+
+  // Phase A round-out — subscribe to remote text edits while idle so peers'
+  // updates land in the static rendering. Same pattern as TiptapTextRenderer.
+  useEffect(() => {
+    if (editing) return
+    const collab = getCollabContext()
+    if (!collab?.enabled || !collab.room) return
+    let frag
+    try { frag = collab.room.doc.getXmlFragment(`text:${element.id}`) }
+    catch { return }
+    if (!frag) return
+    const refresh = () => {
+      try {
+        if (frag.length === 0) return
+        const pmJson = yXmlFragmentToProsemirrorJSON(frag)
+        if (!pmJson) return
+        const next = tiptapToParagraphs(pmJson)
+        if (next.kind === "paragraphs") setContent(next)
+      } catch { /* ignore */ }
+    }
+    frag.observeDeep(refresh)
+    return () => { frag.unobserveDeep(refresh) }
+  }, [editing, element.id])
+
   const pngUrl = `${elementPngUrl(docId, slideN, element.id)}?v=${renderKey}`
 
   if (editing && content) {
@@ -76,11 +108,7 @@ function TiptapShapeRendererImpl({
         width: "100%", height: "100%", position: "relative",
         cursor: selected ? "text" : undefined,
       }}
-      onClick={(e) => {
-        if (!selected) return
-        e.stopPropagation()
-        setEditing(true)
-      }}
+      onClick={() => { setEditing(true) }}
       onDoubleClick={(e) => {
         e.stopPropagation()
         setEditing(true)
@@ -121,25 +149,40 @@ function ShapeTextEditor({
   const lastSavedJSON = useRef<string>("")
   const collab = getCollabContext()
 
-  const extensions = (() => {
-    if (collab?.enabled && collab.room) {
-      const fragment = hydrateElementText(collab.room, elementId, initialContent)
-      const aware = getAwareness(collab.room)
+  // Memoized + defensive — see TiptapTextRenderer for the full reasoning.
+  const collabRoom = collab?.enabled ? collab.room : null
+  const collabKey = collabRoom?.roomId ?? "local"
+  const extensions = useMemo(() => {
+    if (!collabRoom) return bridgeExtensions()
+    try {
+      hydrateElementText(collabRoom, elementId, initialContent)
+      const field = `text:${elementId}`
+      // Sanity-check: y-tiptap's binding crashes on `yXmlFragment.doc` if
+      // the fragment doesn't have an attached doc. Validate now and bail
+      // to plain Tiptap if Y.js gave us anything weird.
+      const probe = collabRoom.doc.getXmlFragment(field)
+      if (!probe || probe.doc !== collabRoom.doc) {
+        console.warn("[Percy] shape: probe fragment unattached", { hasDoc: !!probe?.doc })
+        return bridgeExtensions()
+      }
+      void getAwareness(collabRoom)
       return [
-        ...bridgeExtensions(),
-        Collaboration.configure({ fragment }),
-        CollaborationCursor.configure({
-          provider: { awareness: aware } as unknown as Parameters<typeof CollaborationCursor.configure>[0]["provider"],
-          user: { name: collab.user.name, color: collab.user.color },
-        }),
+        ...bridgeExtensions({ collab: true }),
+        Collaboration.configure({ document: collabRoom.doc, field }),
+        // CollaborationCursor temporarily disabled (see TiptapTextRenderer note).
       ]
+    } catch (e) {
+      console.warn("[Percy] shape Tiptap collab init failed; falling back to local-only:", e)
+      return bridgeExtensions()
     }
-    return bridgeExtensions()
-  })()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collabKey, elementId])
+
+  const isCollabActive = collabRoom != null && extensions.length > bridgeExtensions().length
 
   const editor = useEditor({
     extensions,
-    content: collab?.enabled ? undefined : initialJSON,
+    content: isCollabActive ? undefined : initialJSON,
     autofocus: "end",
     editorProps: {
       attributes: {
@@ -147,29 +190,36 @@ function ShapeTextEditor({
         spellcheck: "true",
       },
     },
-  }, [collab?.enabled])
+  }, [collabKey])
 
   useEffect(() => {
     if (!editor) return
     lastSavedJSON.current = JSON.stringify(initialJSON)
   }, [editor, initialJSON])
 
+  // Phase A — local-first save. See TiptapTextRenderer for full reasoning.
   const save = useCallback(async () => {
     if (!editor) { onCancel(); return }
     const json = editor.getJSON()
-    if (JSON.stringify(json) === lastSavedJSON.current) { onCancel(); return }
+    const jsonStr = JSON.stringify(json)
+    if (jsonStr === lastSavedJSON.current) { onCancel(); return }
+    const next = tiptapToParagraphs(json)
+    if (isCollabActive) {
+      lastSavedJSON.current = jsonStr
+      onSaved(next)
+      return
+    }
     try {
-      const next = tiptapToParagraphs(json)
       const updated = await updateElementText(docId, slideN, elementId, next)
       if (updated.kind === "paragraphs") {
         lastSavedJSON.current = JSON.stringify(paragraphsToTiptap(updated))
         onSaved(updated)
       } else { onCancel() }
     } catch (e) {
-      console.error("shape text save failed:", e)
+      console.error("shape text save (legacy API path) failed:", e)
       onCancel()
     }
-  }, [editor, docId, slideN, elementId, onSaved, onCancel])
+  }, [editor, docId, slideN, elementId, onSaved, onCancel, isCollabActive])
 
   useEffect(() => {
     if (!editor) return
@@ -209,6 +259,7 @@ function ShapeTextEditor({
         overflow: "hidden",
       }}
     >
+      <TextBubbleMenu editor={editor} />
       <EditorContent editor={editor} onBlur={save} />
     </div>
   )

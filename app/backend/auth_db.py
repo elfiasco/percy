@@ -360,6 +360,174 @@ _MIGRATIONS_COMMON = [
     """
     CREATE INDEX IF NOT EXISTS idx_studio_refresh_runs_job ON studio_refresh_runs(job_id);
     """,
+    """
+    CREATE TABLE IF NOT EXISTS studio_eval_results (
+        id           TEXT PRIMARY KEY,
+        env_id       TEXT NOT NULL,
+        user_id      TEXT,
+        status       TEXT NOT NULL DEFAULT 'queued',  -- 'queued' | 'running' | 'success' | 'failed'
+        exit_code    INTEGER,
+        stdout       TEXT,
+        stderr       TEXT,
+        elapsed_ms   INTEGER,
+        note         TEXT,
+        created_at   INTEGER NOT NULL,
+        finished_at  INTEGER
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_eval_results_env ON studio_eval_results(env_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_eval_results_status ON studio_eval_results(status);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS studio_email_verifications (
+        id         TEXT PRIMARY KEY,
+        user_id    TEXT NOT NULL,
+        token      TEXT NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        used_at    INTEGER
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_email_verif_user  ON studio_email_verifications(user_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_email_verif_token ON studio_email_verifications(token);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS studio_password_resets (
+        id         TEXT PRIMARY KEY,
+        user_id    TEXT NOT NULL,
+        token      TEXT NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        used_at    INTEGER
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_pw_resets_token ON studio_password_resets(token);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS studio_user_settings (
+        user_id        TEXT PRIMARY KEY,
+        theme          TEXT NOT NULL DEFAULT 'light',
+        locale         TEXT NOT NULL DEFAULT 'en',
+        notifications  TEXT NOT NULL DEFAULT '{}',
+        default_org_id TEXT,
+        panel_states   TEXT NOT NULL DEFAULT '{}',
+        updated_at     INTEGER NOT NULL
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS studio_project_shares (
+        id           TEXT PRIMARY KEY,
+        project_id   TEXT NOT NULL,
+        grantee_id   TEXT,
+        share_token  TEXT UNIQUE,
+        role         TEXT NOT NULL DEFAULT 'viewer',
+        created_by   TEXT NOT NULL,
+        created_at   INTEGER NOT NULL,
+        expires_at   INTEGER
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_proj_shares_project ON studio_project_shares(project_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_proj_shares_token   ON studio_project_shares(share_token);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_proj_shares_grantee ON studio_project_shares(grantee_id);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS studio_project_assets (
+        id           TEXT PRIMARY KEY,
+        project_id   TEXT NOT NULL,
+        org_id       TEXT NOT NULL,
+        name         TEXT NOT NULL,
+        mime_type    TEXT NOT NULL,
+        size_bytes   INTEGER NOT NULL DEFAULT 0,
+        storage_key  TEXT NOT NULL,
+        created_by   TEXT NOT NULL,
+        created_at   INTEGER NOT NULL
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_proj_assets_project ON studio_project_assets(project_id);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS studio_audit_events (
+        id            TEXT PRIMARY KEY,
+        org_id        TEXT,
+        user_id       TEXT,
+        action        TEXT NOT NULL,
+        resource_type TEXT,
+        resource_id   TEXT,
+        details       TEXT NOT NULL DEFAULT '{}',
+        ip_addr       TEXT,
+        created_at    INTEGER NOT NULL
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_audit_org    ON studio_audit_events(org_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_audit_user   ON studio_audit_events(user_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_audit_action ON studio_audit_events(action);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_audit_ts     ON studio_audit_events(created_at);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS studio_plans (
+        id             TEXT PRIMARY KEY,
+        name           TEXT NOT NULL,
+        max_seats      INTEGER NOT NULL DEFAULT 5,
+        max_projects   INTEGER NOT NULL DEFAULT 10,
+        features       TEXT NOT NULL DEFAULT '[]',
+        price_monthly  INTEGER NOT NULL DEFAULT 0,
+        price_annual   INTEGER NOT NULL DEFAULT 0,
+        is_default     INTEGER NOT NULL DEFAULT 0
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS studio_subscriptions (
+        id                  TEXT PRIMARY KEY,
+        org_id              TEXT NOT NULL UNIQUE,
+        plan_id             TEXT NOT NULL,
+        seats_purchased     INTEGER NOT NULL DEFAULT 5,
+        status              TEXT NOT NULL DEFAULT 'active',
+        current_period_end  INTEGER,
+        external_id         TEXT,
+        created_at          INTEGER NOT NULL,
+        updated_at          INTEGER NOT NULL
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_subs_org ON studio_subscriptions(org_id);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS studio_sso_configs (
+        id             TEXT PRIMARY KEY,
+        org_id         TEXT NOT NULL UNIQUE,
+        provider       TEXT NOT NULL DEFAULT 'saml',
+        metadata_url   TEXT,
+        metadata_xml   TEXT,
+        entity_id      TEXT,
+        sso_url        TEXT,
+        slo_url        TEXT,
+        certificate    TEXT,
+        attribute_map  TEXT NOT NULL DEFAULT '{}',
+        enabled        INTEGER NOT NULL DEFAULT 0,
+        created_at     INTEGER NOT NULL,
+        updated_at     INTEGER NOT NULL
+    );
+    """,
 ]
 
 _PG_COLUMN_ADDS: list[str] = []  # No legacy schema reconciliation needed — studio_* tables are isolated
@@ -368,6 +536,7 @@ _PG_COLUMN_ADDS: list[str] = []  # No legacy schema reconciliation needed — st
 _FORWARD_ADDS = [
     # Projects gain a refresh schedule (None | "on_demand" | "daily" | "weekly" | "monthly")
     ("studio_projects", "schedule", "TEXT"),
+    ("studio_users", "email_verified", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
@@ -1142,6 +1311,31 @@ def update_refresh_run(run_id: str, **fields: Any) -> None:
         conn.execute(f"UPDATE studio_refresh_runs SET {cols} WHERE id = ?", (*fields.values(), run_id))
 
 
+# ── Eval results (async via worker) ──────────────────────────────────────────
+
+def create_eval_result(env_id: str, *, user_id: str | None = None) -> dict[str, Any]:
+    rid = _gen_id("ev")
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO studio_eval_results (id, env_id, user_id, status, created_at) VALUES (?, ?, ?, 'queued', ?)",
+            (rid, env_id, user_id, _now()),
+        )
+    return get_eval_result(rid) or {}
+
+
+def get_eval_result(eval_id: str) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM studio_eval_results WHERE id = ?", (eval_id,)).fetchone()
+    return row
+
+
+def update_eval_result(eval_id: str, **fields: Any) -> None:
+    if not fields: return
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    with get_conn() as conn:
+        conn.execute(f"UPDATE studio_eval_results SET {cols} WHERE id = ?", (*fields.values(), eval_id))
+
+
 def list_project_refresh_runs(project_id: str, *, limit: int = 25) -> list[dict[str, Any]]:
     with get_conn() as conn:
         rows = conn.execute(
@@ -1149,3 +1343,316 @@ def list_project_refresh_runs(project_id: str, *, limit: int = 25) -> list[dict[
             (project_id, limit),
         ).fetchall()
     return [r for r in rows if r]
+
+
+# ── Email verification ────────────────────────────────────────────────────────
+
+def create_email_verification(user_id: str, ttl: int = 86400) -> dict[str, Any]:
+    now = _now()
+    vid = _gen_id("ev")
+    token = secrets.token_urlsafe(32)
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO studio_email_verifications (id, user_id, token, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+            (vid, user_id, token, now, now + ttl),
+        )
+    return {"id": vid, "user_id": user_id, "token": token, "expires_at": now + ttl}
+
+
+def get_email_verification_by_token(token: str) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM studio_email_verifications WHERE token = ?", (token,)).fetchone()
+
+
+def mark_email_verification_used(vid: str) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE studio_email_verifications SET used_at = ? WHERE id = ?", (_now(), vid))
+
+
+# ── Password reset ────────────────────────────────────────────────────────────
+
+def create_password_reset(user_id: str, ttl: int = 3600) -> dict[str, Any]:
+    now = _now()
+    rid = _gen_id("pr")
+    token = secrets.token_urlsafe(32)
+    with get_conn() as conn:
+        # Invalidate any existing unused tokens for this user
+        conn.execute(
+            "UPDATE studio_password_resets SET used_at = ? WHERE user_id = ? AND used_at IS NULL",
+            (now, user_id),
+        )
+        conn.execute(
+            "INSERT INTO studio_password_resets (id, user_id, token, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+            (rid, user_id, token, now, now + ttl),
+        )
+    return {"id": rid, "user_id": user_id, "token": token, "expires_at": now + ttl}
+
+
+def get_password_reset_by_token(token: str) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM studio_password_resets WHERE token = ?", (token,)).fetchone()
+
+
+def mark_password_reset_used(rid: str) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE studio_password_resets SET used_at = ? WHERE id = ?", (_now(), rid))
+
+
+# ── User settings ─────────────────────────────────────────────────────────────
+
+def get_user_settings(user_id: str) -> dict[str, Any]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM studio_user_settings WHERE user_id = ?", (user_id,)).fetchone()
+    if not row:
+        return {
+            "user_id": user_id, "theme": "light", "locale": "en",
+            "notifications": {}, "default_org_id": None, "panel_states": {},
+        }
+    import json
+    return {
+        "user_id": row["user_id"],
+        "theme": row["theme"],
+        "locale": row["locale"],
+        "notifications": json.loads(row["notifications"] or "{}"),
+        "default_org_id": row.get("default_org_id"),
+        "panel_states": json.loads(row["panel_states"] or "{}"),
+    }
+
+
+def upsert_user_settings(user_id: str, **fields: Any) -> dict[str, Any]:
+    import json
+    allowed = {"theme", "locale", "notifications", "default_org_id", "panel_states"}
+    clean: dict[str, Any] = {}
+    for k, v in fields.items():
+        if k in allowed:
+            clean[k] = json.dumps(v) if isinstance(v, dict) else v
+    clean["updated_at"] = _now()
+    with get_conn() as conn:
+        exists = conn.execute("SELECT 1 FROM studio_user_settings WHERE user_id = ?", (user_id,)).fetchone()
+        if exists:
+            cols = ", ".join(f"{k} = ?" for k in clean)
+            conn.execute(f"UPDATE studio_user_settings SET {cols} WHERE user_id = ?", (*clean.values(), user_id))
+        else:
+            clean["user_id"] = user_id
+            cols = ", ".join(clean.keys())
+            placeholders = ", ".join("?" * len(clean))
+            conn.execute(f"INSERT INTO studio_user_settings ({cols}) VALUES ({placeholders})", tuple(clean.values()))
+    return get_user_settings(user_id)
+
+
+# ── Project shares ────────────────────────────────────────────────────────────
+
+def create_project_share(project_id: str, created_by: str, *, grantee_id: str | None = None, role: str = "viewer", ttl: int | None = None) -> dict[str, Any]:
+    sid = _gen_id("sh")
+    token = secrets.token_urlsafe(24) if not grantee_id else None
+    expires_at = _now() + ttl if ttl else None
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO studio_project_shares (id, project_id, grantee_id, share_token, role, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (sid, project_id, grantee_id, token, role, created_by, _now(), expires_at),
+        )
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM studio_project_shares WHERE id = ?", (sid,)).fetchone() or {}
+
+
+def list_project_shares(project_id: str) -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM studio_project_shares WHERE project_id = ?", (project_id,)).fetchall()
+
+
+def get_project_share_by_token(token: str) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM studio_project_shares WHERE share_token = ?", (token,)).fetchone()
+
+
+def delete_project_share(share_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM studio_project_shares WHERE id = ?", (share_id,))
+
+
+def check_project_access(user_id: str, project_id: str) -> str | None:
+    """Return the user's role for a project: 'owner'/'admin'/'member' via org, or 'viewer'/'editor' via share. None = no access."""
+    project = get_project(project_id)
+    if not project:
+        return None
+    mem = get_membership(user_id, project["org_id"])
+    if mem:
+        return mem["role"]
+    with get_conn() as conn:
+        share = conn.execute(
+            "SELECT * FROM studio_project_shares WHERE project_id = ? AND grantee_id = ? AND (expires_at IS NULL OR expires_at > ?)",
+            (project_id, user_id, _now()),
+        ).fetchone()
+    return share["role"] if share else None
+
+
+# ── Project assets ────────────────────────────────────────────────────────────
+
+def create_project_asset(project_id: str, org_id: str, name: str, mime_type: str, size_bytes: int, storage_key: str, created_by: str) -> dict[str, Any]:
+    aid = _gen_id("ast")
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO studio_project_assets (id, project_id, org_id, name, mime_type, size_bytes, storage_key, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (aid, project_id, org_id, name, mime_type, size_bytes, storage_key, created_by, _now()),
+        )
+    return get_project_asset(aid) or {}
+
+
+def get_project_asset(asset_id: str) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM studio_project_assets WHERE id = ?", (asset_id,)).fetchone()
+
+
+def list_project_assets(project_id: str) -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM studio_project_assets WHERE project_id = ? ORDER BY created_at DESC", (project_id,)).fetchall()
+
+
+def delete_project_asset(asset_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM studio_project_assets WHERE id = ?", (asset_id,))
+
+
+# ── Audit events ──────────────────────────────────────────────────────────────
+
+def log_audit_event(action: str, *, user_id: str | None = None, org_id: str | None = None, resource_type: str | None = None, resource_id: str | None = None, details: dict | None = None, ip_addr: str | None = None) -> None:
+    import json
+    eid = _gen_id("aud")
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO studio_audit_events (id, org_id, user_id, action, resource_type, resource_id, details, ip_addr, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (eid, org_id, user_id, action, resource_type, resource_id, json.dumps(details or {}), ip_addr, _now()),
+        )
+
+
+def list_audit_events(*, org_id: str | None = None, user_id: str | None = None, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        if org_id:
+            return conn.execute(
+                "SELECT * FROM studio_audit_events WHERE org_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (org_id, limit, offset),
+            ).fetchall()
+        elif user_id:
+            return conn.execute(
+                "SELECT * FROM studio_audit_events WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (user_id, limit, offset),
+            ).fetchall()
+        else:
+            return conn.execute(
+                "SELECT * FROM studio_audit_events ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+
+
+# ── Billing / plans ───────────────────────────────────────────────────────────
+
+def get_or_create_default_plan() -> dict[str, Any]:
+    import json
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM studio_plans WHERE is_default = 1").fetchone()
+        if row:
+            return row
+        # Seed default plans if none exist
+        plans = [
+            ("plan_free",  "Free",       5,   10, ["collab","share"],        0,     0,    1),
+            ("plan_pro",   "Pro",        25,  100, ["collab","share","sso"], 1500, 12000, 0),
+            ("plan_ent",   "Enterprise", 500, 999, ["collab","share","sso","saml","scim","audit"], 0, 0, 0),
+        ]
+        for p in plans:
+            try:
+                conn.execute(
+                    "INSERT INTO studio_plans (id, name, max_seats, max_projects, features, price_monthly, price_annual, is_default) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (p[0], p[1], p[2], p[3], json.dumps(p[4]), p[5], p[6], p[7]),
+                )
+            except Exception:
+                pass
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM studio_plans WHERE is_default = 1").fetchone() or {}
+
+
+def get_org_subscription(org_id: str) -> dict[str, Any]:
+    with get_conn() as conn:
+        sub = conn.execute("SELECT * FROM studio_subscriptions WHERE org_id = ?", (org_id,)).fetchone()
+    if sub:
+        return sub
+    # Auto-create free plan subscription
+    plan = get_or_create_default_plan()
+    if not plan:
+        return {}
+    now = _now()
+    sub_id = _gen_id("sub")
+    with get_conn() as conn:
+        try:
+            conn.execute(
+                "INSERT INTO studio_subscriptions (id, org_id, plan_id, seats_purchased, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (sub_id, org_id, plan["id"], plan["max_seats"], "active", now, now),
+            )
+        except Exception:
+            pass
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM studio_subscriptions WHERE org_id = ?", (org_id,)).fetchone() or {}
+
+
+def update_org_subscription(org_id: str, **fields: Any) -> dict[str, Any]:
+    allowed = {"plan_id", "seats_purchased", "status", "current_period_end", "external_id"}
+    clean = {k: v for k, v in fields.items() if k in allowed}
+    clean["updated_at"] = _now()
+    with get_conn() as conn:
+        cols = ", ".join(f"{k} = ?" for k in clean)
+        conn.execute(f"UPDATE studio_subscriptions SET {cols} WHERE org_id = ?", (*clean.values(), org_id))
+    return get_org_subscription(org_id)
+
+
+def list_plans() -> list[dict[str, Any]]:
+    import json
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM studio_plans ORDER BY price_monthly").fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["features"] = json.loads(d.get("features") or "[]")
+        result.append(d)
+    return result
+
+
+def count_org_seats_used(org_id: str) -> int:
+    with get_conn() as conn:
+        row = conn.execute("SELECT COUNT(*) as cnt FROM studio_memberships WHERE org_id = ?", (org_id,)).fetchone()
+    return row["cnt"] if row else 0
+
+
+# ── SSO configs ───────────────────────────────────────────────────────────────
+
+def get_sso_config(org_id: str) -> dict[str, Any] | None:
+    import json
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM studio_sso_configs WHERE org_id = ?", (org_id,)).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["attribute_map"] = json.loads(d.get("attribute_map") or "{}")
+    return d
+
+
+def upsert_sso_config(org_id: str, **fields: Any) -> dict[str, Any]:
+    import json
+    allowed = {"provider", "metadata_url", "metadata_xml", "entity_id", "sso_url", "slo_url", "certificate", "attribute_map", "enabled"}
+    clean: dict[str, Any] = {}
+    for k, v in fields.items():
+        if k in allowed:
+            clean[k] = json.dumps(v) if isinstance(v, dict) else v
+    now = _now()
+    with get_conn() as conn:
+        exists = conn.execute("SELECT 1 FROM studio_sso_configs WHERE org_id = ?", (org_id,)).fetchone()
+        if exists:
+            clean["updated_at"] = now
+            cols = ", ".join(f"{k} = ?" for k in clean)
+            conn.execute(f"UPDATE studio_sso_configs SET {cols} WHERE org_id = ?", (*clean.values(), org_id))
+        else:
+            clean.update({"org_id": org_id, "created_at": now, "updated_at": now})
+            if "id" not in clean:
+                clean["id"] = _gen_id("sso")
+            cols = ", ".join(clean.keys())
+            placeholders = ", ".join("?" * len(clean))
+            conn.execute(f"INSERT INTO studio_sso_configs ({cols}) VALUES ({placeholders})", tuple(clean.values()))
+    return get_sso_config(org_id) or {}

@@ -325,13 +325,16 @@ async function handleConnection(conn, request, auth) {
     }
     throw e
   }
+  room.pushToken(auth.token)   // push BEFORE load so hydration has a token
   await room.load()
-  room.pushToken(auth.token)
   room.conns.add(conn)
   console.log(`[room ${roomName}] +1 (${room.conns.size}) — ${auth.user.name || auth.user.id}`)
 
   // Per-connection rate limit — sized for ~200 msg/s with brief burst headroom
   const bucket = newConnectionBucket()
+
+  // Track clientIDs that this connection owns (populated when awareness arrives)
+  const connClientIDs = new Set()
 
   // Initial sync: send sync step 1 + initial awareness
   {
@@ -401,7 +404,15 @@ async function handleConnection(conn, request, auth) {
         syncProtocol.readSyncMessage(dec, enc, room.doc, conn)
         if (encoding.length(enc) > 1) conn.send(encoding.toUint8Array(enc))
       } else if (type === MESSAGE_AWARENESS) {
-        awarenessProtocol.applyAwarenessUpdate(room.awareness, decoding.readVarUint8Array(dec), conn)
+        const awarenessUpdate = decoding.readVarUint8Array(dec)
+        // Track which clientIDs this connection is sending for (for disconnect cleanup)
+        const prevSize = room.awareness.getStates().size
+        awarenessProtocol.applyAwarenessUpdate(room.awareness, awarenessUpdate, conn)
+        // Any new state keys added by this update belong to this connection
+        room.awareness.getStates().forEach((_state, clientId) => {
+          if (clientId !== room.awareness.clientID) connClientIDs.add(clientId)
+        })
+        void prevSize // suppress unused warning
       }
     } catch (e) {
       console.error("message handler error:", e)
@@ -412,7 +423,9 @@ async function handleConnection(conn, request, auth) {
     clearInterval(pingInterval)
     room.doc.off("update", onDocUpdate)
     room.awareness.off("update", onAwarenessUpdate)
-    awarenessProtocol.removeAwarenessStates(room.awareness, [conn._clientID].filter(Boolean), conn)
+    if (connClientIDs.size > 0) {
+      awarenessProtocol.removeAwarenessStates(room.awareness, Array.from(connClientIDs), conn)
+    }
     room.conns.delete(conn)
     room.popToken(auth.token)
     userTrack.release()

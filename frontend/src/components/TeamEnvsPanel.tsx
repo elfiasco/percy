@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import {
-  listTeamEnvs, createTeamEnv, updateTeamEnv, deleteTeamEnv, buildTeamEnv,
+  listTeamEnvs, createTeamEnv, updateTeamEnv, deleteTeamEnv, buildTeamEnv, pollTeamEnvBuild,
   type TeamEnv,
 } from "../lib/authApi"
 import { useToast, useDialog } from "./Toaster"
@@ -159,9 +159,12 @@ function EnvEditor({ env, isAdmin, onChanged, onDelete }: {
   const onBuild = async () => {
     setBusy(true)
     try {
-      const r = await buildTeamEnv(env.id)
-      if (r.status === "ready") toast.success("Build succeeded.")
-      else if (r.status === "failed") toast.error("Build failed — check the install log.", "Build failed")
+      await buildTeamEnv(env.id)            // returns immediately in "building" state
+      toast.info("Build queued — tracking the worker…", "Building")
+      onChanged()                            // refresh now to show "building"
+      const final = await pollTeamEnvBuild(env.id)
+      if (final.status === "ready") toast.success("Build succeeded.")
+      else if (final.status === "failed") toast.error("Build failed — check the install log.", "Build failed")
       onChanged()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e), "Build failed")

@@ -60,17 +60,24 @@ export function hydrateElementText(
   elementId: string,
   content: ParagraphsTextContent,
 ): Y.XmlFragment {
-  const frag = room.getTextFragment(elementId)
+  // Validate the Y.Doc is still healthy. After Y.Doc.destroy() its `share`
+  // map is cleared and transact() will throw — and that throw bubbles up as
+  // "Cannot read properties of undefined" in production builds because of
+  // y-prosemirror's internal ?. handling. Throw a clean error here so the
+  // caller's try/catch can fall back to local-only.
+  if (!room || !room.doc || (room.doc as unknown as { share: unknown }).share == null) {
+    throw new Error("Yjs room is not in a valid state (doc destroyed or missing)")
+  }
+  // Use a top-level fragment keyed by element id — `doc.getXmlFragment(name)`
+  // always returns an attached fragment (frag.doc === room.doc), avoiding
+  // the y-tiptap "fragment.doc undefined" crash that detached fragments
+  // produced under the old elMap.set('text', new Y.XmlFragment()) pattern.
+  const fragName = `text:${elementId}`
+  const frag = room.doc.getXmlFragment(fragName)
   if (frag.length > 0) return frag
 
-  // Build a ProseMirror schema matching our extensions, convert the Bridge
-  // JSON into PM JSON via the existing adapter, then write it to the Y.XmlFragment
-  // using y-prosemirror's helper.
   const schema = getSchema(bridgeExtensions())
   const pmJSON = paragraphsToTiptap(content)
-  // y-prosemirror's helper takes a PM doc node, not raw JSON, so we go through
-  // schema.nodeFromJSON — but for the XmlFragment population, the helper
-  // accepts JSON directly.
   room.doc.transact(() => {
     prosemirrorJSONToYXmlFragment(schema, pmJSON, frag)
   })

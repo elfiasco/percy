@@ -1,10 +1,13 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, useSyncExternalStore } from "react"
 import { Navigate, useNavigate, useParams } from "react-router-dom"
 import { useAuth } from "../auth/AuthContext"
 import { openProject, type Project } from "../lib/authApi"
 import * as api from "../lib/api"
 import type { DocInfo } from "../lib/types"
 import Studio from "../components/studio/Studio"
+import StudioPythonPanel from "../components/studio/StudioPythonPanel"
+import PresenceAvatars from "../components/studio/PresenceAvatars"
+import { getPresence, subscribePresence } from "../lib/collab/presenceStore"
 import ThemeToggle from "../theme/ThemeToggle"
 import Logo from "../components/Logo"
 import PageLoader from "../components/PageLoader"
@@ -17,6 +20,8 @@ export default function StudioPage() {
   const [project, setProject] = useState<Project | null>(null)
   const [error,   setError]   = useState<string | null>(null)
   const [rebuilding, setRebuilding] = useState(false)
+  const [pyPanelOpen, setPyPanelOpen] = useState(false)
+  const presence = useSyncExternalStore(subscribePresence, getPresence, getPresence)
 
   useEffect(() => {
     if (!projectId || !user) return
@@ -87,11 +92,31 @@ export default function StudioPage() {
         <span className="wordmark text-[10px]">Percy</span>
         <span className="text-edge">/</span>
         <span className="text-[12px] text-paper truncate flex-1 min-w-0">{project?.name ?? doc.name}</span>
+        <PresenceAvatars localUser={presence.localUser} remoteUsers={presence.remoteUsers} />
+        <button
+          onClick={() => setPyPanelOpen((v) => !v)}
+          title="Test Python in a team environment"
+          className={`text-[10px] uppercase tracking-[0.16em] px-2 py-1 border transition-colors ${
+            pyPanelOpen
+              ? "border-good/60 text-good bg-good/15"
+              : "border-edge text-muted hover:text-paper hover:bg-paper/5"
+          }`}
+        >
+          Python
+        </button>
         <ThemeToggle size="xs" />
       </div>
       <div className="flex flex-1 min-h-0">
         <Studio doc={doc} onRebuild={handleRebuild} rebuilding={rebuilding} />
       </div>
+      {project && (
+        <StudioPythonPanel
+          open={pyPanelOpen}
+          onClose={() => setPyPanelOpen(false)}
+          orgId={project.org_id}
+          docId={doc.doc_id}
+        />
+      )}
     </div>
   )
 }

@@ -372,8 +372,21 @@ def process_message(msg: dict) -> None:
     body = json.loads(msg["Body"])
     job_id = body.get("job_id")
     payload = body.get("payload", {})
-    document_id = payload.get("document_id")
+    kind = body.get("kind", "onboard")  # default to legacy onboard for backward compat
 
+    # Discriminate by kind. New team-env handlers in team_env_jobs.py.
+    if kind in ("build_env", "eval", "refresh_job"):
+        try:
+            from worker.team_env_jobs import handle as _handle_team_env
+        except ImportError:
+            from team_env_jobs import handle as _handle_team_env  # when run from worker/ dir
+        try:
+            _handle_team_env(kind, job_id, payload)
+        except Exception as exc:
+            log.exception("team-env job %s/%s failed: %s", kind, job_id, exc)
+        return
+
+    document_id = payload.get("document_id")
     if not job_id or not document_id:
         log.warning("malformed message: %s", body)
         return

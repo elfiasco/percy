@@ -133,6 +133,13 @@ def create_invite(request: Request, org_id: str, req: CreateInviteRequest):
     if "@" not in req.email:
         raise HTTPException(status_code=400, detail="Invalid email")
     invite = auth_db.create_invite(org_id, req.email, req.role, invited_by=user["id"])
+    try:
+        from . import email_service
+        inviter = auth_db.get_user(user["id"])
+        accept_url = f"{email_service.APP_URL}/invites/accept?token={invite['token']}"
+        email_service.send_org_invite_email(invite["email"], inviter["display_name"] if inviter else "Someone", org["name"], accept_url)
+    except Exception:
+        pass
     # Return with a fully-qualified accept URL — no email integration in dev, copy & share manually
     accept_url = f"/invite/accept?token={invite['token']}"
     return {**invite, "accept_url": accept_url}

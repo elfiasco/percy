@@ -168,6 +168,7 @@ interface Props {
   onUngroupElement?: () => void
   /** Called after a text-format commit so the parent can re-render the canvas. */
   onTextFormatCommit?: () => void
+  onShare?: () => void
 }
 
 // ── Top-level ────────────────────────────────────────────────────────────────
@@ -184,6 +185,7 @@ export default function StudioRibbon(props: Props) {
     commentsOpen, onToggleComments,
     onColorSwap, onShowStats, onFontSwap, onTemplateVars,
     outlineOpen, onToggleOutline,
+    onShare,
   } = props
 
   const [tab, setTab] = useState<Tab>("home")
@@ -266,6 +268,15 @@ export default function StudioRibbon(props: Props) {
 
         <div className="flex-1" />
 
+        {onShare && (
+          <button
+            onClick={onShare}
+            className="px-2.5 h-6 rounded text-[11px] bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 border border-indigo-400/30 flex items-center gap-1 mr-1"
+            title="Share this project"
+          >
+            ↗ Share
+          </button>
+        )}
         <button
           onClick={() => setExportOpen((o) => !o)}
           className="px-2 h-6 rounded text-[11px] bg-white/5 text-slate-200 hover:bg-white/10 border border-edge flex items-center gap-1"

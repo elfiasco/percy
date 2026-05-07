@@ -339,9 +339,12 @@ import GenerateFromOutlineModal from "./GenerateFromOutlineModal"
 import DocStatsModal from "./DocStatsModal"
 import CommentsPanel from "./CommentsPanel"
 import PresentationCheckModal from "./PresentationCheckModal"
+import ProjectShareModal from "./ProjectShareModal"
 import { setupNativeRenderers } from "./renderers"
 import { useToast } from "../Toaster"
 import { useStudioCollab } from "../../lib/collab/useStudioCollab"
+import { getCollabContext } from "../../lib/collab/collabContext"
+import { hydrateElement as ydocHydrateElement, deleteElement as ydocDeleteElement } from "../../lib/collab/bridgeYjsAdapter"
 import { useAuth } from "../../auth/AuthContext"
 
 setupNativeRenderers()
@@ -375,6 +378,11 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   // (via VITE_YJS_WS_URL) so cross-machine multiplayer works as soon as
   // the relay server is up; falls back to BroadcastChannel automatically
   // when the env var isn't set, so dev keeps working without a server.
+  // Multiplayer transport. App Runner's WebSocket support is incompatible
+  // with VPC-connector egress; the collab service uses DEFAULT egress (no
+  // VPC) so wss:// upgrades succeed. If the relay is down, the transport
+  // silently degrades to BroadcastChannel after a couple of reconnect
+  // failures (multi-tab same-browser still works).
   const { remoteUserCount } = useStudioCollab(
     doc.doc_id,
     selectedSlide,
@@ -398,6 +406,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const [templateVarsOpen, setTemplateVarsOpen] = useState(false)
   const [agendaSlideOpen, setAgendaSlideOpen]   = useState(false)
   const [aiScoreOpen, setAiScoreOpen]           = useState(false)
+  const [shareOpen, setShareOpen]               = useState(false)
   const [colorBlindMode, setColorBlindMode]     = useState<string | null>(null)
   const [slideNumbersOpen, setSlideNumbersOpen] = useState(false)
   const [watermarkOpen, setWatermarkOpen]       = useState(false)
@@ -818,11 +827,20 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   multiSelectIdsRef.current = multiSelectIds
 
   // ── delete selected element(s) ────────────────────────────────────────────
+  // Phase D: write Y.Doc deletion FIRST so remote peers see the element vanish
+  // immediately. The API call is the persistence layer; future migration
+  // moves persistence into the collab worker.
   const handleDelete = useCallback(async () => {
     const ids = multiSelectIdsRef.current
     const el  = selectedElementRef.current
     const toDelete = ids.size > 0 ? [...ids] : el ? [el.id] : []
     if (!toDelete.length) return
+    const collab = getCollabContext()
+    if (collab?.enabled && collab.room) {
+      try {
+        for (const id of toDelete) ydocDeleteElement(collab.room, id)
+      } catch (e) { console.warn("[Percy] Y.Doc delete failed:", e) }
+    }
     try {
       for (const id of toDelete) {
         await deleteElement(doc.doc_id, selectedSlideRef.current, id)
@@ -837,6 +855,12 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   }, [doc.doc_id, markDirty])
 
   const handleDeleteById = useCallback(async (id: string) => {
+    const collab = getCollabContext()
+    if (collab?.enabled && collab.room) {
+      try {
+        ydocDeleteElement(collab.room, id)
+      } catch (e) { console.warn("[Percy] Y.Doc delete failed:", e) }
+    }
     try {
       await deleteElement(doc.doc_id, selectedSlideRef.current, id)
       setSelectedElement((prev) => prev?.id === id ? null : prev)
@@ -993,6 +1017,12 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         label: shapeType.charAt(0).toUpperCase() + shapeType.slice(1),
       })
       setSelectedElement(el)
+      // Phase D: write the new element to Y.Doc so peers see it instantly.
+      const collab = getCollabContext()
+      if (collab?.enabled && collab.room) {
+        try { ydocHydrateElement(collab.room, el) }
+        catch (e) { console.warn("[Percy] Y.Doc add failed:", e) }
+      }
       markDirty(selectedSlideRef.current)
       setRefreshKey((k) => k + 1)
     } catch (e) {
@@ -1003,7 +1033,13 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   // ── arrow key nudge + Delete/Duplicate keyboard shortcuts ─────────────────
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (["INPUT", "TEXTAREA", "SELECT"].includes((e.target as HTMLElement).tagName)) return
+      const target = e.target as HTMLElement
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return
+      // Tiptap (and any other rich-text editor) uses a contenteditable DIV.
+      // We MUST treat that as "user is typing" and let the editor handle the
+      // key. Otherwise Backspace deletes the whole element instead of one
+      // character — the bug the user reported as "backspace spazzes out".
+      if (target.isContentEditable || target.closest('[contenteditable="true"]')) return
 
       // Delete / Backspace → remove element
       if (e.key === "Delete" || e.key === "Backspace") {
@@ -1373,6 +1409,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         onTemplateVars={() => setTemplateVarsOpen(true)}
         onAgendaSlide={() => setAgendaSlideOpen(true)}
         onAIScore={() => setAiScoreOpen(true)}
+        onShare={() => setShareOpen(true)}
         colorBlindMode={colorBlindMode}
         onSetColorBlindMode={setColorBlindMode}
         onSlideNumbers={() => setSlideNumbersOpen(true)}
@@ -2045,6 +2082,13 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           onJumpToSlide={(n) => setSelectedSlide(n)}
         />
       )}
+
+      <ProjectShareModal
+        projectId={doc.doc_id}
+        projectName={doc.name}
+        open={shareOpen}
+        onClose={() => setShareOpen(false)}
+      />
 
       {colorSwapOpen && (
         <ColorSwapPanel

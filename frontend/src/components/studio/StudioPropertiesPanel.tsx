@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import type { StudioElement, ElementStyleData } from "../../lib/studioTypes"
 import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, setAllSlidesBackground, setGradientBackground, replaceImage, fetchThemeColors, fetchDocStats, setSlideBackgroundImage, bulkUpdateStyle, setSlideTransition, fetchSlideTransitions, setElementAnimation, generateAltText, elementPngUrl } from "../../lib/studioApi"
+import { getCollabContext } from "../../lib/collab/collabContext"
+import { bumpRev } from "../../lib/collab/bridgeYjsAdapter"
 import type { DocStats } from "../../lib/studioApi"
 import StudioTextPanel from "./StudioTextPanel"
 import ChartEditorPanel from "./ChartEditorPanel"
@@ -408,6 +410,14 @@ function StyleTab({ element, docId, slideN, onCommit }: StyleTabProps) {
     try {
       const updated = await updateElementStyle(docId, slideN, element.id, update)
       setStyle(updated)
+      // Phase C: notify peers a style change happened. They observe this
+      // counter on the Y.Map and re-fetch via fetchElementStyle.
+      try {
+        const collab = getCollabContext()
+        if (collab?.enabled && collab.room) {
+          bumpRev(collab.room, element.id, "style_rev")
+        }
+      } catch { /* no-op */ }
       onCommit()
     } catch (e) {
       console.error("style update failed:", e)

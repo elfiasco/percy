@@ -4,6 +4,10 @@ import { BrowserRouter, Routes, Route } from "react-router-dom"
 import "./index.css"
 
 import { AuthProvider } from "./auth/AuthContext"
+import { initOfflineSync } from "./lib/offlineQueue"
+
+// Wire offline queue drain on navigator.online — must run before any API calls.
+initOfflineSync()
 import { ThemeProvider } from "./theme/ThemeContext"
 import { ToasterProvider } from "./components/Toaster"
 import ErrorBoundary from "./components/ErrorBoundary"
@@ -20,7 +24,9 @@ import DevPage   from "./pages/DevPage"
 import InviteAccept from "./pages/InviteAccept"
 import Settings from "./pages/Settings"
 import ForgotPassword from "./pages/ForgotPassword"
+import ResetPassword from "./pages/ResetPassword"
 import { TermsPage, PrivacyPage } from "./pages/LegalPage"
+import OrgSettingsRoute from "./pages/OrgSettingsRoute"
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -34,6 +40,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/login"            element={<Login />} />
           <Route path="/signup"           element={<Signup />} />
           <Route path="/forgot-password"  element={<ForgotPassword />} />
+          <Route path="/reset-password"   element={<ResetPassword />} />
           <Route path="/terms"            element={<TermsPage />} />
           <Route path="/privacy"          element={<PrivacyPage />} />
           <Route path="/home"             element={<Dashboard />} />
@@ -44,6 +51,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/dev"              element={<DevPage />} />
           <Route path="/invite/accept"    element={<InviteAccept />} />
           <Route path="/settings"         element={<Settings />} />
+          <Route path="/org/:orgId/settings" element={<OrgSettingsRoute />} />
           <Route path="*"                 element={<NotFoundPage />} />
           </Routes>
         </AuthProvider>

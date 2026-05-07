@@ -356,11 +356,25 @@ class PercyCloudDemoStack(Stack):
         # ------------------------------------------------------------------
         # Percy Studio — workspace API + React frontend
         # ------------------------------------------------------------------
+        # The collab service URL is stable for the lifetime of the stack; the
+        # studio image bakes it in as VITE_YJS_WS_URL so the SPA can connect
+        # the Yjs websocket transport. Without this, multiplayer falls back
+        # to BroadcastChannel (same-browser-only) and remote cursors / live
+        # collaboration appear broken.
         studio_image = ecr_assets.DockerImageAsset(
             self,
             "PercyStudioImage",
             directory=str(repo_root),
             file="Dockerfile.studio",
+            build_args={
+                # WebSocket relay. App Runner's Envoy returns 403 on every
+                # wss:// upgrade regardless of egress config — verified with
+                # raw curl on every service in the account. Lightsail
+                # Containers DO support WebSocket upgrades natively, so the
+                # collab service runs there. The App Runner collab service
+                # is left in place but unused (would be removed on cleanup).
+                "VITE_YJS_WS_URL": "wss://percy-collab.16m6vj1w4md2c.us-east-1.cs.amazonlightsail.com",
+            },
         )
 
         # Anthropic API key secret (must be manually populated after first deploy)
@@ -675,9 +689,18 @@ class PercyCloudDemoStack(Stack):
                 instance_role_arn=collab_instance_role.role_arn,
             ),
             network_configuration=apprunner.CfnService.NetworkConfigurationProperty(
+                # IMPORTANT: collab MUST use DEFAULT (not VPC) egress.
+                # App Runner's WebSocket support is incompatible with VPC
+                # connectors — every wss:// upgrade returns 403 from Envoy
+                # when a VPC connector is configured. With DEFAULT egress
+                # the WS handshake succeeds. Collab doesn't need VPC reach
+                # anyway: it talks to the studio's PUBLIC URL for verifyUser
+                # and writes snapshots to S3 (also public). Postgres
+                # snapshot persistence is disabled by leaving DATABASE_URL
+                # unset; server.js falls back to filesystem snapshots,
+                # which is acceptable for v1.
                 egress_configuration=apprunner.CfnService.EgressConfigurationProperty(
-                    egress_type="VPC",
-                    vpc_connector_arn=vpc_connector.attr_vpc_connector_arn,
+                    egress_type="DEFAULT",
                 ),
             ),
             health_check_configuration=apprunner.CfnService.HealthCheckConfigurationProperty(

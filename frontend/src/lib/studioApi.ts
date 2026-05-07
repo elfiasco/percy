@@ -1,4 +1,5 @@
 import type { SlideElementsResponse, StudioElement, ElementTextContent, ElementStyleData, ElementStyleUpdate, ChartData, ChartDataUpdate, TableData, TableDataUpdate, ConnectorData, ConnectorDataUpdate } from "./studioTypes"
+import { offlineFetch, OfflineQueuedError } from "./offlineQueue"
 
 export interface TextSearchMatch {
   slide_n: number
@@ -25,7 +26,15 @@ export interface ReplaceTextResult {
 const BASE = "/api"
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init)
+  const method = (init?.method ?? "GET").toUpperCase()
+  const fetchFn = method === "GET" ? fetch : offlineFetch
+  let res: Response
+  try {
+    res = await fetchFn(url, init)
+  } catch (err) {
+    if (err instanceof OfflineQueuedError) throw err
+    throw err
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText)
     throw new Error(`${res.status} ${text}`)

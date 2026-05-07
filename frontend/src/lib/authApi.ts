@@ -403,6 +403,56 @@ export async function buildTeamEnv(envId: string): Promise<TeamEnv> {
   return jfetch(`/api/team-envs/${envId}/build`, { method: "POST" })
 }
 
+/** Poll the env until status flips out of "building". */
+export async function pollTeamEnvBuild(envId: string, opts: { maxWaitMs?: number; intervalMs?: number } = {}): Promise<TeamEnv> {
+  const maxWait = opts.maxWaitMs ?? 600_000  // 10 min for big requirements
+  const interval = opts.intervalMs ?? 2000
+  const start = Date.now()
+  while (true) {
+    const env = await getTeamEnv(envId)
+    if (env.status !== "building") return env
+    if (Date.now() - start > maxWait) return env
+    await new Promise((r) => setTimeout(r, interval))
+  }
+}
+
+export interface EvalResult {
+  id: string
+  env_id: string
+  status: "queued" | "running" | "success" | "failed"
+  exit_code: number | null
+  stdout: string | null
+  stderr: string | null
+  elapsed_ms: number | null
+  note: string | null
+  created_at: number
+  finished_at: number | null
+}
+
+export async function evalInEnv(envId: string, opts: { script: string; context?: Record<string, string>; timeout_s?: number }): Promise<{ eval_id: string; status: string }> {
+  return jfetch(`/api/team-envs/${envId}/eval`, {
+    method: "POST",
+    body: JSON.stringify({ script: opts.script, context: opts.context || {}, timeout_s: opts.timeout_s ?? 60 }),
+  })
+}
+
+export async function getEvalResult(evalId: string): Promise<EvalResult> {
+  return jfetch(`/api/team-envs/eval-results/${evalId}`)
+}
+
+/** Poll until the eval completes or maxWaitMs elapses. */
+export async function pollEvalResult(evalId: string, opts: { maxWaitMs?: number; intervalMs?: number } = {}): Promise<EvalResult> {
+  const maxWait = opts.maxWaitMs ?? 120_000
+  const interval = opts.intervalMs ?? 1500
+  const start = Date.now()
+  while (true) {
+    const r = await getEvalResult(evalId)
+    if (r.status === "success" || r.status === "failed") return r
+    if (Date.now() - start > maxWait) return r
+    await new Promise((res) => setTimeout(res, interval))
+  }
+}
+
 
 export type RefreshSchedule = "on_demand" | "hourly" | "daily" | "weekly" | "monthly"
 

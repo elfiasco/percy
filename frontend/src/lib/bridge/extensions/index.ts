@@ -13,13 +13,15 @@ import { BridgeTextStyle }  from "./BridgeTextStyle"
  * which schema a Tiptap doc was produced against.
  */
 
-export function bridgeExtensions() {
+export function bridgeExtensions(opts: { collab?: boolean } = {}) {
   return [
     StarterKit.configure({
-      // Replace the default paragraph with our extended one
       paragraph: false,
-      // We don't want the StarterKit's history when collaboration is on; the
-      // collaboration extension provides its own. For Phase 1 we leave it on.
+      // Collaboration provides its own history (Y.UndoManager). Including
+      // StarterKit's history alongside it crashes y-prosemirror's plugin
+      // init with "Cannot read properties of undefined (reading 'doc')"
+      // because the two history plugins fight over plugin-state ordering.
+      ...(opts.collab ? { history: false } : {}),
     }),
     BridgeParagraph,
     BridgeTextStyle,

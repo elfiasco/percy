@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from "react"
+import { useEffect, useMemo, useState, useCallback, useRef } from "react"
 import { useEditor, EditorContent, generateHTML } from "@tiptap/react"
 import Collaboration from "@tiptap/extension-collaboration"
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor"
@@ -9,8 +9,10 @@ import { bridgeExtensions } from "../../../lib/bridge/extensions"
 import { setActiveTiptapEditor } from "../../../lib/bridge/activeEditor"
 import { getCollabContext } from "../../../lib/collab/collabContext"
 import { hydrateElementText } from "../../../lib/collab/bridgeYjsSync"
-import { getAwareness } from "../../../lib/collab/awareness"
+import { getAwareness, setLocalEditing } from "../../../lib/collab/awareness"
 import { registerRenderer, type NativeRendererProps } from "./RendererRegistry"
+import TextBubbleMenu from "../TextBubbleMenu"
+import { yXmlFragmentToProsemirrorJSON } from "y-prosemirror"
 
 /**
  * TiptapTextRenderer — replaces the legacy contentEditable TextRenderer.
@@ -61,6 +63,39 @@ function TiptapTextRendererImpl({
   // Exit edit mode if the element is deselected
   useEffect(() => { if (!selected && editing) setEditing(false) }, [selected, editing])
 
+  // Broadcast edit-presence so peers know we're typing here.
+  useEffect(() => {
+    const collab = getCollabContext()
+    if (!collab?.enabled || !collab.room) return
+    setLocalEditing(collab.room, editing ? { elementId: element.id } : null)
+  }, [editing, element.id])
+
+  // Phase A round-out — when collab is active and we're in IDLE (non-edit)
+  // mode, subscribe to the Y.XmlFragment so other peers' edits visibly land
+  // in the static rendering without requiring a re-fetch from the server.
+  // The local edit path goes through Tiptap which updates `content` via
+  // its own onSaved; this effect handles the *remote* update path.
+  useEffect(() => {
+    if (editing) return
+    const collab = getCollabContext()
+    if (!collab?.enabled || !collab.room) return
+    let frag
+    try { frag = collab.room.doc.getXmlFragment(`text:${element.id}`) }
+    catch { return }
+    if (!frag) return
+    const refresh = () => {
+      try {
+        if (frag.length === 0) return
+        const pmJson = yXmlFragmentToProsemirrorJSON(frag)
+        if (!pmJson) return
+        const next = tiptapToParagraphs(pmJson)
+        if (next.kind === "paragraphs") setContent(next)
+      } catch { /* ignore conversion failures — keep showing last good state */ }
+    }
+    frag.observeDeep(refresh)
+    return () => { frag.unobserveDeep(refresh) }
+  }, [editing, element.id])
+
   if (error)    return <div style={ERR_STYLE}>! text load failed</div>
   if (!content) return <div style={{ width: "100%", height: "100%" }} />
 
@@ -98,11 +133,11 @@ function TiptapTextRendererImpl({
   return (
     <div
       style={containerStyle}
-      onClick={(e) => {
-        if (!selected) return
-        e.stopPropagation()
-        setEditing(true)
-      }}
+      // PowerPoint-style: a single click on a text box enters edit mode
+      // immediately. We intentionally DON'T stopPropagation so the click
+      // also bubbles up to ElementOverlay's onSelect — that way the
+      // resize/rotate handles appear at the same time as the cursor.
+      onClick={() => { setEditing(true) }}
       onDoubleClick={(e) => {
         e.stopPropagation()
         setEditing(true)
@@ -151,32 +186,53 @@ function RichTextEditor({
   const lastSavedJSON = useRef<string>("")
   const collab = getCollabContext()
 
-  // Build the extension list. In collab mode we drop the StarterKit's history
-  // (Collaboration provides its own) and add the Collaboration + cursor
-  // extensions hooked to this element's shared Y.XmlFragment.
-  const extensions = (() => {
-    if (collab?.enabled && collab.room) {
-      // Hydrate from Bridge if the fragment is empty (first opener wins);
-      // otherwise the existing shared content is the source of truth.
-      const fragment = hydrateElementText(collab.room, elementId, initialContent)
-      const aware = getAwareness(collab.room)
+  // Build the extension list once per (collab-room, elementId). Hydration is
+  // a side-effect (it writes into the Y.Doc), so we run it inside useMemo —
+  // and we wrap it in try/catch so any y-prosemirror / Y.Doc failure falls
+  // back to a plain Tiptap editor instead of crashing the whole renderer.
+  // This is the difference between a single textbox showing an error vs.
+  // the entire studio page going to the error boundary.
+  const collabRoom = collab?.enabled ? collab.room : null
+  const collabKey = collabRoom?.roomId ?? "local"
+  const extensions = useMemo(() => {
+    if (!collabRoom) return bridgeExtensions()
+    try {
+      hydrateElementText(collabRoom, elementId, initialContent)
+      const field = `text:${elementId}`
+      const probe = collabRoom.doc.getXmlFragment(field)
+      if (!probe || probe.doc !== collabRoom.doc) {
+        console.warn("[Percy] text: probe fragment unattached", { hasDoc: !!probe?.doc })
+        return bridgeExtensions()
+      }
+      // Explicitly subscribe to awareness so future presence/cursor work has it.
+      void getAwareness(collabRoom)
       return [
-        ...bridgeExtensions(),
-        Collaboration.configure({ fragment }),
-        CollaborationCursor.configure({
-          provider: { awareness: aware } as unknown as Parameters<typeof CollaborationCursor.configure>[0]["provider"],
-          user: { name: collab.user.name, color: collab.user.color },
-        }),
+        ...bridgeExtensions({ collab: true }),
+        Collaboration.configure({ document: collabRoom.doc, field }),
+        // CollaborationCursor temporarily disabled — its yCursorPlugin's init
+        // calls ySyncPluginKey.getState(state).doc, which crashes if any
+        // bug puts the cursor plugin ahead of the sync plugin. Re-enable
+        // once we verify Collaboration alone mounts cleanly.
       ]
+    } catch (e) {
+      // Y.Doc was destroyed / room invalid / y-prosemirror choked. Drop
+      // collab for this mount; Tiptap loads from Bridge JSON instead. The
+      // user can still edit; multiplayer just doesn't apply to this element
+      // until the next remount.
+      console.warn("[Percy] Tiptap collab init failed; falling back to local-only:", e)
+      return bridgeExtensions()
     }
-    return bridgeExtensions()
-  })()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collabKey, elementId])
+
+  const isCollabActive = collabRoom != null && extensions.length > bridgeExtensions().length
 
   const editor = useEditor({
     extensions,
     // In collab mode the content comes from the shared fragment; passing
-    // `content` would clobber it on every mount.
-    content: collab?.enabled ? undefined : initialJSON,
+    // `content` would clobber it on every mount. If collab init failed,
+    // load from Bridge so the element is still editable.
+    content: isCollabActive ? undefined : initialJSON,
     autofocus: "end",
     editorProps: {
       attributes: {
@@ -184,7 +240,7 @@ function RichTextEditor({
         spellcheck: "true",
       },
     },
-  }, [collab?.enabled])
+  }, [collabKey])
 
   // Track previous JSON to skip no-op saves
   useEffect(() => {
@@ -192,16 +248,29 @@ function RichTextEditor({
     lastSavedJSON.current = JSON.stringify(initialJSON)
   }, [editor, initialJSON])
 
+  // Phase A — local-first.
+  //
+  // When collab is active, the user's edits are ALREADY in the Y.XmlFragment
+  // (Collaboration extension writes there on every keystroke). The collab
+  // worker debounces snapshots back to Bridge JSON server-side. We do not
+  // need to RPC the API on blur. Calling onSaved with the local Tiptap state
+  // updates the parent's text-preview cache without disturbing the editor.
+  //
+  // When collab is NOT active (fallback path, e.g. ws connection lost), we
+  // still need to persist via API so the change isn't lost.
   const save = useCallback(async () => {
     if (!editor) { onCancel(); return }
     const json = editor.getJSON()
     const jsonStr = JSON.stringify(json)
-    if (jsonStr === lastSavedJSON.current) {
-      onCancel()
+    if (jsonStr === lastSavedJSON.current) { onCancel(); return }
+    const next = tiptapToParagraphs(json)
+    if (isCollabActive) {
+      // Y.Doc is the truth — server worker will persist. Just notify parent.
+      lastSavedJSON.current = jsonStr
+      onSaved(next)
       return
     }
     try {
-      const next = tiptapToParagraphs(json)
       const updated = await updateElementText(docId, slideN, elementId, next)
       if (updated.kind === "paragraphs") {
         lastSavedJSON.current = JSON.stringify(paragraphsToTiptap(updated))
@@ -210,10 +279,10 @@ function RichTextEditor({
         onCancel()
       }
     } catch (e) {
-      console.error("text save failed:", e)
+      console.error("text save (legacy API path) failed:", e)
       onCancel()
     }
-  }, [editor, docId, slideN, elementId, onSaved, onCancel])
+  }, [editor, docId, slideN, elementId, onSaved, onCancel, isCollabActive])
 
   // Register / unregister with the active-editor singleton
   useEffect(() => {
@@ -258,6 +327,7 @@ function RichTextEditor({
         userSelect:    "text",
       }}
     >
+      <TextBubbleMenu editor={editor} />
       <EditorContent
         editor={editor}
         onBlur={save}

@@ -9,6 +9,7 @@ import AccountSettings from "./AccountSettings"
 import WelcomeModal, { shouldShowWelcome } from "./WelcomeModal"
 import WorkspaceSearchTrigger from "../components/WorkspaceSearchTrigger"
 import PageLoader from "../components/PageLoader"
+import EmailVerificationBanner from "../components/EmailVerificationBanner"
 
 /**
  * Dashboard — the new /home.
@@ -98,6 +99,8 @@ export default function Dashboard() {
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenAccount={() => setAccountOpen(true)}
       />
+
+      <EmailVerificationBanner />
 
       <div className="flex-1 flex min-h-0">
 

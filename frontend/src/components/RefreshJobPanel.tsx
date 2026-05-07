@@ -104,10 +104,20 @@ export default function RefreshJobPanel({ projectId, orgId }: { projectId: strin
     if (!job) return
     setBusy(true)
     try {
-      const r = await runRefreshJobNow(job.id)
-      if (r.status === "success") toast.success("Refresh ran successfully.")
-      else if (r.status === "started") toast.info("Refresh started — check the runs list.")
-      else toast.error(r.error || "Run failed", "Refresh failed")
+      await runRefreshJobNow(job.id)
+      toast.info("Refresh queued — worker is picking it up.", "Running")
+      // Poll the runs list until the most recent run finishes (or 5 min).
+      const start = Date.now()
+      while (Date.now() - start < 5 * 60_000) {
+        const r = await listProjectRefreshRuns(projectId)
+        const latest = r.runs[0]
+        if (latest && latest.status !== "running") {
+          if (latest.status === "success") toast.success("Refresh succeeded.")
+          else toast.error("Refresh failed — check the run log.", "Refresh failed")
+          break
+        }
+        await new Promise((res) => setTimeout(res, 2000))
+      }
       await refresh()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e), "Run failed")

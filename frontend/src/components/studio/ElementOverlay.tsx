@@ -2,6 +2,7 @@ import { useRef, useCallback, useState, type CSSProperties } from "react"
 import type { StudioElement, ResizeHandle } from "../../lib/studioTypes"
 import { useCanvas } from "./CanvasContext"
 import { getRenderer } from "./renderers/RendererRegistry"
+import ElementErrorBoundary from "./ElementErrorBoundary"
 
 const TYPE_COLOR: Record<string, string> = {
   BridgeShape:     "#6366F1",
@@ -427,13 +428,15 @@ export default function ElementOverlay({
           const NativeR = getRenderer(element.type)
           if (NativeR) {
             return (
-              <NativeR
-                element={element}
-                docId={docId}
-                slideN={slideN}
-                renderKey={renderKey}
-                selected={selected}
-              />
+              <ElementErrorBoundary elementId={element.id} label={element.label || element.name}>
+                <NativeR
+                  element={element}
+                  docId={docId}
+                  slideN={slideN}
+                  renderKey={renderKey}
+                  selected={selected}
+                />
+              </ElementErrorBoundary>
             )
           }
           return imgOk ? (
@@ -563,22 +566,26 @@ export default function ElementOverlay({
         </div>
       )}
 
-      {/* resize handles — selected and not locked */}
+      {/* resize handles — PowerPoint-style circular grippers */}
       {selected && !isLocked && HANDLE_DIRS.map((dir) => (
         <div
           key={dir}
           onPointerDown={(e) => startInteraction(e, "resize", dir)}
           style={{
             position:      "absolute",
-            width:         8,
-            height:        8,
+            width:         10,
+            height:        10,
             background:    "#fff",
-            border:        `2px solid ${color}`,
-            borderRadius:  2,
+            border:        `1.5px solid ${color}`,
+            borderRadius:  "50%",
             zIndex:        10001,
             pointerEvents: "all",
+            boxShadow:     "0 1px 3px rgba(0,0,0,0.18)",
+            transition:    "transform 90ms ease",
             ...HANDLE_STYLE[dir],
           }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.transform = `${(e.currentTarget as HTMLDivElement).style.transform || ""} scale(1.25)` }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.transform = (e.currentTarget as HTMLDivElement).style.transform.replace(/\s*scale\(1\.25\)/, "") }}
         />
       ))}
     </div>

@@ -29,7 +29,7 @@ from typing import Any
 
 import bcrypt
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, EmailStr, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -241,6 +241,14 @@ def signup(req: SignupRequest, response: Response):
     )
     _bootstrap_orgs_for_user(user)
 
+    # Send verification email (non-blocking — failure doesn't prevent signup)
+    try:
+        from . import email_service
+        verif = auth_db.create_email_verification(user["id"])
+        email_service.send_verification_email(user["email"], user["display_name"], verif["token"])
+    except Exception:
+        pass
+
     sid = auth_db.create_session(user["id"])
     set_session_cookie(response, issue_jwt(sid, user["id"]))
     return _user_response(user)
@@ -275,6 +283,38 @@ def logout(request: Request, response: Response):
 def me(request: Request):
     user = require_user(request)
     return _user_response(user)
+
+
+@router.get("/collab-token")
+def collab_token(request: Request):
+    """Mint a short-lived JWT for the Yjs collab WebSocket relay.
+
+    The studio sets `percy_session` as an HttpOnly cookie scoped to the
+    studio's domain. The collab service runs on a different App Runner
+    subdomain, so the cookie isn't sent on the WebSocket handshake. We
+    issue a fresh, short-lived (15min) token here that the frontend can
+    pass as a `?token=…` query parameter to the relay.
+
+    The token reuses the user's CURRENT session id so the AuthMiddleware
+    accepts it on the round-trip from the relay back to /api/auth/me. If
+    we minted a token with a fake sid the middleware would reject it (no
+    matching row in studio_sessions), the relay would 403 the WS handshake,
+    and multiplayer would silently break.
+    """
+    user = require_user(request)
+    sid = getattr(request.state, "session_id", None)
+    if not sid:
+        # Falls through to 401-ish: client should re-login. The AuthMiddleware
+        # has already attached session_id when a real percy_session cookie
+        # was sent, so this only fails on wholly-anonymous calls.
+        raise HTTPException(status_code=401, detail="No active session")
+    now = int(time.time())
+    token = jwt.encode(
+        {"sid": sid, "uid": user["id"], "iat": now, "exp": now + 15 * 60},
+        JWT_SECRET,
+        algorithm=JWT_ALGO,
+    )
+    return {"token": token}
 
 
 class UpdateMeRequest(BaseModel):
@@ -424,3 +464,109 @@ def dev_grant_admin(request: Request):
     user = require_user(request)
     auth_db.update_user(user["id"], is_admin=1)
     return {"ok": True}
+
+
+# ── Password reset ────────────────────────────────────────────────────────────
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+@router.post("/forgot-password")
+def forgot_password(req: ForgotPasswordRequest):
+    """Send a password reset email. Always returns 200 to avoid user enumeration."""
+    from . import email_service
+    user = auth_db.get_user_by_email(req.email)
+    if user:
+        reset = auth_db.create_password_reset(user["id"])
+        email_service.send_password_reset_email(user["email"], user["display_name"], reset["token"])
+    return {"ok": True, "message": "If that email exists, a reset link has been sent."}
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str = Field(min_length=8, max_length=128)
+
+@router.post("/reset-password")
+def reset_password(req: ResetPasswordRequest, response: Response):
+    now = int(time.time())
+    reset = auth_db.get_password_reset_by_token(req.token)
+    if not reset or reset.get("used_at") or reset["expires_at"] < now:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+    auth_db.update_user(reset["user_id"], password_hash=hash_password(req.new_password))
+    auth_db.mark_password_reset_used(reset["id"])
+    # Log them in
+    user = auth_db.get_user(reset["user_id"])
+    if user:
+        sid = auth_db.create_session(user["id"])
+        set_session_cookie(response, issue_jwt(sid, user["id"]))
+        return _user_response(user)
+    return {"ok": True}
+
+
+# ── Email verification ────────────────────────────────────────────────────────
+
+@router.post("/send-verification")
+def send_verification(request: Request):
+    """Send/resend email verification link to the current user."""
+    from . import email_service
+    user = require_user(request)
+    if user.get("email_verified"):
+        return {"ok": True, "message": "Email already verified"}
+    verif = auth_db.create_email_verification(user["id"])
+    email_service.send_verification_email(user["email"], user["display_name"], verif["token"])
+    return {"ok": True, "message": "Verification email sent"}
+
+
+@router.get("/verify-email")
+def verify_email(token: str, response: Response):
+    now = int(time.time())
+    verif = auth_db.get_email_verification_by_token(token)
+    if not verif or verif.get("used_at") or verif["expires_at"] < now:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification token")
+    auth_db.update_user(verif["user_id"], email_verified=1)
+    auth_db.mark_email_verification_used(verif["id"])
+    # Redirect to studio with a success flag
+    response.status_code = 302
+    response.headers["Location"] = "/home?verified=1"
+    return response
+
+
+# ── User settings ─────────────────────────────────────────────────────────────
+
+@router.get("/settings")
+def get_settings(request: Request):
+    user = require_user(request)
+    return auth_db.get_user_settings(user["id"])
+
+
+class UpdateSettingsRequest(BaseModel):
+    theme: str | None = None
+    locale: str | None = None
+    notifications: dict | None = None
+    default_org_id: str | None = None
+    panel_states: dict | None = None
+
+@router.put("/settings")
+def update_settings(request: Request, req: UpdateSettingsRequest):
+    user = require_user(request)
+    fields = {k: v for k, v in req.model_dump().items() if v is not None}
+    return auth_db.upsert_user_settings(user["id"], **fields)
+
+
+# ── Avatar upload ─────────────────────────────────────────────────────────────
+
+@router.post("/avatar")
+async def upload_avatar(request: Request, file: UploadFile = File(...)):
+    """Upload a profile avatar. Stores as base64 data-URI (≤512KB)."""
+    user = require_user(request)
+    MAX = 512 * 1024
+    data = await file.read()
+    if len(data) > MAX:
+        raise HTTPException(status_code=413, detail="Avatar must be ≤512 KB")
+    import base64
+    mime = file.content_type or "image/png"
+    if mime not in ("image/png", "image/jpeg", "image/gif", "image/webp"):
+        raise HTTPException(status_code=415, detail="Unsupported image type")
+    data_uri = f"data:{mime};base64," + base64.b64encode(data).decode()
+    auth_db.update_user(user["id"], avatar_url=data_uri)
+    return {"avatar_url": data_uri}
