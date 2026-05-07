@@ -287,9 +287,9 @@ if (docId) {
 console.log("\n── 9. Admin & audit")
 
 {
-  const r = await page.request.get(`${BASE}/api/audit?limit=5`)
+  const r = await page.request.get(`${BASE}/api/admin/audit-events?limit=5`)
   const b = await r.json().catch(() => ({}))
-  chk("GET /api/audit?limit=5", r.status(), b, false) // may be admin-only
+  chk("GET /api/admin/audit-events (admin-only — 4xx OK)", r.status(), b, false)
 }
 
 {

@@ -244,12 +244,12 @@ await check("POST /api/orgs/:orgId/invites", async () => {
 // ── Phase 6: Audit log ────────────────────────────────────────────────────────
 console.log("\n── Phase 6: Audit / misc")
 
-await check("GET /api/audit?limit=5 (404 acceptable)", async () => {
-  const r = await page.request.get(`${BASE}/api/audit?limit=5`)
+await check("GET /api/admin/audit-events (admin-only — 4xx OK)", async () => {
+  const r = await page.request.get(`${BASE}/api/admin/audit-events?limit=5`)
   const s = r.status()
-  // 404 means endpoint doesn't exist yet — treat as WARN, not FAIL
-  if (s === 404) {
-    checks.at(-1).note = "endpoint not yet implemented"
+  // 403/401 = expected for non-admin user; 404 = not deployed yet
+  if (s === 404 || s === 403 || s === 401) {
+    checks.at(-1).note = "admin-only endpoint (expected 4xx for regular user)"
     // Mutate result to WARN instead of FAIL
     checks.at(-1).result = "WARN"
     // Don't count as fail — undo any increment that check() may do
