@@ -1027,6 +1027,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       }
       markDirty(selectedSlideRef.current)
       setRefreshKey((k) => k + 1)
+      fetchUndoState(doc.doc_id).then((r) => { setUndoDepth(r.undo_depth); setRedoDepth(r.redo_depth) }).catch(() => {})
     } catch (e) {
       console.error("insert failed:", e)
     }
