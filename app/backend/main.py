@@ -3408,7 +3408,9 @@ def _element_id(el: Any, index: int) -> str:
 
 
 def _serialize_element(el: Any, index: int, slide_w: float, slide_h: float) -> dict[str, Any]:
-    pos   = el.position
+    pos   = getattr(el, "position", None)
+    if pos is None:
+        raise ValueError(f"element at index {index} has no position attribute")
     ident = getattr(el, "identification", None)
     xf    = getattr(el, "transforms", None)
     st    = getattr(el, "stacking", None)
@@ -5208,7 +5210,13 @@ def get_slide_elements(doc_id: str, n: int):
     if slide is None:
         raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
     w, h = _get_slide_dims(doc, slide)
-    elements = [_serialize_element(el, i, w, h) for i, el in enumerate(slide.elements)]
+    elements = []
+    for i, el in enumerate(slide.elements):
+        try:
+            elements.append(_serialize_element(el, i, w, h))
+        except Exception as exc:
+            log.warning("get_slide_elements: skipping element %d (%s): %s", i, type(el).__name__, exc)
+            elements.append({"id": f"idx_{i}", "index": i, "type": "unknown", "error": str(exc)})
     return {
         "slide_number":      n,
         "slide_width_in":    round(w, 5),

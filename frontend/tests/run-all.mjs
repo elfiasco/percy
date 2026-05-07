@@ -13,14 +13,15 @@
  *   5.  api-health               — deep API endpoint health check (21 checks)
  *   6.  slide-operations         — slide CRUD (add/delete/bg/notes/elements)
  *   7.  element-operations       — element CRUD (create/edit/style/duplicate/delete)
- *   8.  auth-flow                — full auth lifecycle (signup/login/settings/logout)
+ *   8.  element-gallery          — all 12 shape types + image upload, style/text/position
+ *   9.  auth-flow                — full auth lifecycle (signup/login/settings/logout)
  * Suites run (optional):
- *   9.  export-test              — PPTX download + re-upload round-trip
- *   10. collab-yjs               — Yjs real-time collab (2 browser sessions)
- *   11. performance-smoke        — Response time measurements (no hard fail)
- *   12. agent-mode               — AI agent panel UI + API checks (needs API key)
- *   13. adversarial-users        — LM Studio generates edge cases
- *   14. vision-critique          — Gemma 4 vision reviews every major page
+ *   10. export-test              — PPTX download + re-upload round-trip
+ *   11. collab-yjs               — Yjs real-time collab (2 browser sessions)
+ *   12. performance-smoke        — Response time measurements (no hard fail)
+ *   13. agent-mode               — AI agent panel UI + API checks (needs API key)
+ *   14. adversarial-users        — LM Studio generates edge cases
+ *   15. vision-critique          — Gemma 4 vision reviews every major page
  *
  * Each suite writes its own timestamped JSON to tests/results/.
  * This file appends a summary row to test-log.json after every run.
@@ -47,6 +48,7 @@ const SUITES = [
   { name: "api-health",               file: "tests/api-health.mjs",               args: [BASE],           critical: true  },
   { name: "slide-operations",         file: "tests/slide-operations.mjs",         args: [BASE],           critical: true  },
   { name: "element-operations",       file: "tests/element-operations.mjs",       args: [BASE],           critical: true  },
+  { name: "element-gallery",          file: "tests/element-gallery.mjs",          args: [BASE],           critical: true  },
   { name: "auth-flow",                file: "tests/auth-flow.mjs",                args: [BASE],           critical: true  },
   { name: "export-test",              file: "tests/export-test.mjs",              args: [BASE],           critical: false },
   { name: "collab-yjs",               file: "tests/collab-yjs.mjs",               args: [BASE],           critical: false },
