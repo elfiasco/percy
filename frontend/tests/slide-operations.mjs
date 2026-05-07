@@ -197,37 +197,17 @@ await step("Set notes on slide 2", async () => {
 })
 
 await step("Read notes back — slide 1 content matches", async () => {
-  // The notes may be embedded in the slide list or a dedicated endpoint
-  // Try GET /api/docs/:docId/slides/1 first; fall back to full doc
-  let fetched = null
-
-  const trySlide = await page.request.get(`${BASE}/api/docs/${docId}/slides/1`)
-  if (trySlide.ok()) {
-    try {
-      const body = await trySlide.json()
-      fetched = body?.notes_text ?? body?.notes ?? body?.slide?.notes_text
-    } catch {}
-  }
-
-  if (fetched === null) {
-    // Fall back: check elements or doc summary
-    const tryDoc = await page.request.get(`${BASE}/api/docs/${docId}`)
-    if (tryDoc.ok()) {
-      try {
-        const body = await tryDoc.json()
-        const slides = body?.slides ?? []
-        fetched = slides[0]?.notes_text ?? slides[0]?.notes
-      } catch {}
-    }
-  }
-
-  if (fetched === null) {
-    // Can't verify — not a failure, just log
-    console.log("    (notes_text not surfaced by available endpoints — skipping content check)")
+  const r = await page.request.get(`${BASE}/api/docs/${docId}/slides/1/notes`)
+  if (!r.ok()) throw new Error(`GET notes HTTP ${r.status()}`)
+  const body = await r.json()
+  const fetched = body?.notes_text ?? body?.notes ?? body?.text ?? body
+  if (fetched === null || fetched === undefined) {
+    console.log("    (notes_text not in response — skipping content check)")
     return
   }
-  if (!fetched.includes(String(TAG))) {
-    throw new Error(`notes mismatch — expected to contain TAG ${TAG}, got: ${String(fetched).slice(0, 80)}`)
+  const text = typeof fetched === "string" ? fetched : JSON.stringify(fetched)
+  if (!text.includes(String(TAG))) {
+    throw new Error(`notes mismatch — expected TAG ${TAG}, got: ${text.slice(0, 80)}`)
   }
 })
 

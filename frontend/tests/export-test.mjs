@@ -3,7 +3,7 @@
  *
  * Steps:
  *   1. Create a deck with 2 slides and several elements
- *   2. Download via /api/docs/:docId/download-pptx
+ *   2. Download via /api/docs/:docId/export
  *   3. Verify Content-Type is application/vnd.openxmlformats…
  *   4. Verify file size > 0 (not an empty placeholder)
  *   5. Save the .pptx to tests/out/export/
@@ -119,8 +119,8 @@ await step("Set slide backgrounds", async () => {
 let pptxBytes = null
 let pptxSize  = 0
 
-await step("Download PPTX via /api/docs/:id/download-pptx", async () => {
-  const r = await page.request.get(`${BASE}/api/docs/${docId}/download-pptx`)
+await step("Download PPTX via /api/docs/:id/export", async () => {
+  const r = await page.request.get(`${BASE}/api/docs/${docId}/export`)
   if (!r.ok()) throw new Error(`download-pptx HTTP ${r.status()}`)
   const ct = r.headers()["content-type"] ?? ""
   // Accept application/vnd.openxmlformats or application/octet-stream or application/zip

@@ -90,12 +90,12 @@ console.log("\n── 2. Auth")
 }
 
 {
-  const r = await page.request.patch(`${BASE}/api/auth/settings`, {
+  const r = await page.request.patch(`${BASE}/api/auth/me`, {
     data: { display_name: "DB Health Tester v2" },
     headers: { "Content-Type": "application/json" },
   })
   const b = await r.json().catch(() => ({}))
-  chk("PATCH /api/auth/settings", r.status(), b)
+  chk("PATCH /api/auth/me (update display_name)", r.status(), b)
 }
 
 {
@@ -229,12 +229,12 @@ if (docId) {
       chk("GET /api/docs/:id/slides/1/elements/:elId", r.status(), b)
     }
     {
-      const r = await page.request.patch(`${BASE}/api/docs/${docId}/slides/1/elements/${elId}/position`, {
+      const r = await page.request.patch(`${BASE}/api/docs/${docId}/slides/1/elements/${elId}`, {
         data: { left_in: 2, top_in: 2 },
         headers: { "Content-Type": "application/json" },
       })
       const b = await r.json().catch(() => ({}))
-      chk("PATCH /api/docs/:id/slides/1/elements/:elId/position", r.status(), b)
+      chk("PATCH /api/docs/:id/slides/1/elements/:elId (position update)", r.status(), b)
     }
     {
       const r = await page.request.patch(`${BASE}/api/docs/${docId}/slides/1/elements/${elId}/style`, {
@@ -259,8 +259,8 @@ if (docId) {
   // ── 7. PPTX export ─────────────────────────────────────────────────────────
   console.log("\n── 7. Export")
   {
-    const r = await page.request.get(`${BASE}/api/docs/${docId}/download-pptx`)
-    chk("GET /api/docs/:id/download-pptx", r.status(), { contentType: r.headers()["content-type"] }, false)
+    const r = await page.request.get(`${BASE}/api/docs/${docId}/export`)
+    chk("GET /api/docs/:id/export (PPTX)", r.status(), { contentType: r.headers()["content-type"] }, false)
   }
 }
 
