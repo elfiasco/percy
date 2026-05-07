@@ -7,7 +7,11 @@ import {
 } from "../../lib/studioApi"
 import TextFormatGroup, { isTextCapable } from "./TextFormatGroup"
 
-// ── shared low-level controls ────────────────────────────────────────────────
+// ── PPT-style color tokens (used as inline styles / arbitrary Tailwind values) ──
+// Ribbon bg:     #F3F3F3   Active tab bg: #FFFFFF   Tab accent: #2B579A
+// Context tab:   orange    Dividers:      #D0D0D0   Group label: #757575
+
+// ── shared low-level controls ─────────────────────────────────────────────────
 
 function PosInput({ label, value, disabled, onChange, onCommit }: {
   label: string; value: string; disabled: boolean
@@ -15,14 +19,14 @@ function PosInput({ label, value, disabled, onChange, onCommit }: {
 }) {
   return (
     <label className="flex items-center gap-1">
-      <span className="text-[9px] text-muted/80 w-3 shrink-0 select-none">{label}</span>
+      <span className="text-[9px] text-gray-500 w-3 shrink-0 select-none">{label}</span>
       <input
         type="number" step="0.001" value={value} disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onCommit() } }}
         onBlur={onCommit}
-        className="w-14 text-[11px] font-mono bg-base border border-edge rounded px-1 py-0.5
-                   text-slate-200 focus:outline-none focus:border-accent
+        className="w-14 text-[11px] font-mono bg-white border border-gray-300 rounded px-1 py-0.5
+                   text-gray-800 focus:outline-none focus:border-[#2b579a]
                    disabled:opacity-35 disabled:cursor-default
                    [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
       />
@@ -38,16 +42,16 @@ interface RibbonBtnProps {
   disabled?: boolean
   active?: boolean
   danger?: boolean
-  primary?: boolean   // primary = big icon + label below; non-primary = compact horizontal
+  primary?: boolean
 }
 
 function RibbonBtn({ icon, label, title, onClick, disabled, active, danger, primary }: RibbonBtnProps) {
   const base = "flex items-center justify-center transition-colors disabled:opacity-30 disabled:cursor-not-allowed select-none"
   const tone = active
-    ? "text-accent bg-accent/15 border border-accent/40"
+    ? "text-[#2b579a] bg-[#2b579a]/10 border border-[#2b579a]/30"
     : danger
-      ? "text-bad/80 hover:text-bad hover:bg-bad/10"
-      : "text-slate-200 hover:bg-white/8"
+      ? "text-red-600 hover:text-red-700 hover:bg-red-50"
+      : "text-gray-700 hover:bg-gray-200"
   if (primary) {
     return (
       <button
@@ -74,11 +78,11 @@ function RibbonBtn({ icon, label, title, onClick, disabled, active, danger, prim
   )
 }
 
-function GroupBox({ title, children }: { title: string; children: React.ReactNode }) {
+function GroupBox({ title, children, highlight }: { title: string; children: React.ReactNode; highlight?: boolean }) {
   return (
-    <div className="flex flex-col h-[88px] shrink-0">
+    <div className={`flex flex-col h-[88px] shrink-0 ${highlight ? "bg-orange-50/60" : ""}`}>
       <div className="flex-1 flex items-center gap-1 px-2">{children}</div>
-      <div className="text-[9px] uppercase tracking-[0.12em] text-muted/60 text-center pt-0.5 pb-1 border-t border-edge/40">
+      <div className="text-[9px] uppercase tracking-[0.12em] text-gray-400 text-center pt-0.5 pb-1 border-t border-gray-200">
         {title}
       </div>
     </div>
@@ -86,27 +90,34 @@ function GroupBox({ title, children }: { title: string; children: React.ReactNod
 }
 
 function GroupDivider() {
-  return <div className="w-px h-[72px] self-center bg-edge/50 mx-0.5 shrink-0" />
+  return <div className="w-px h-[72px] self-center bg-gray-200 mx-0.5 shrink-0" />
 }
 
-// ── insert shapes catalog ────────────────────────────────────────────────────
+function ShapeQuickBtn({ icon, title, onClick }: { icon: string; title: string; onClick: () => void }) {
+  return (
+    <button title={title} onClick={onClick}
+      className="w-7 h-7 flex items-center justify-center text-base text-gray-700 hover:bg-gray-200 rounded">
+      {icon}
+    </button>
+  )
+}
+
+// ── insert shapes catalog ─────────────────────────────────────────────────────
 
 const INSERT_SHAPES: Array<{ label: string; value: string; icon: string }> = [
-  { label: "Text Box",       value: "text_box",   icon: "T" },
-  { label: "Rectangle",      value: "rect",       icon: "▭" },
-  { label: "Rounded Rect",   value: "roundRect",  icon: "▢" },
-  { label: "Ellipse",        value: "ellipse",    icon: "○" },
-  { label: "Triangle",       value: "triangle",   icon: "△" },
-  { label: "Diamond",        value: "diamond",    icon: "◇" },
-  { label: "Pentagon",       value: "pentagon",   icon: "⬠" },
-  { label: "Hexagon",        value: "hexagon",    icon: "⬡" },
-  { label: "Star",           value: "star5",      icon: "★" },
-  { label: "Arrow Right",    value: "rightArrow", icon: "→" },
-  { label: "Arrow Left",     value: "leftArrow",  icon: "←" },
-  { label: "Banner",         value: "ribbon",     icon: "≣" },
+  { label: "Text Box",     value: "text_box",   icon: "T" },
+  { label: "Rectangle",   value: "rect",        icon: "▭" },
+  { label: "Rounded Rect",value: "roundRect",   icon: "▢" },
+  { label: "Ellipse",     value: "ellipse",     icon: "○" },
+  { label: "Triangle",    value: "triangle",    icon: "△" },
+  { label: "Diamond",     value: "diamond",     icon: "◇" },
+  { label: "Pentagon",    value: "pentagon",    icon: "⬠" },
+  { label: "Hexagon",     value: "hexagon",     icon: "⬡" },
+  { label: "Star",        value: "star5",       icon: "★" },
+  { label: "Arrow Right", value: "rightArrow",  icon: "→" },
+  { label: "Arrow Left",  value: "leftArrow",   icon: "←" },
+  { label: "Banner",      value: "ribbon",      icon: "≣" },
 ]
-
-// ── alignment buttons ────────────────────────────────────────────────────────
 
 const ALIGN_BUTTONS = [
   { title: "Align Left",          icon: "⫷",  dx: () => 0, key: "L" },
@@ -128,10 +139,23 @@ const ARRANGE_BUTTONS = [
   { title: "Send to Back",   icon: "⇊", action: "back" as const },
 ]
 
-// ── Props (subset of the legacy StudioToolbar — keeps backward compat for the
-//   ones we use; everything passed-but-unused is silently ignored) ────────────
+// ── Tab type — matches PowerPoint 2024 tab order exactly ─────────────────────
 
-type Tab = "home" | "insert" | "design" | "view" | "ai"
+type Tab = "home" | "insert" | "draw" | "design" | "transitions" | "animations" | "slideshow" | "review" | "view" | "shapeformat" | "pictureformat"
+
+const MAIN_TABS: Array<{ id: Tab; label: string }> = [
+  { id: "home",        label: "Home"        },
+  { id: "insert",      label: "Insert"      },
+  { id: "draw",        label: "Draw"        },
+  { id: "design",      label: "Design"      },
+  { id: "transitions", label: "Transitions" },
+  { id: "animations",  label: "Animations"  },
+  { id: "slideshow",   label: "Slide Show"  },
+  { id: "review",      label: "Review"      },
+  { id: "view",        label: "View"        },
+]
+
+// ── Props ─────────────────────────────────────────────────────────────────────
 
 interface Props {
   doc: DocInfo
@@ -166,12 +190,22 @@ interface Props {
   onAlignElements?: (alignment: string) => void
   onGroupElements?: () => void
   onUngroupElement?: () => void
-  /** Called after a text-format commit so the parent can re-render the canvas. */
   onTextFormatCommit?: () => void
   onShare?: () => void
+  // QAT
+  onUndo?: () => void
+  onRedo?: () => void
+  undoDepth?: number
+  redoDepth?: number
+  // New PPT tabs
+  onTransitions?: () => void
+  onGrammarCheck?: () => void
+  onAIScore?: () => void
+  // Misc (passed from Studio, silently ignored if unused)
+  [key: string]: unknown
 }
 
-// ── Top-level ────────────────────────────────────────────────────────────────
+// ── Top-level ─────────────────────────────────────────────────────────────────
 
 export default function StudioRibbon(props: Props) {
   const {
@@ -186,12 +220,30 @@ export default function StudioRibbon(props: Props) {
     onColorSwap, onShowStats, onFontSwap, onTemplateVars,
     outlineOpen, onToggleOutline,
     onShare,
+    onUndo, onRedo, undoDepth = 0, redoDepth = 0,
+    onTransitions, onGrammarCheck, onAIScore,
   } = props
 
   const [tab, setTab] = useState<Tab>("home")
-  const [exportOpen, setExportOpen]     = useState(false)
-  const [shapesOpen, setShapesOpen]     = useState(false)
+  const [exportOpen, setExportOpen]   = useState(false)
+  const [shapesOpen, setShapesOpen]   = useState(false)
+  const [fileOpen, setFileOpen]       = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Auto-switch to context tab when element is selected
+  useEffect(() => {
+    if (selectedElement) {
+      const isImg = selectedElement.type === "BridgeImage" || selectedElement.shape_type === "image"
+      if (tab !== "shapeformat" && tab !== "pictureformat") {
+        setTab(isImg ? "pictureformat" : "shapeformat")
+      }
+    } else {
+      if (tab === "shapeformat" || tab === "pictureformat") {
+        setTab("home")
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedElement?.id])
 
   // sync position inputs from selectedElement
   const [x, setX] = useState("")
@@ -217,10 +269,7 @@ export default function StudioRibbon(props: Props) {
   const arrange = useCallback((action: "front" | "forward" | "backward" | "back") => {
     if (!selectedElement) return
     const z = selectedElement.z_index
-    const next = action === "front" ? 9999
-      : action === "forward" ? z + 1
-      : action === "backward" ? Math.max(1, z - 1)
-      : 1
+    const next = action === "front" ? 9999 : action === "forward" ? z + 1 : action === "backward" ? Math.max(1, z - 1) : 1
     onCommitZIndex(next)
   }, [selectedElement, onCommitZIndex])
 
@@ -240,109 +289,228 @@ export default function StudioRibbon(props: Props) {
     e.target.value = ""
   }
 
+  // Determine context tab label/visibility
+  const isImageEl = selectedElement && (selectedElement.type === "BridgeImage" || selectedElement.shape_type === "image")
+  const contextTabId: Tab | null = selectedElement ? (isImageEl ? "pictureformat" : "shapeformat") : null
+  const contextTabLabel = isImageEl ? "Picture Format" : "Shape Format"
+
   return (
-    <div className="shrink-0 border-b border-edge bg-surface/95 select-none">
-      {/* ── tab strip ─────────────────────────────────────────────────── */}
-      <div className="h-8 flex items-center px-3 gap-0.5 border-b border-edge/60 bg-base/40">
-        <span className="text-[10px] uppercase tracking-[0.18em] text-muted">Slide</span>
-        <span className="text-[11px] text-paper font-medium ml-1.5">{slideN}</span>
-        <span className="text-muted/60 text-[10px] mx-1">/</span>
-        <span className="text-[11px] text-muted">{doc.slide_count}</span>
+    <div className="shrink-0 border-b border-gray-300 bg-white select-none shadow-sm" style={{ fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
+      {/* ── Title bar / Quick Access Toolbar ──────────────────────────── */}
+      <div className="h-8 flex items-center bg-white border-b border-gray-200 px-3 gap-1 shrink-0">
+        {/* Percy wordmark */}
+        <span className="text-[11px] font-bold text-[#2b579a] tracking-[0.18em] uppercase mr-2 select-none">
+          Percy
+        </span>
 
-        <div className="w-px h-4 bg-edge mx-3" />
+        {/* Quick Access Toolbar: Undo / Redo / Save */}
+        <button
+          title={`Undo${undoDepth ? ` (${undoDepth} steps)` : ""} — Ctrl+Z`}
+          onClick={onUndo}
+          disabled={!onUndo || undoDepth === 0}
+          className="w-6 h-6 flex items-center justify-center text-gray-600 hover:bg-gray-100 rounded disabled:opacity-30 text-[14px] transition-colors"
+        >↩</button>
+        <button
+          title={`Redo${redoDepth ? ` (${redoDepth} steps)` : ""} — Ctrl+Y`}
+          onClick={onRedo}
+          disabled={!onRedo || redoDepth === 0}
+          className="w-6 h-6 flex items-center justify-center text-gray-600 hover:bg-gray-100 rounded disabled:opacity-30 text-[14px] transition-colors"
+        >↪</button>
+        <button
+          title="Rebuild slide (re-render PNGs)"
+          onClick={onRebuild}
+          disabled={rebuilding}
+          className="w-6 h-6 flex items-center justify-center text-gray-600 hover:bg-gray-100 rounded disabled:opacity-30 text-[14px] transition-colors"
+        >
+          {rebuilding
+            ? <span className="inline-block w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin" />
+            : "⟳"}
+        </button>
 
-        {/* tabs sit inline in the same strip — no second header row */}
-        {(["home", "insert", "design", "view"] as Tab[]).map((t) => (
-          <button key={t} onClick={() => setTab(t)}
-            className={[
-              "px-3 h-full text-[11px] capitalize transition-colors relative",
-              tab === t
-                ? "text-paper bg-surface"
-                : "text-muted hover:text-paper",
-            ].join(" ")}
-          >
-            {t}
-            {tab === t && <span className="absolute left-1/2 -translate-x-1/2 -top-px w-6 h-0.5 bg-accent" />}
-          </button>
-        ))}
+        <div className="w-px h-4 bg-gray-200 mx-1" />
 
-        <div className="flex-1" />
+        {/* Document name — center */}
+        <div className="flex-1 flex items-center justify-center gap-1.5 overflow-hidden">
+          <span className="text-[12px] text-gray-800 font-medium truncate max-w-[22rem]">{docName}</span>
+          <span className="text-[10px] text-gray-400 shrink-0">· Slide {slideN} / {doc.slide_count}</span>
+        </div>
 
+        {/* Right: Share, Export, AI */}
         {onShare && (
           <button
             onClick={onShare}
-            className="px-2.5 h-6 rounded text-[11px] bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 border border-indigo-400/30 flex items-center gap-1 mr-1"
-            title="Share this project"
+            className="px-3 h-6 rounded text-[11px] bg-[#2b579a] text-white hover:bg-[#1e4080] flex items-center gap-1 transition-colors font-medium"
+            title="Share this presentation"
           >
-            ↗ Share
+            Share
           </button>
         )}
-        <button
-          onClick={() => setExportOpen((o) => !o)}
-          className="px-2 h-6 rounded text-[11px] bg-white/5 text-slate-200 hover:bg-white/10 border border-edge flex items-center gap-1"
-        >
-          ↓ Export ▾
-        </button>
-        <button
-          onClick={onRebuild}
-          disabled={rebuilding}
-          className="ml-1 px-2.5 h-6 rounded text-[11px] bg-accent/25 text-accent hover:bg-accent/35 border border-accent/40 disabled:opacity-50 flex items-center gap-1"
-        >
-          {rebuilding && <span className="inline-block w-2 h-2 border border-accent border-t-transparent rounded-full animate-spin" />}
-          Rebuild
-        </button>
+        <div className="relative">
+          <button
+            onClick={() => setExportOpen((o) => !o)}
+            className="px-2 h-6 rounded text-[11px] bg-white text-gray-700 hover:bg-gray-100 border border-gray-300 flex items-center gap-1 transition-colors"
+          >
+            ↓ Export ▾
+          </button>
+          {exportOpen && (
+            <ExportMenu docId={doc.doc_id} onClose={() => setExportOpen(false)} />
+          )}
+        </div>
         <button
           onClick={onToggleChat}
           title={chatOpen ? "Collapse AI panel" : "Expand AI panel"}
-          className={`ml-1 px-2 h-6 rounded text-[11px] border flex items-center gap-1 ${
+          className={`ml-1 px-2 h-6 rounded text-[11px] border flex items-center gap-1 transition-colors ${
             chatOpen
-              ? "bg-white/10 text-slate-100 border-white/20"
-              : "bg-white/5 text-muted border-edge hover:bg-white/10"
+              ? "bg-[#2b579a]/10 text-[#2b579a] border-[#2b579a]/30"
+              : "bg-white text-gray-600 border-gray-300 hover:bg-gray-100"
           }`}
         >✦ AI</button>
       </div>
 
-      {/* ── ribbon body ───────────────────────────────────────────────── */}
-      <div className="relative">
-        {tab === "home"   && <HomeRibbon
-          noSel={noSel}
-          x={x} y={y} w={w} h={h} setX={setX} setY={setY} setW={setW} setH={setH}
-          commitPos={commitPos} selectedElement={selectedElement}
-          arrange={arrange} align={align}
-          onDelete={onDelete} onDuplicate={onDuplicate}
-          onGroup={props.onGroupElements}
-          onUngroup={props.onUngroupElement}
-          multiCount={props.multiSelectIds?.size ?? 0}
-          onAlignElements={props.onAlignElements}
-          docId={doc.doc_id}
-          slideN={slideN}
-          onTextFormatCommit={props.onTextFormatCommit}
-        />}
-        {tab === "insert" && <InsertRibbon
-          shapesOpen={shapesOpen} setShapesOpen={setShapesOpen}
-          onInsertShape={onInsertShape}
-          onPickImage={() => fileInputRef.current?.click()}
-        />}
-        {tab === "design" && <DesignRibbon
-          onColorSwap={onColorSwap}
-          onFontSwap={onFontSwap}
-          onTemplateVars={onTemplateVars}
-        />}
-        {tab === "view"   && <ViewRibbon
-          layersOpen={!!layersOpen} onToggleLayers={onToggleLayers}
-          outlineOpen={!!outlineOpen} onToggleOutline={onToggleOutline}
-          commentsOpen={!!commentsOpen} onToggleComments={onToggleComments}
-          onShowSlideSorter={onShowSlideSorter}
-          onPresent={onPresent}
-          onShowStats={onShowStats}
-          onShowShortcuts={onShowShortcuts}
-        />}
+      {/* ── Tab strip ─────────────────────────────────────────────────── */}
+      <div className="h-7 flex items-stretch bg-[#f3f3f3] border-b border-gray-300 px-1 shrink-0">
+        {/* File tab — PPT-blue accent button */}
+        <div className="relative">
+          <button
+            onClick={() => setFileOpen((o) => !o)}
+            className="h-full px-4 text-[11px] font-semibold text-white bg-[#2b579a] hover:bg-[#1e4080] transition-colors"
+          >
+            File
+          </button>
+          {fileOpen && (
+            <FileMenu
+              docId={doc.doc_id}
+              onClose={() => setFileOpen(false)}
+            />
+          )}
+        </div>
 
-        {/* export menu — common to all tabs */}
-        {exportOpen && (
-          <ExportMenu
+        {/* Main tabs */}
+        {MAIN_TABS.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={[
+              "px-3 h-full text-[11px] transition-colors relative whitespace-nowrap",
+              tab === t.id
+                ? "bg-white text-[#2b579a] font-medium"
+                : "text-gray-600 hover:text-gray-800 hover:bg-white/60",
+            ].join(" ")}
+          >
+            {tab === t.id && (
+              <span className="absolute top-0 left-0 right-0 h-0.5 bg-[#2b579a]" />
+            )}
+            {t.label}
+          </button>
+        ))}
+
+        {/* Context tab — Shape Format / Picture Format */}
+        {contextTabId && (
+          <>
+            <div className="w-px bg-gray-300 mx-0.5 my-1.5" />
+            <button
+              onClick={() => setTab(contextTabId)}
+              className={[
+                "px-3 h-full text-[11px] transition-colors relative whitespace-nowrap font-medium",
+                tab === contextTabId
+                  ? "bg-white text-orange-700"
+                  : "text-orange-600 bg-orange-50/60 hover:bg-orange-50",
+              ].join(" ")}
+            >
+              {tab === contextTabId && (
+                <span className="absolute top-0 left-0 right-0 h-0.5 bg-orange-500" />
+              )}
+              {contextTabLabel}
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* ── Ribbon body ───────────────────────────────────────────────── */}
+      <div className="bg-white relative">
+        {tab === "home" && (
+          <HomeRibbon
+            noSel={noSel}
+            selectedElement={selectedElement}
+            onDuplicate={onDuplicate}
+            onDelete={onDelete}
+            onGroup={props.onGroupElements}
+            onUngroup={props.onUngroupElement}
+            multiCount={props.multiSelectIds?.size ?? 0}
+            onAlignElements={props.onAlignElements}
+            onInsertShape={onInsertShape}
+            onPickImage={() => fileInputRef.current?.click()}
             docId={doc.doc_id}
-            onClose={() => setExportOpen(false)}
+            slideN={slideN}
+            onTextFormatCommit={props.onTextFormatCommit}
+          />
+        )}
+        {tab === "insert" && (
+          <InsertRibbon
+            shapesOpen={shapesOpen}
+            setShapesOpen={setShapesOpen}
+            onInsertShape={onInsertShape}
+            onPickImage={() => fileInputRef.current?.click()}
+          />
+        )}
+        {tab === "draw" && (
+          <DrawRibbon />
+        )}
+        {tab === "design" && (
+          <DesignRibbon
+            onColorSwap={onColorSwap}
+            onFontSwap={onFontSwap}
+            onTemplateVars={onTemplateVars}
+          />
+        )}
+        {tab === "transitions" && (
+          <TransitionsRibbon onTransitions={onTransitions} />
+        )}
+        {tab === "animations" && (
+          <AnimationsRibbon />
+        )}
+        {tab === "slideshow" && (
+          <SlideShowRibbon
+            onPresent={onPresent}
+            onShowSlideSorter={onShowSlideSorter}
+          />
+        )}
+        {tab === "review" && (
+          <ReviewRibbon
+            onGrammarCheck={onGrammarCheck}
+            commentsOpen={!!commentsOpen}
+            onToggleComments={onToggleComments}
+            onAIScore={onAIScore}
+            onShowStats={onShowStats}
+          />
+        )}
+        {tab === "view" && (
+          <ViewRibbon
+            layersOpen={!!layersOpen} onToggleLayers={onToggleLayers}
+            outlineOpen={!!outlineOpen} onToggleOutline={onToggleOutline}
+            commentsOpen={!!commentsOpen} onToggleComments={onToggleComments}
+            onShowSlideSorter={onShowSlideSorter}
+            onPresent={onPresent}
+            onShowStats={onShowStats}
+            onShowShortcuts={onShowShortcuts}
+          />
+        )}
+        {(tab === "shapeformat" || tab === "pictureformat") && (
+          <ShapeFormatRibbon
+            noSel={noSel}
+            x={x} y={y} w={w} h={h}
+            setX={setX} setY={setY} setW={setW} setH={setH}
+            commitPos={commitPos}
+            selectedElement={selectedElement}
+            arrange={arrange}
+            align={align}
+            onDelete={onDelete}
+            onDuplicate={onDuplicate}
+            onGroup={props.onGroupElements}
+            onUngroup={props.onUngroupElement}
+            multiCount={props.multiSelectIds?.size ?? 0}
+            onAlignElements={props.onAlignElements}
+            isImage={tab === "pictureformat"}
           />
         )}
       </div>
@@ -352,51 +520,52 @@ export default function StudioRibbon(props: Props) {
   )
 }
 
-// ── HOME tab ─────────────────────────────────────────────────────────────────
+// ── HOME tab ──────────────────────────────────────────────────────────────────
+// Matches PPT Home: Clipboard | Slides | Font | Paragraph | Drawing | Editing
 
 function HomeRibbon({
-  noSel, x, y, w, h, setX, setY, setW, setH, commitPos, selectedElement,
-  arrange, align, onDelete, onDuplicate, onGroup, onUngroup,
+  noSel, selectedElement,
+  onDuplicate, onDelete, onGroup, onUngroup,
   multiCount, onAlignElements,
+  onInsertShape, onPickImage,
   docId, slideN, onTextFormatCommit,
 }: {
   noSel: boolean
-  x: string; y: string; w: string; h: string
-  setX: (v: string) => void; setY: (v: string) => void; setW: (v: string) => void; setH: (v: string) => void
-  commitPos: () => void
   selectedElement: StudioElement | null
-  arrange: (a: "front" | "forward" | "backward" | "back") => void
-  align: (btn: typeof ALIGN_BUTTONS[number]) => void
-  onDelete: () => void
   onDuplicate: () => void
+  onDelete: () => void
   onGroup?: () => void
   onUngroup?: () => void
   multiCount: number
   onAlignElements?: (alignment: string) => void
+  onInsertShape: (shapeType: string) => void
+  onPickImage: () => void
   docId: string
   slideN: number
   onTextFormatCommit?: () => void
 }) {
-  // Empty-state: slim 36px hint row instead of a 100px-tall set of greyed groups.
-  // The user can still feel the chrome is "there" without it eating canvas room.
-  if (noSel) {
-    return (
-      <div className="flex h-9 items-center px-4 gap-3 text-[11px] text-muted">
-        <span className="uppercase tracking-[0.18em] text-muted/60 text-[10px]">Home</span>
-        <span className="text-edge">·</span>
-        <span>Click an element on the canvas to edit, or use</span>
-        <span className="text-paper bg-surface px-1.5 py-0.5 rounded text-[10px] uppercase tracking-[0.14em]">Insert</span>
-        <span>to add something new.</span>
-      </div>
-    )
-  }
   const showTextGroup = isTextCapable(selectedElement)
   return (
-    <div className="flex h-[100px] items-stretch">
-      {/* Text formatting — only for text-capable elements (PowerPoint Home tab parity). */}
-      {showTextGroup && selectedElement && (
+    <div className="flex h-[88px] items-stretch">
+      {/* Clipboard group */}
+      <GroupBox title="Clipboard">
+        <RibbonBtn primary icon="⊕" label="Duplicate" disabled={noSel} onClick={onDuplicate} title="Duplicate element (Ctrl+D)" />
+        <div className="flex flex-col gap-0.5">
+          {onGroup   && <RibbonBtn icon="◳" label="Group"   disabled={noSel} onClick={onGroup}   title="Group selected" />}
+          {onUngroup && <RibbonBtn icon="◰" label="Ungroup" disabled={noSel} onClick={onUngroup} title="Ungroup" />}
+          {multiCount >= 2 && onAlignElements && (
+            <RibbonBtn icon="⊟" label="Align" onClick={() => onAlignElements("center")} title="Align elements" />
+          )}
+          <RibbonBtn icon="✕" label="Delete" disabled={noSel} onClick={onDelete} danger title="Delete (Del)" />
+        </div>
+      </GroupBox>
+
+      <GroupDivider />
+
+      {/* Font / Text group — only when text-capable element selected */}
+      {showTextGroup && selectedElement ? (
         <>
-          <GroupBox title="Text">
+          <GroupBox title="Font">
             <TextFormatGroup
               key={selectedElement.id}
               element={selectedElement}
@@ -407,113 +576,41 @@ function HomeRibbon({
           </GroupBox>
           <GroupDivider />
         </>
-      )}
-      {/* Element actions group */}
-      <GroupBox title="Element">
-        <RibbonBtn primary icon="⧉" label="Duplicate" disabled={noSel} onClick={onDuplicate} title="Duplicate (Ctrl+D)" />
-        <div className="flex flex-col gap-0.5">
-          <RibbonBtn icon="✕" label="Delete" disabled={noSel} onClick={onDelete} danger title="Delete" />
-          {onGroup  && <RibbonBtn icon="◳" label="Group"   disabled={noSel} onClick={onGroup}   title="Group selected" />}
-          {onUngroup && <RibbonBtn icon="◰" label="Ungroup" disabled={noSel} onClick={onUngroup} title="Ungroup" />}
-        </div>
-      </GroupBox>
-
-      <GroupDivider />
-
-      {/* Position group */}
-      <GroupBox title="Position">
-        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 px-1">
-          <PosInput label="X" value={x} disabled={noSel} onChange={setX} onCommit={commitPos} />
-          <PosInput label="W" value={w} disabled={noSel} onChange={setW} onCommit={commitPos} />
-          <PosInput label="Y" value={y} disabled={noSel} onChange={setY} onCommit={commitPos} />
-          <PosInput label="H" value={h} disabled={noSel} onChange={setH} onCommit={commitPos} />
-        </div>
-      </GroupBox>
-
-      <GroupDivider />
-
-      {/* Align group */}
-      <GroupBox title="Align">
-        <div className="grid grid-cols-3 gap-0.5">
-          {ALIGN_BUTTONS.map((b) => (
-            <button key={b.title} title={b.title} disabled={noSel}
-              onClick={() => align(b)}
-              className="w-7 h-7 flex items-center justify-center text-xs text-slate-200 hover:bg-white/8 rounded disabled:opacity-30">
-              <span className="text-[11px]">{b.key}</span>
-            </button>
-          ))}
-        </div>
-      </GroupBox>
-
-      <GroupDivider />
-
-      {/* Arrange / z-order group */}
-      <GroupBox title="Arrange">
-        <div className="grid grid-cols-2 gap-0.5">
-          {ARRANGE_BUTTONS.map((b) => (
-            <button key={b.title} title={b.title} disabled={noSel}
-              onClick={() => arrange(b.action)}
-              className="w-14 h-6 flex items-center justify-start gap-1 px-1.5 text-[11px] text-slate-200 hover:bg-white/8 rounded disabled:opacity-30">
-              <span className="text-[12px]">{b.icon}</span>
-              <span>{b.title.split(" ")[0]}</span>
-            </button>
-          ))}
-        </div>
-        {selectedElement && <span className="text-[10px] text-muted/70 font-mono pl-1">z={selectedElement.z_index}</span>}
-      </GroupBox>
-
-      {multiCount >= 2 && onAlignElements && (
+      ) : (
         <>
-          <GroupDivider />
-          {/* Distribute group — only meaningful with 2+ elements selected */}
-          <GroupBox title={`Distribute · ${multiCount}`}>
-            <div className="grid grid-cols-2 gap-0.5">
-              <button title="Align left edges"   onClick={() => onAlignElements("left")}
-                className="h-6 px-1.5 text-[11px] text-slate-200 hover:bg-white/8 rounded flex items-center gap-1"><span>⫷</span><span>Left</span></button>
-              <button title="Align right edges"  onClick={() => onAlignElements("right")}
-                className="h-6 px-1.5 text-[11px] text-slate-200 hover:bg-white/8 rounded flex items-center gap-1"><span>⫸</span><span>Right</span></button>
-              <button title="Align top edges"    onClick={() => onAlignElements("top")}
-                className="h-6 px-1.5 text-[11px] text-slate-200 hover:bg-white/8 rounded flex items-center gap-1"><span>⫶</span><span>Top</span></button>
-              <button title="Align bottom edges" onClick={() => onAlignElements("bottom")}
-                className="h-6 px-1.5 text-[11px] text-slate-200 hover:bg-white/8 rounded flex items-center gap-1"><span>⫶</span><span>Bot</span></button>
-              <button title="Center horizontally" onClick={() => onAlignElements("center")}
-                className="h-6 px-1.5 text-[11px] text-slate-200 hover:bg-white/8 rounded flex items-center gap-1"><span>⊟</span><span>Cx</span></button>
-              <button title="Center vertically"   onClick={() => onAlignElements("middle")}
-                className="h-6 px-1.5 text-[11px] text-slate-200 hover:bg-white/8 rounded flex items-center gap-1"><span>⊟</span><span>Cy</span></button>
+          <GroupBox title="Font">
+            <div className="px-2 text-[10px] text-gray-400 italic self-center">
+              Select a text element to edit font
             </div>
           </GroupBox>
-
           <GroupDivider />
-
-          <GroupBox title="Spread">
-            <div className="flex flex-col gap-0.5">
-              <button title="Distribute horizontally with equal gaps" disabled={multiCount < 3}
-                onClick={() => onAlignElements("distribute_h")}
-                className="h-6 px-1.5 text-[11px] text-slate-200 hover:bg-white/8 rounded flex items-center gap-1 disabled:opacity-30">
-                <span>↔</span><span>Distribute H</span>
-              </button>
-              <button title="Distribute vertically with equal gaps" disabled={multiCount < 3}
-                onClick={() => onAlignElements("distribute_v")}
-                className="h-6 px-1.5 text-[11px] text-slate-200 hover:bg-white/8 rounded flex items-center gap-1 disabled:opacity-30">
-                <span>↕</span><span>Distribute V</span>
-              </button>
-              <button title="Match all to widest" onClick={() => onAlignElements("match_width")}
-                className="h-6 px-1.5 text-[11px] text-slate-200 hover:bg-white/8 rounded flex items-center gap-1">
-                <span>≡</span><span>Match W</span>
-              </button>
-              <button title="Match all to tallest" onClick={() => onAlignElements("match_height")}
-                className="h-6 px-1.5 text-[11px] text-slate-200 hover:bg-white/8 rounded flex items-center gap-1">
-                <span>≡</span><span>Match H</span>
-              </button>
-            </div>
-          </GroupBox>
         </>
       )}
+
+      {/* Drawing group — quick shape insert */}
+      <GroupBox title="Drawing">
+        <RibbonBtn primary icon="T" label="Text Box" onClick={() => onInsertShape("text_box")} />
+        <div className="grid grid-cols-3 gap-0.5">
+          <ShapeQuickBtn icon="▭" title="Rectangle"  onClick={() => onInsertShape("rect")} />
+          <ShapeQuickBtn icon="○" title="Ellipse"    onClick={() => onInsertShape("ellipse")} />
+          <ShapeQuickBtn icon="△" title="Triangle"   onClick={() => onInsertShape("triangle")} />
+          <ShapeQuickBtn icon="◇" title="Diamond"    onClick={() => onInsertShape("diamond")} />
+          <ShapeQuickBtn icon="★" title="Star"       onClick={() => onInsertShape("star5")} />
+          <ShapeQuickBtn icon="→" title="Arrow"      onClick={() => onInsertShape("rightArrow")} />
+        </div>
+      </GroupBox>
+
+      <GroupDivider />
+
+      {/* Editing group */}
+      <GroupBox title="Editing">
+        <RibbonBtn primary icon="🖼" label="Image" onClick={onPickImage} />
+      </GroupBox>
     </div>
   )
 }
 
-// ── INSERT tab ───────────────────────────────────────────────────────────────
+// ── INSERT tab ────────────────────────────────────────────────────────────────
 
 function InsertRibbon({
   shapesOpen, setShapesOpen, onInsertShape, onPickImage,
@@ -524,33 +621,39 @@ function InsertRibbon({
   onPickImage: () => void
 }) {
   return (
-    <div className="flex h-[100px] items-stretch">
+    <div className="flex h-[88px] items-stretch">
+      {/* Tables */}
+      <GroupBox title="Tables">
+        <RibbonBtn primary icon="▦" label="Table" disabled title="Coming soon" />
+      </GroupBox>
+
+      <GroupDivider />
+
+      {/* Images */}
+      <GroupBox title="Images">
+        <RibbonBtn primary icon="🖼" label="Pictures" onClick={onPickImage} title="Insert image from file" />
+      </GroupBox>
+
+      <GroupDivider />
+
       {/* Text & Shapes */}
-      <GroupBox title="Text & Shapes">
-        <RibbonBtn primary icon="T" label="Text Box"  onClick={() => onInsertShape("text_box")} />
-        <div className="grid grid-cols-3 gap-0.5">
-          <ShapeQuickBtn icon="▭" title="Rectangle"  onClick={() => onInsertShape("rect")} />
-          <ShapeQuickBtn icon="○" title="Ellipse"    onClick={() => onInsertShape("ellipse")} />
-          <ShapeQuickBtn icon="△" title="Triangle"   onClick={() => onInsertShape("triangle")} />
-          <ShapeQuickBtn icon="◇" title="Diamond"    onClick={() => onInsertShape("diamond")} />
-          <ShapeQuickBtn icon="★" title="Star"       onClick={() => onInsertShape("star5")} />
-          <ShapeQuickBtn icon="→" title="Arrow"      onClick={() => onInsertShape("rightArrow")} />
-        </div>
+      <GroupBox title="Text">
+        <RibbonBtn primary icon="T" label="Text Box" onClick={() => onInsertShape("text_box")} />
         <div className="relative">
           <button
             onClick={() => setShapesOpen(!shapesOpen)}
-            className="px-1.5 h-6 text-[11px] text-slate-200 hover:bg-white/8 rounded border border-edge flex items-center gap-1"
-          >More ▾</button>
+            className="px-1.5 h-6 text-[11px] text-gray-700 hover:bg-gray-200 rounded border border-gray-300 flex items-center gap-1"
+          >Shapes ▾</button>
           {shapesOpen && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setShapesOpen(false)} />
-              <div className="absolute z-50 right-0 top-full mt-1 w-44 bg-surface border border-edge rounded shadow-xl py-1 grid grid-cols-3 gap-0.5 p-1">
+              <div className="absolute z-50 left-0 top-full mt-1 w-52 bg-white border border-gray-300 rounded shadow-xl py-1 grid grid-cols-4 gap-0.5 p-1">
                 {INSERT_SHAPES.map((s) => (
                   <button key={s.value} title={s.label}
                     onClick={() => { setShapesOpen(false); onInsertShape(s.value) }}
-                    className="aspect-square flex flex-col items-center justify-center text-slate-200 hover:bg-white/10 rounded">
-                    <span className="text-base leading-none">{s.icon}</span>
-                    <span className="text-[8px] text-muted/70 mt-0.5 leading-none">{s.label}</span>
+                    className="aspect-square flex flex-col items-center justify-center text-gray-700 hover:bg-gray-100 rounded">
+                    <span className="text-lg leading-none">{s.icon}</span>
+                    <span className="text-[8px] text-gray-500 mt-0.5 leading-none">{s.label}</span>
                   </button>
                 ))}
               </div>
@@ -561,33 +664,30 @@ function InsertRibbon({
 
       <GroupDivider />
 
-      {/* Media */}
-      <GroupBox title="Media">
-        <RibbonBtn primary icon="🖼" label="Image" onClick={onPickImage} title="Insert image (file picker)" />
-      </GroupBox>
-
-      <GroupDivider />
-
-      {/* Data — these route through the existing studio handlers */}
-      <GroupBox title="Data">
-        <RibbonBtn icon="📊" label="Chart"  disabled title="Coming soon — use right-click → Edit Connect for now" />
-        <RibbonBtn icon="▦"  label="Table"  disabled />
+      {/* Charts */}
+      <GroupBox title="Illustrations">
+        <RibbonBtn icon="📊" label="Chart"     disabled title="Use right-click → Edit Connect for now" />
         <RibbonBtn icon="—"  label="Connector" disabled />
       </GroupBox>
     </div>
   )
 }
 
-function ShapeQuickBtn({ icon, title, onClick }: { icon: string; title: string; onClick: () => void }) {
+// ── DRAW tab ──────────────────────────────────────────────────────────────────
+
+function DrawRibbon() {
   return (
-    <button title={title} onClick={onClick}
-      className="w-7 h-7 flex items-center justify-center text-base text-slate-200 hover:bg-white/8 rounded">
-      {icon}
-    </button>
+    <div className="flex h-[88px] items-stretch">
+      <GroupBox title="Draw">
+        <div className="px-4 text-[11px] text-gray-500 italic self-center">
+          Annotation tools — use the canvas status bar to toggle annotate mode
+        </div>
+      </GroupBox>
+    </div>
   )
 }
 
-// ── DESIGN tab ───────────────────────────────────────────────────────────────
+// ── DESIGN tab ────────────────────────────────────────────────────────────────
 
 function DesignRibbon({
   onColorSwap, onFontSwap, onTemplateVars,
@@ -597,27 +697,119 @@ function DesignRibbon({
   onTemplateVars?: () => void
 }) {
   return (
-    <div className="flex h-[100px] items-stretch">
-      <GroupBox title="Theme">
+    <div className="flex h-[88px] items-stretch">
+      <GroupBox title="Themes">
         <RibbonBtn primary icon="🎨" label="Colors" onClick={onColorSwap}    disabled={!onColorSwap} title="Swap theme colors across the deck" />
         <RibbonBtn primary icon="A"  label="Fonts"  onClick={onFontSwap}     disabled={!onFontSwap}  title="Swap fonts across the deck" />
-        <RibbonBtn primary icon="⚙"  label="Vars"   onClick={onTemplateVars} disabled={!onTemplateVars} title="Template variables" />
+      </GroupBox>
+
+      <GroupDivider />
+
+      <GroupBox title="Customize">
+        <RibbonBtn primary icon="⚙" label="Variables" onClick={onTemplateVars} disabled={!onTemplateVars} title="Template variables" />
       </GroupBox>
 
       <GroupDivider />
 
       <GroupBox title="Background">
-        <div className="text-[10px] text-muted px-2 self-center max-w-[12rem] leading-snug">
-          Use the <span className="text-accent">Slide</span> properties panel
-          (right side, when no element selected) to set background color, gradient,
-          or apply to all slides.
+        <div className="text-[10px] text-gray-500 px-2 self-center max-w-[14rem] leading-snug">
+          Select the canvas (no element) → use the Properties panel on the right to set background color or image.
         </div>
       </GroupBox>
     </div>
   )
 }
 
-// ── VIEW tab ─────────────────────────────────────────────────────────────────
+// ── TRANSITIONS tab ───────────────────────────────────────────────────────────
+
+function TransitionsRibbon({ onTransitions }: { onTransitions?: () => void }) {
+  return (
+    <div className="flex h-[88px] items-stretch">
+      <GroupBox title="Transition to This Slide">
+        <RibbonBtn primary icon="▷" label="Transitions" onClick={onTransitions} disabled={!onTransitions}
+          title="Set slide transitions" />
+        <div className="text-[10px] text-gray-500 px-2 self-center">
+          Fade · Slide · Zoom · Flip · Push · Wipe
+        </div>
+      </GroupBox>
+    </div>
+  )
+}
+
+// ── ANIMATIONS tab ────────────────────────────────────────────────────────────
+
+function AnimationsRibbon() {
+  return (
+    <div className="flex h-[88px] items-stretch">
+      <GroupBox title="Animation">
+        <div className="px-4 text-[11px] text-gray-500 italic self-center">
+          Element animations — coming soon
+        </div>
+      </GroupBox>
+    </div>
+  )
+}
+
+// ── SLIDE SHOW tab ────────────────────────────────────────────────────────────
+
+function SlideShowRibbon({
+  onPresent, onShowSlideSorter,
+}: {
+  onPresent?: () => void
+  onShowSlideSorter?: () => void
+}) {
+  return (
+    <div className="flex h-[88px] items-stretch">
+      <GroupBox title="Start Slide Show">
+        <RibbonBtn primary icon="▶" label="From Beginning" onClick={onPresent} disabled={!onPresent}
+          title="Start presentation from the beginning (F5)" />
+      </GroupBox>
+
+      <GroupDivider />
+
+      <GroupBox title="Set Up">
+        <RibbonBtn primary icon="▦" label="Slide Sorter" onClick={onShowSlideSorter} disabled={!onShowSlideSorter}
+          title="Open slide sorter view" />
+      </GroupBox>
+    </div>
+  )
+}
+
+// ── REVIEW tab ────────────────────────────────────────────────────────────────
+
+function ReviewRibbon({
+  onGrammarCheck, commentsOpen, onToggleComments, onAIScore, onShowStats,
+}: {
+  onGrammarCheck?: () => void
+  commentsOpen: boolean
+  onToggleComments?: () => void
+  onAIScore?: () => void
+  onShowStats?: () => void
+}) {
+  return (
+    <div className="flex h-[88px] items-stretch">
+      <GroupBox title="Proofing">
+        <RibbonBtn primary icon="✓" label="Spelling" onClick={onGrammarCheck} disabled={!onGrammarCheck}
+          title="Grammar &amp; spelling check" />
+      </GroupBox>
+
+      <GroupDivider />
+
+      <GroupBox title="Insights">
+        <RibbonBtn primary icon="📊" label="AI Score"   onClick={onAIScore}    disabled={!onAIScore} />
+        <RibbonBtn primary icon="📈" label="Statistics" onClick={onShowStats}  disabled={!onShowStats} />
+      </GroupBox>
+
+      <GroupDivider />
+
+      <GroupBox title="Comments">
+        <RibbonBtn primary icon="💬" label="Comments" onClick={onToggleComments} active={commentsOpen} disabled={!onToggleComments} />
+      </GroupBox>
+    </div>
+  )
+}
+
+// ── VIEW tab ──────────────────────────────────────────────────────────────────
 
 function ViewRibbon({
   layersOpen, onToggleLayers,
@@ -625,20 +817,25 @@ function ViewRibbon({
   commentsOpen, onToggleComments,
   onShowSlideSorter, onPresent, onShowStats, onShowShortcuts,
 }: {
-  layersOpen: boolean
-  onToggleLayers?: () => void
-  outlineOpen: boolean
-  onToggleOutline?: () => void
-  commentsOpen: boolean
-  onToggleComments?: () => void
+  layersOpen: boolean; onToggleLayers?: () => void
+  outlineOpen: boolean; onToggleOutline?: () => void
+  commentsOpen: boolean; onToggleComments?: () => void
   onShowSlideSorter?: () => void
   onPresent?: () => void
   onShowStats?: () => void
   onShowShortcuts?: () => void
 }) {
   return (
-    <div className="flex h-[100px] items-stretch">
-      <GroupBox title="Panels">
+    <div className="flex h-[88px] items-stretch">
+      <GroupBox title="Presentation Views">
+        <RibbonBtn primary icon="⊞" label="Normal"   title="Normal editing view" disabled />
+        <RibbonBtn primary icon="▦" label="Sorter"   onClick={onShowSlideSorter} disabled={!onShowSlideSorter} />
+        <RibbonBtn primary icon="▶" label="Present"  onClick={onPresent}         disabled={!onPresent} />
+      </GroupBox>
+
+      <GroupDivider />
+
+      <GroupBox title="Show">
         <RibbonBtn primary icon="⊟" label="Layers"   onClick={onToggleLayers}   active={layersOpen}   disabled={!onToggleLayers} />
         <RibbonBtn primary icon="≡" label="Outline"  onClick={onToggleOutline}  active={outlineOpen}  disabled={!onToggleOutline} />
         <RibbonBtn primary icon="💬" label="Comments" onClick={onToggleComments} active={commentsOpen} disabled={!onToggleComments} />
@@ -646,14 +843,7 @@ function ViewRibbon({
 
       <GroupDivider />
 
-      <GroupBox title="Modes">
-        <RibbonBtn primary icon="▦"  label="Sorter"   onClick={onShowSlideSorter} disabled={!onShowSlideSorter} />
-        <RibbonBtn primary icon="▶"  label="Present"  onClick={onPresent}         disabled={!onPresent} />
-      </GroupBox>
-
-      <GroupDivider />
-
-      <GroupBox title="Inspect">
+      <GroupBox title="Window">
         <RibbonBtn icon="📈" label="Stats"     onClick={onShowStats}     disabled={!onShowStats} />
         <RibbonBtn icon="⌨"  label="Shortcuts" onClick={onShowShortcuts} disabled={!onShowShortcuts} />
       </GroupBox>
@@ -661,7 +851,149 @@ function ViewRibbon({
   )
 }
 
-// ── Export menu ──────────────────────────────────────────────────────────────
+// ── SHAPE FORMAT / PICTURE FORMAT context tab ─────────────────────────────────
+// PPT puts size/position/arrange/align here when an element is selected.
+
+function ShapeFormatRibbon({
+  noSel, x, y, w, h, setX, setY, setW, setH, commitPos,
+  selectedElement, arrange, align,
+  onDelete, onDuplicate, onGroup, onUngroup,
+  multiCount, onAlignElements, isImage,
+}: {
+  noSel: boolean
+  x: string; y: string; w: string; h: string
+  setX: (v: string) => void; setY: (v: string) => void
+  setW: (v: string) => void; setH: (v: string) => void
+  commitPos: () => void
+  selectedElement: StudioElement | null
+  arrange: (a: "front" | "forward" | "backward" | "back") => void
+  align: (btn: typeof ALIGN_BUTTONS[number]) => void
+  onDelete: () => void
+  onDuplicate: () => void
+  onGroup?: () => void
+  onUngroup?: () => void
+  multiCount: number
+  onAlignElements?: (alignment: string) => void
+  isImage: boolean
+}) {
+  return (
+    <div className="flex h-[88px] items-stretch bg-orange-50/30">
+      {/* Insert Shapes (quick access) */}
+      <GroupBox title="Edit" highlight>
+        <RibbonBtn primary icon="⧉" label="Duplicate" disabled={noSel} onClick={onDuplicate} title="Duplicate (Ctrl+D)" />
+        <div className="flex flex-col gap-0.5">
+          <RibbonBtn icon="✕" label="Delete" disabled={noSel} onClick={onDelete} danger title="Delete" />
+          {onGroup   && <RibbonBtn icon="◳" label="Group"   disabled={noSel} onClick={onGroup} />}
+          {onUngroup && <RibbonBtn icon="◰" label="Ungroup" disabled={noSel} onClick={onUngroup} />}
+        </div>
+      </GroupBox>
+
+      <GroupDivider />
+
+      {/* Arrange group */}
+      <GroupBox title="Arrange" highlight>
+        <div className="grid grid-cols-2 gap-0.5">
+          {ARRANGE_BUTTONS.map((b) => (
+            <button key={b.title} title={b.title} disabled={noSel}
+              onClick={() => arrange(b.action)}
+              className="w-14 h-6 flex items-center gap-1 px-1.5 text-[11px] text-gray-700 hover:bg-gray-200 rounded disabled:opacity-30">
+              <span className="text-[12px]">{b.icon}</span>
+              <span>{b.title.split(" ")[0]}</span>
+            </button>
+          ))}
+        </div>
+        {selectedElement && <span className="text-[10px] text-gray-400 font-mono pl-1">z={selectedElement.z_index}</span>}
+      </GroupBox>
+
+      <GroupDivider />
+
+      {/* Align group */}
+      <GroupBox title="Align" highlight>
+        <div className="grid grid-cols-3 gap-0.5">
+          {ALIGN_BUTTONS.map((b) => (
+            <button key={b.title} title={b.title} disabled={noSel}
+              onClick={() => align(b)}
+              className="w-7 h-7 flex items-center justify-center text-xs text-gray-700 hover:bg-gray-200 rounded disabled:opacity-30">
+              <span className="text-[11px]">{b.key}</span>
+            </button>
+          ))}
+        </div>
+      </GroupBox>
+
+      <GroupDivider />
+
+      {/* Size group */}
+      <GroupBox title="Size" highlight>
+        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 px-1">
+          <PosInput label="X" value={x} disabled={noSel} onChange={setX} onCommit={commitPos} />
+          <PosInput label="W" value={w} disabled={noSel} onChange={setW} onCommit={commitPos} />
+          <PosInput label="Y" value={y} disabled={noSel} onChange={setY} onCommit={commitPos} />
+          <PosInput label="H" value={h} disabled={noSel} onChange={setH} onCommit={commitPos} />
+        </div>
+      </GroupBox>
+
+      {/* Multi-select distribute */}
+      {multiCount >= 2 && onAlignElements && (
+        <>
+          <GroupDivider />
+          <GroupBox title={`Distribute · ${multiCount}`} highlight>
+            <div className="grid grid-cols-2 gap-0.5">
+              <button title="Align left edges"    onClick={() => onAlignElements("left")}
+                className="h-6 px-1.5 text-[11px] text-gray-700 hover:bg-gray-200 rounded flex items-center gap-1"><span>⫷</span><span>Left</span></button>
+              <button title="Align right edges"   onClick={() => onAlignElements("right")}
+                className="h-6 px-1.5 text-[11px] text-gray-700 hover:bg-gray-200 rounded flex items-center gap-1"><span>⫸</span><span>Right</span></button>
+              <button title="Align top edges"     onClick={() => onAlignElements("top")}
+                className="h-6 px-1.5 text-[11px] text-gray-700 hover:bg-gray-200 rounded flex items-center gap-1"><span>⫶</span><span>Top</span></button>
+              <button title="Align bottom edges"  onClick={() => onAlignElements("bottom")}
+                className="h-6 px-1.5 text-[11px] text-gray-700 hover:bg-gray-200 rounded flex items-center gap-1"><span>⫶</span><span>Bot</span></button>
+              <button title="Distribute horizontally" disabled={multiCount < 3} onClick={() => onAlignElements("distribute_h")}
+                className="h-6 px-1.5 text-[11px] text-gray-700 hover:bg-gray-200 rounded flex items-center gap-1 disabled:opacity-30"><span>↔</span><span>Dist H</span></button>
+              <button title="Distribute vertically" disabled={multiCount < 3} onClick={() => onAlignElements("distribute_v")}
+                className="h-6 px-1.5 text-[11px] text-gray-700 hover:bg-gray-200 rounded flex items-center gap-1 disabled:opacity-30"><span>↕</span><span>Dist V</span></button>
+            </div>
+          </GroupBox>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── File menu (backstage) ─────────────────────────────────────────────────────
+
+function FileMenu({ docId, onClose }: { docId: string; onClose: () => void }) {
+  const exportItems: Array<{ label: string; href: string; note?: string }> = [
+    { label: "PowerPoint (.pptx)", href: exportPptxUrl(docId), note: "Round-tripped" },
+    { label: "PDF",                href: exportPdfUrl(docId) },
+    { label: "PNG slides (zip)",   href: exportPngZipUrl(docId) },
+    { label: "HTML slideshow",     href: exportHtmlUrl(docId) },
+    { label: "Markdown outline",   href: exportMarkdownUrl(docId) },
+    { label: "Speaker notes (.md)", href: notesExportUrl(docId, "md") },
+    { label: "Speaker notes (HTML)", href: notesHtmlExportUrl(docId) },
+  ]
+  return (
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div className="absolute left-0 top-full z-50 mt-0 w-60 bg-white border border-gray-300 shadow-xl py-1" style={{ borderTop: "2px solid #2b579a" }}>
+        <div className="px-3 py-2 text-[10px] uppercase tracking-widest text-gray-400 border-b border-gray-200">Save & Export</div>
+        {exportItems.map((it) => (
+          <a key={it.label} href={it.href} download onClick={onClose}
+            className="flex items-center justify-between px-4 py-1.5 text-[12px] text-gray-700 hover:bg-gray-100">
+            <span>{it.label}</span>
+            {it.note && <span className="text-[9px] text-[#2b579a]">{it.note}</span>}
+          </a>
+        ))}
+        <div className="border-t border-gray-200 mt-1 pt-1">
+          <button onClick={() => { window.history.back(); onClose() }}
+            className="w-full text-left px-4 py-1.5 text-[12px] text-gray-700 hover:bg-gray-100">
+            ← Back to Projects
+          </button>
+        </div>
+      </div>
+    </>
+  )
+}
+
+// ── Export menu (from title bar button) ───────────────────────────────────────
 
 function ExportMenu({ docId, onClose }: { docId: string; onClose: () => void }) {
   const items: Array<{ label: string; href: string; note?: string }> = [
@@ -670,20 +1002,19 @@ function ExportMenu({ docId, onClose }: { docId: string; onClose: () => void }) 
     { label: "PNG slides (zip)",   href: exportPngZipUrl(docId) },
     { label: "HTML slideshow",     href: exportHtmlUrl(docId) },
     { label: "Markdown outline",   href: exportMarkdownUrl(docId) },
-    { label: "Speaker notes (md)", href: notesExportUrl(docId, "md") },
+    { label: "Speaker notes (.md)", href: notesExportUrl(docId, "md") },
     { label: "Speaker notes (HTML)", href: notesHtmlExportUrl(docId) },
   ]
   return (
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
-      <div className="absolute right-3 top-7 z-50 mt-1 w-56 bg-surface border border-edge rounded shadow-xl py-1">
-        <div className="px-3 py-1 text-[9px] uppercase tracking-widest text-muted/70 border-b border-edge/50">Download</div>
+      <div className="absolute right-0 top-7 z-50 mt-1 w-56 bg-white border border-gray-300 rounded shadow-xl py-1">
+        <div className="px-3 py-1 text-[9px] uppercase tracking-widest text-gray-400 border-b border-gray-200">Download</div>
         {items.map((it) => (
-          <a key={it.label} href={it.href} download
-            onClick={onClose}
-            className="flex items-center justify-between px-3 py-1.5 text-xs text-slate-200 hover:bg-white/8">
+          <a key={it.label} href={it.href} download onClick={onClose}
+            className="flex items-center justify-between px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-100">
             <span>{it.label}</span>
-            {it.note && <span className="text-[9px] text-accent/80">{it.note}</span>}
+            {it.note && <span className="text-[9px] text-[#2b579a]">{it.note}</span>}
           </a>
         ))}
       </div>

@@ -1385,6 +1385,8 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         savingToCloud={savingToCloud}
         undoDepth={undoDepth}
         redoDepth={redoDepth}
+        onUndo={() => undoDoc(doc.doc_id).then((r) => { setSelectedElement(null); setUndoDepth(r.undo_depth); setRedoDepth(r.redo_depth); setRefreshKey((k) => k + 1) }).catch(() => {})}
+        onRedo={() => redoDoc(doc.doc_id).then((r) => { setSelectedElement(null); setUndoDepth(r.undo_depth); setRedoDepth(r.redo_depth); setRefreshKey((k) => k + 1) }).catch(() => {})}
         onShowShortcuts={() => setShortcutsOpen(true)}
         onShowSlideSorter={() => setSlideSorterOpen(true)}
         onShowOutlineGen={() => setOutlineGenOpen(true)}
@@ -1520,49 +1522,66 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           />
           <StudioNotesBar docId={doc.doc_id} slideN={selectedSlide} />
 
-          {/* status bar — slide N/M, element count, view modes */}
-          <div className="h-7 shrink-0 border-t border-edge bg-surface flex items-center px-3 gap-3 text-[10px] uppercase tracking-[0.14em] text-muted select-none">
-            <span>
-              <span className="text-paper">{selectedSlide}</span>
-              <span className="mx-1 text-muted/60">/</span>
-              <span>{localSlideCount}</span>
+          {/* status bar — PPT style: info left, view buttons right */}
+          <div className="h-7 shrink-0 border-t border-gray-300 bg-white flex items-center px-3 gap-2 text-[11px] text-gray-500 select-none" style={{ fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
+            {/* slide N/M */}
+            <span className="shrink-0">
+              Slide <span className="text-gray-800 font-medium">{selectedSlide}</span> of {localSlideCount}
             </span>
-            <span className="text-edge">·</span>
-            <span>{slideElements.length} {slideElements.length === 1 ? "element" : "elements"}</span>
+            <span className="text-gray-300">|</span>
+            <span className="shrink-0">{slideElements.length} object{slideElements.length !== 1 ? "s" : ""}</span>
             {selectedElement && (
               <>
-                <span className="text-edge">·</span>
-                <span className="text-paper truncate max-w-[14rem]">{selectedElement.name}</span>
+                <span className="text-gray-300">|</span>
+                <span className="text-gray-700 truncate max-w-[14rem]">{selectedElement.name}</span>
               </>
             )}
             {multiSelectIds.size > 1 && (
               <>
-                <span className="text-edge">·</span>
-                <span className="text-paper">{multiSelectIds.size} selected</span>
+                <span className="text-gray-300">|</span>
+                <span className="text-gray-700">{multiSelectIds.size} selected</span>
               </>
             )}
-            <div className="flex-1" />
-            <span title="Bound elements with Python connects" className={docConnects.length > 0 ? "text-champagne" : ""}>
-              {docConnects.length} {docConnects.length === 1 ? "connect" : "connects"}
-            </span>
             {remoteUserCount > 0 && (
               <>
-                <span className="text-edge">·</span>
-                <span title="Other people editing this slide" className="text-verdigris">
+                <span className="text-gray-300">|</span>
+                <span className="text-emerald-600 text-[10px]">
                   ● {remoteUserCount} {remoteUserCount === 1 ? "collaborator" : "collaborators"}
                 </span>
               </>
             )}
-            <span className="text-edge">·</span>
-            <span>{slideWidthIn.toFixed(2)} × {slideHeightIn.toFixed(2)} in</span>
-            <span className="text-edge">·</span>
-            <button
-              onClick={() => setFocusMode((f) => !f)}
-              className={`text-[10px] uppercase tracking-[0.14em] px-1.5 py-0.5 hover:text-paper transition-colors ${focusMode ? "text-champagne" : "text-muted"}`}
-              title="Focus mode (hide side panels)"
-            >
-              {focusMode ? "Focus ●" : "Focus"}
-            </button>
+            <div className="flex-1" />
+            {docConnects.length > 0 && (
+              <span title="Bound elements with Python connects" className="text-[10px] text-blue-600 shrink-0">
+                {docConnects.length} connect{docConnects.length !== 1 ? "s" : ""}
+              </span>
+            )}
+            <span className="text-gray-400 text-[10px] shrink-0">{slideWidthIn.toFixed(1)}" × {slideHeightIn.toFixed(1)}"</span>
+            <span className="text-gray-300">|</span>
+            {/* View mode buttons — Normal | Sorter | Reading (PPT status bar style) */}
+            <div className="flex items-center gap-0.5 shrink-0">
+              <button
+                title="Normal view"
+                onClick={() => setFocusMode(false)}
+                className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${!focusMode ? "text-[#2b579a] bg-[#2b579a]/10" : "text-gray-500 hover:text-gray-700"}`}
+              >
+                ⊞ Normal
+              </button>
+              <button
+                title="Slide Sorter"
+                onClick={() => setSlideSorterOpen(true)}
+                className="px-1.5 py-0.5 rounded text-[10px] text-gray-500 hover:text-gray-700 transition-colors"
+              >
+                ▦ Sorter
+              </button>
+              <button
+                title="Focus mode (hide panels)"
+                onClick={() => setFocusMode((f) => !f)}
+                className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${focusMode ? "text-[#2b579a] bg-[#2b579a]/10" : "text-gray-500 hover:text-gray-700"}`}
+              >
+                ⛶ Focus
+              </button>
+            </div>
           </div>
 
           {/* slide progress bar — click to jump proportionally */}

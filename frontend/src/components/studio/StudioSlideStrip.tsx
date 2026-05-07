@@ -314,35 +314,70 @@ export default function StudioSlideStrip({
   return (
     <div
       ref={stripRef}
-      className={`${thumbnailSize === "md" ? "w-40" : "w-28"} shrink-0 flex flex-col border-r border-edge bg-surface min-h-0 transition-all border-l-2 border-l-paper/10`}
+      className="w-44 shrink-0 flex flex-col border-r border-gray-300 bg-[#f5f5f5] min-h-0"
+      style={{ fontFamily: "'Segoe UI', system-ui, sans-serif" }}
     >
-      {/* header — visually distinct from the ribbon: this panel is for NAVIGATION, not editing tools */}
-      <div className="px-2 py-1.5 text-[10px] uppercase tracking-widest font-semibold border-b border-edge shrink-0 flex items-center justify-between bg-surface/80">
-        {multiSelected.size > 0 ? (
-          <div className="flex items-center gap-1">
-            <span className="text-paper">{multiSelected.size} sel.</span>
-            <button
-              onClick={() => handleDuplicate()}
-              disabled={busy}
-              title="Duplicate selected"
-              className="text-[9px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/15 text-muted transition-colors disabled:opacity-40"
-            >⊕</button>
-            <button
-              onClick={() => handleDelete()}
-              disabled={busy || slideCount - multiSelected.size < 1}
-              title="Delete selected"
-              className="text-[9px] px-1 py-0.5 rounded bg-bad/10 hover:bg-bad/20 text-bad/70 transition-colors disabled:opacity-40"
-            >✕</button>
-            <button
-              onClick={() => setMultiSelected(new Set())}
-              title="Clear selection"
-              className="text-[9px] px-1 text-muted/50 hover:text-muted transition-colors"
-            >⊘</button>
-            {/* bg color picker for multi-selected */}
-            <label
-              title="Set background color for selected slides"
-              className="text-[9px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/15 text-muted transition-colors cursor-pointer"
-            >
+      {/* ── Slides / Outline tab row (PPT-style) ──────────────── */}
+      <div className="flex items-stretch border-b border-gray-300 bg-white shrink-0">
+        <button
+          className="flex-1 py-1.5 text-[11px] font-medium text-[#2b579a] border-b-2 border-[#2b579a] bg-white transition-colors"
+          title="Slides panel"
+        >
+          Slides
+        </button>
+        <button
+          className="flex-1 py-1.5 text-[11px] text-gray-500 hover:text-gray-700 hover:bg-gray-50 transition-colors border-b-2 border-transparent"
+          title="Outline panel (shows slide text)"
+          onClick={() => {/* outline toggle handled by ribbon View > Outline */}}
+        >
+          Outline
+        </button>
+        <div className="flex items-center px-1 gap-0.5 border-l border-gray-200">
+          <button
+            onClick={() => importInputRef.current?.click()}
+            disabled={importing}
+            title="Import slides from PPTX"
+            className="w-5 h-5 flex items-center justify-center rounded text-gray-500 hover:text-gray-700 hover:bg-gray-200 transition-colors text-xs disabled:opacity-40"
+          >
+            {importing ? "…" : "⤵"}
+          </button>
+          <button
+            onClick={handleAdd}
+            disabled={busy}
+            title="Add slide after current"
+            className="w-5 h-5 flex items-center justify-center rounded text-gray-500 hover:text-gray-700 hover:bg-gray-200 transition-colors text-sm font-bold disabled:opacity-40"
+          >
+            +
+          </button>
+        </div>
+      </div>
+
+      {/* multi-select action bar */}
+      {multiSelected.size > 0 && (
+        <div className="px-2 py-1 border-b border-gray-200 bg-[#edf2fa] shrink-0 flex items-center gap-1">
+          <span className="text-[10px] text-[#2b579a] font-medium">{multiSelected.size} selected</span>
+          <button
+            onClick={() => handleDuplicate()}
+            disabled={busy}
+            title="Duplicate selected"
+            className="text-[9px] px-1 py-0.5 rounded bg-white border border-gray-300 hover:bg-gray-100 text-gray-600 transition-colors disabled:opacity-40"
+          >⊕</button>
+          <button
+            onClick={() => handleDelete()}
+            disabled={busy || slideCount - multiSelected.size < 1}
+            title="Delete selected"
+            className="text-[9px] px-1 py-0.5 rounded bg-red-50 border border-red-200 hover:bg-red-100 text-red-600 transition-colors disabled:opacity-40"
+          >✕</button>
+          <button
+            onClick={() => setMultiSelected(new Set())}
+            title="Clear selection"
+            className="text-[9px] px-1 text-gray-400 hover:text-gray-600 transition-colors ml-auto"
+          >✕ clear</button>
+          {/* bg color picker for multi-selected */}
+          <label
+            title="Set background color for selected slides"
+            className="text-[9px] px-1 py-0.5 rounded bg-white border border-gray-300 hover:bg-gray-100 text-gray-600 transition-colors cursor-pointer"
+          >
               🎨
               <input
                 type="color"
@@ -355,38 +390,9 @@ export default function StudioSlideStrip({
                 }}
               />
             </label>
-          </div>
-        ) : (
-          <span className="text-paper/60 tracking-[0.22em]">SLIDES</span>
-        )}
-        <div className="flex items-center gap-0.5">
-          <button
-            onClick={() => setThumbnailSize((s) => s === "sm" ? "md" : "sm")}
-            title="Toggle thumbnail size"
-            className="w-5 h-5 flex items-center justify-center rounded text-muted hover:text-slate-200 hover:bg-white/10 transition-colors text-[10px]"
-          >
-            {thumbnailSize === "sm" ? "⊞" : "⊟"}
-          </button>
-          <button
-            onClick={() => importInputRef.current?.click()}
-            disabled={importing}
-            title="Import slides from PPTX"
-            className="w-5 h-5 flex items-center justify-center rounded text-muted hover:text-slate-200
-                       hover:bg-white/10 transition-colors text-xs disabled:opacity-40"
-          >
-            {importing ? "…" : "⤵"}
-          </button>
-          <button
-            onClick={handleAdd}
-            disabled={busy}
-            title="Add slide after current"
-            className="w-5 h-5 flex items-center justify-center rounded text-muted hover:text-slate-200
-                       hover:bg-white/10 transition-colors text-sm disabled:opacity-40"
-          >
-            +
-          </button>
         </div>
-      </div>
+      )}
+
       <input
         ref={importInputRef}
         type="file"
@@ -416,11 +422,11 @@ export default function StudioSlideStrip({
 
       {/* tag filter bar */}
       {Object.keys(slideTags).length > 0 && (
-        <div className="flex items-center gap-0.5 px-2 py-1 border-b border-edge/50 shrink-0 flex-wrap">
+        <div className="flex items-center gap-0.5 px-2 py-1 border-b border-gray-200 shrink-0 flex-wrap">
           <button
             onClick={() => setFilterTag(null)}
             title="Show all slides"
-            className={`text-[8px] px-1 py-0.5 rounded transition-colors ${!filterTag ? "bg-white/15 text-slate-200" : "text-muted/50 hover:text-muted"}`}
+            className={`text-[8px] px-1 py-0.5 rounded transition-colors ${!filterTag ? "bg-gray-300 text-gray-700" : "text-gray-400 hover:text-gray-600"}`}
           >
             All
           </button>
@@ -432,7 +438,7 @@ export default function StudioSlideStrip({
               className="w-3 h-3 rounded-full border-2 transition-transform hover:scale-110"
               style={{
                 background: t.color!,
-                borderColor: filterTag === t.color ? "#fff" : "transparent",
+                borderColor: filterTag === t.color ? "#1a1a1a" : "transparent",
               }}
             />
           ))}
@@ -440,21 +446,21 @@ export default function StudioSlideStrip({
       )}
 
       {/* search bar */}
-      <div className="px-2 py-1 border-b border-edge/40 shrink-0">
+      <div className="px-2 py-1 border-b border-gray-200 shrink-0">
         <input
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search slides…"
-          className="w-full text-[10px] bg-base/60 border border-edge/50 rounded px-1.5 py-0.5
-                     text-slate-300 placeholder:text-muted/40 focus:outline-none focus:border-accent/50"
+          className="w-full text-[10px] bg-white border border-gray-300 rounded px-1.5 py-0.5
+                     text-gray-700 placeholder:text-gray-400 focus:outline-none focus:border-[#2b579a]"
           onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Escape") setSearchQuery("") }}
         />
       </div>
 
       {/* timer budget bar */}
-      <div className="px-2 py-1 border-b border-edge/40 shrink-0 flex items-center gap-1">
-        <span className="text-[8px] text-muted/50 shrink-0">⏱</span>
+      <div className="px-2 py-1 border-b border-gray-200 shrink-0 flex items-center gap-1">
+        <span className="text-[8px] text-gray-400 shrink-0">⏱</span>
         {editingTimer ? (
           <input
             autoFocus
@@ -476,13 +482,13 @@ export default function StudioSlideStrip({
               if (e.key === "Escape") { setEditingTimer(false); setTimerInput("") }
             }}
             placeholder="min"
-            className="w-10 text-[9px] bg-base/60 border border-accent/50 rounded px-1 py-0.5
-                       text-slate-300 focus:outline-none"
+            className="w-10 text-[9px] bg-white border border-gray-300 rounded px-1 py-0.5
+                       text-gray-700 focus:outline-none focus:border-[#2b579a]"
           />
         ) : (
           <button
             onClick={() => { setEditingTimer(true); setTimerInput(timerBudgetMin !== null ? String(timerBudgetMin) : "") }}
-            className="text-[9px] text-muted/50 hover:text-muted transition-colors truncate"
+            className="text-[9px] text-gray-400 hover:text-gray-600 transition-colors truncate"
             title="Set total presentation time budget"
           >
             {timerBudgetMin !== null
@@ -499,8 +505,8 @@ export default function StudioSlideStrip({
         )}
       </div>
 
-      {/* slide list */}
-      <div key={stripKey} className="flex flex-col gap-1 p-2 overflow-y-auto flex-1 scrollbar-thin">
+      {/* slide list — PPT style: thumbnail fills width, number+label below */}
+      <div key={stripKey} className="flex flex-col gap-0 py-2 px-2 overflow-y-auto flex-1">
         {Array.from({ length: slideCount }, (_, i) => i + 1).filter((n) => {
           if (filterTag && slideTags[n] !== filterTag) return false
           if (searchQuery.trim()) {
@@ -527,10 +533,10 @@ export default function StudioSlideStrip({
             ? Array.from({ length: slideCount }, (_, i) => i + 1).filter((s) => slideSections[s] === sectionName).length
             : 0
           return (
-            <div key={`wrap-${n}`} className="flex flex-col w-full gap-0">
+            <div key={`wrap-${n}`} className="flex flex-col w-full gap-0 mb-1">
               {isNewSection && (
                 <button
-                  className="w-full px-1 py-0.5 mt-1 mb-0.5 text-[9px] font-semibold uppercase tracking-widest text-paper/80 border-t border-paper/30 truncate flex items-center gap-1 hover:text-paper transition-colors text-left"
+                  className="w-full px-1 py-0.5 mt-1 mb-0.5 text-[9px] font-semibold text-gray-500 border-t border-gray-300 truncate flex items-center gap-1 hover:text-gray-700 transition-colors text-left uppercase tracking-widest"
                   title={`${isCollapsed ? "Expand" : "Collapse"} section: ${sectionName}`}
                   onClick={() => setCollapsedSections((prev) => {
                     const next = new Set(prev)
@@ -538,191 +544,162 @@ export default function StudioSlideStrip({
                     return next
                   })}
                 >
-                  <span>{isCollapsed ? "▶" : "▼"}</span>
-                  <span>§ {sectionName}</span>
-                  {isCollapsed && <span className="ml-auto text-paper/50 font-mono normal-case tracking-normal">{sectionSlideCount}</span>}
+                  <span className="text-[8px]">{isCollapsed ? "▶" : "▼"}</span>
+                  <span>{sectionName}</span>
+                  {isCollapsed && <span className="ml-auto text-gray-400 font-mono normal-case tracking-normal">{sectionSlideCount}</span>}
                 </button>
               )}
-            {!isCollapsed && <div
-              draggable
-              onDragStart={(e) => handleDragStart(e, n)}
-              onDragOver={(e) => handleDragOver(e, n)}
-              onDrop={(e) => handleDrop(e, n)}
-              onDragEnd={handleDragEnd}
-              className={[
-                "flex flex-row items-start gap-2 rounded p-1 transition-all group w-full cursor-grab active:cursor-grabbing",
-                active      ? "ring-1 ring-champagne bg-champagne/5"
-                  : isMulti ? "ring-1 ring-paper/40 bg-paper/5"
-                  : "hover:bg-paper/5",
-                isDragging  ? "opacity-40" : hiddenSlides.has(n) ? "opacity-40" : "",
-                isDropTarget ? "ring-1 ring-paper bg-paper/10" : "",
-              ].join(" ")}
-              onClick={(e) => handleSlideClick(e, n)}
-              onContextMenu={(e) => handleContextMenu(e, n)}
-              onMouseEnter={(e) => { setHoverN(n); setHoverY((e.currentTarget as HTMLElement).getBoundingClientRect().top) }}
-              onMouseLeave={() => setHoverN(null)}
-              key={n}
-            >
-              <div className={`flex flex-col items-end pt-1 shrink-0 select-none w-7 ${active ? "text-champagne" : "text-muted"}`}>
-                <span className="text-[15px] font-mono tabular-nums leading-none">{n}</span>
-                {dirty && <span className="text-[8px] mt-0.5 tracking-widest uppercase text-ochre">●</span>}
-              </div>
-              <div className="flex-1 min-w-0 flex flex-col gap-1">
-              <div className="w-full aspect-video bg-base border border-edge overflow-hidden relative">
-                <img
-                  src={`/api/docs/${docId}/slides/${n}/bridge.png?v=${stripKey}-${refreshKey ?? 0}`}
-                  alt={`Slide ${n}`}
-                  className="w-full h-full object-cover"
-                  draggable={false}
-                />
-                {/* dirty indicator now lives in the number column (left of thumb) */}
-                {hasNotes && (() => {
-                  const wc = notesWordCounts[n] ?? 0
-                  const quality = wc >= 80 ? "text-emerald-400/80" : wc >= 30 ? "text-amber-400/80" : "text-white/50"
-                  const label = wc >= 80 ? "📝" : wc >= 30 ? "📋" : "✏"
-                  return (
-                    <span
-                      title={`Speaker notes: ${wc} words`}
-                      className={`absolute bottom-0.5 right-0.5 text-[8px] ${quality} bg-black/50 rounded px-0.5 leading-tight`}
-                    >
-                      {label}
-                    </span>
-                  )
-                })()}
-                {tagColor && (
-                  <span
-                    title={`Tagged: ${TAG_COLORS.find((t) => t.color === tagColor)?.label ?? tagColor}`}
-                    className="absolute top-0.5 left-0.5 w-2.5 h-2.5 rounded-full border border-black/20"
-                    style={{ background: tagColor }}
-                  />
-                )}
-                {slideTransitions[n] && (
-                  <span
-                    title={`Transition: ${slideTransitions[n]}`}
-                    className="absolute bottom-0.5 left-0.5 text-[8px] text-white/50 bg-black/50 rounded px-0.5 leading-tight"
-                  >
-                    ▷
-                  </span>
-                )}
-                {timerBudgetMin !== null && (() => {
-                  const secsPerSlide = Math.round((timerBudgetMin * 60) / slideCount)
-                  const display = secsPerSlide >= 60 ? `${Math.round(secsPerSlide / 6) / 10}m` : `${secsPerSlide}s`
-                  return (
-                    <span
-                      title={`Timer budget: ~${secsPerSlide}s per slide`}
-                      className="absolute top-0.5 left-6 text-[7px] text-cyan-300/70 bg-black/50 rounded px-0.5 leading-tight font-mono"
-                    >
-                      {display}
-                    </span>
-                  )
-                })()}
-                {commentCounts[n] > 0 && (
-                  <span
-                    title={`${commentCounts[n]} open comment${commentCounts[n] !== 1 ? "s" : ""}`}
-                    className="absolute top-0.5 right-6 text-[7px] font-bold text-white bg-orange-500 rounded-full min-w-[13px] h-[13px] flex items-center justify-center leading-none"
-                  >
-                    {commentCounts[n]}
-                  </span>
-                )}
-                {slideIssues[n] && (
-                  <span
-                    title={`QA: slide has ${slideIssues[n] === "error" ? "error(s)" : "warning(s)"}`}
-                    className={`absolute bottom-0.5 right-0.5 text-[7px] rounded px-0.5 leading-tight font-bold ${
-                      slideIssues[n] === "error" ? "text-red-400 bg-red-900/60" : "text-amber-400 bg-amber-900/60"
-                    }`}
-                  >
-                    {slideIssues[n] === "error" ? "✕" : "⚠"}
-                  </span>
-                )}
-                {pinnedSlides.has(n) && (
-                  <span
-                    title="Slide is pinned (right-click to unpin)"
-                    className="absolute bottom-0.5 left-0.5 text-[9px] text-sky-300/80"
-                  >
-                    📌
-                  </span>
-                )}
-                {hiddenSlides.has(n) && (
-                  <span
-                    title="Slide is hidden (skipped in presentation mode)"
-                    className="absolute inset-0 flex items-center justify-center bg-black/30 text-[9px] text-white/50 font-semibold tracking-wider uppercase pointer-events-none"
-                  >
-                    Hidden
-                  </span>
-                )}
-              </div>
-              <div className="w-full flex items-center justify-between gap-0.5 min-w-0">
-                <span className={`text-[10px] shrink-0 ${active ? "text-accent-light" : dirty ? "text-amber-400" : "text-muted"}`}>
-                  {n}
-                </span>
-                {editingLabel === n ? (
-                  <input
-                    autoFocus
-                    value={editLabelText}
-                    onChange={(e) => setEditLabelText(e.target.value)}
-                    onBlur={() => commitLabel(n, editLabelText)}
-                    onKeyDown={(e) => {
-                      e.stopPropagation()
-                      if (e.key === "Enter") { e.preventDefault(); commitLabel(n, editLabelText) }
-                      if (e.key === "Escape") { setEditingLabel(null) }
-                    }}
-                    className="flex-1 min-w-0 text-[9px] bg-base border border-accent/50 rounded px-1 py-0 text-slate-300 focus:outline-none"
-                    style={{ maxWidth: "100%" }}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                ) : slideLabels[n] ? (
-                  <span
-                    title={`Label: ${slideLabels[n]} — double-click to edit`}
-                    onDoubleClick={(e) => { e.stopPropagation(); setEditingLabel(n); setEditLabelText(slideLabels[n] ?? "") }}
-                    className="flex-1 min-w-0 text-[9px] text-paper/70 truncate text-right cursor-text"
-                  >
-                    {slideLabels[n]}
-                  </span>
-                ) : (
-                  <span
-                    title="Double-click to add label"
-                    onDoubleClick={(e) => { e.stopPropagation(); setEditingLabel(n); setEditLabelText("") }}
-                    className="flex-1 text-[9px] text-muted/0 hover:text-muted/30 transition-colors text-right cursor-text"
-                  >
-                    +label
-                  </span>
-                )}
-              </div>
-              {/* star rating row — hidden until hover/rated, so the strip stays calm */}
+            {!isCollapsed && (
               <div
-                className={`w-full flex items-center justify-center gap-0.5 transition-opacity ${
-                  (slideRatings[n] ?? 0) > 0 || hoverN === n ? "opacity-100" : "opacity-0"
-                }`}
-                onClick={(e) => e.stopPropagation()}
+                draggable
+                onDragStart={(e) => handleDragStart(e, n)}
+                onDragOver={(e) => handleDragOver(e, n)}
+                onDrop={(e) => handleDrop(e, n)}
+                onDragEnd={handleDragEnd}
+                className={[
+                  "flex flex-col rounded transition-all group w-full cursor-grab active:cursor-grabbing p-1",
+                  active      ? "ring-2 ring-[#2b579a] bg-[#edf2fa]"
+                    : isMulti ? "ring-1 ring-gray-400 bg-gray-100"
+                    : "hover:bg-gray-200",
+                  isDragging  ? "opacity-40" : hiddenSlides.has(n) ? "opacity-50" : "",
+                  isDropTarget ? "ring-2 ring-[#2b579a] bg-[#edf2fa]" : "",
+                ].join(" ")}
+                onClick={(e) => handleSlideClick(e, n)}
+                onContextMenu={(e) => handleContextMenu(e, n)}
+                onMouseEnter={(e) => { setHoverN(n); setHoverY((e.currentTarget as HTMLElement).getBoundingClientRect().top) }}
+                onMouseLeave={() => setHoverN(null)}
+                key={n}
               >
-                {[1, 2, 3, 4, 5].map((star) => {
-                  const current = slideRatings[n] ?? 0
-                  const filled = star <= current
-                  return (
-                    <button
-                      key={star}
-                      title={current === star ? "Clear rating" : `Rate ${star} star${star !== 1 ? "s" : ""}`}
-                      onClick={async (e) => {
+                {/* ── Thumbnail — fills full width, 16:9 ratio ── */}
+                <div className="w-full aspect-video bg-white border border-gray-300 overflow-hidden relative shadow-sm">
+                  <img
+                    src={`/api/docs/${docId}/slides/${n}/bridge.png?v=${stripKey}-${refreshKey ?? 0}`}
+                    alt={`Slide ${n}`}
+                    className="w-full h-full object-cover"
+                    draggable={false}
+                  />
+                  {/* overlays */}
+                  {hasNotes && (() => {
+                    const wc = notesWordCounts[n] ?? 0
+                    const quality = wc >= 80 ? "text-emerald-600" : wc >= 30 ? "text-amber-600" : "text-gray-500"
+                    const label = wc >= 80 ? "📝" : wc >= 30 ? "📋" : "✏"
+                    return (
+                      <span title={`Speaker notes: ${wc} words`}
+                        className={`absolute bottom-0.5 right-0.5 text-[8px] ${quality} bg-white/80 rounded px-0.5 leading-tight shadow-sm`}>
+                        {label}
+                      </span>
+                    )
+                  })()}
+                  {tagColor && (
+                    <span title={`Tagged: ${TAG_COLORS.find((t) => t.color === tagColor)?.label ?? tagColor}`}
+                      className="absolute top-0.5 left-0.5 w-2.5 h-2.5 rounded-full border border-white/60 shadow-sm"
+                      style={{ background: tagColor }} />
+                  )}
+                  {slideTransitions[n] && (
+                    <span title={`Transition: ${slideTransitions[n]}`}
+                      className="absolute bottom-0.5 left-0.5 text-[8px] text-gray-600 bg-white/80 rounded px-0.5 leading-tight">
+                      ▷
+                    </span>
+                  )}
+                  {timerBudgetMin !== null && (() => {
+                    const secsPerSlide = Math.round((timerBudgetMin * 60) / slideCount)
+                    const display = secsPerSlide >= 60 ? `${Math.round(secsPerSlide / 6) / 10}m` : `${secsPerSlide}s`
+                    return (
+                      <span title={`Timer: ~${secsPerSlide}s per slide`}
+                        className="absolute top-0.5 right-0.5 text-[7px] text-blue-700 bg-blue-50/90 rounded px-0.5 leading-tight font-mono">
+                        {display}
+                      </span>
+                    )
+                  })()}
+                  {commentCounts[n] > 0 && (
+                    <span title={`${commentCounts[n]} open comment${commentCounts[n] !== 1 ? "s" : ""}`}
+                      className="absolute top-0.5 right-0.5 text-[7px] font-bold text-white bg-orange-500 rounded-full min-w-[13px] h-[13px] flex items-center justify-center leading-none shadow-sm">
+                      {commentCounts[n]}
+                    </span>
+                  )}
+                  {slideIssues[n] && (
+                    <span title={`QA: ${slideIssues[n]}`}
+                      className={`absolute bottom-0.5 right-0.5 text-[7px] rounded px-0.5 leading-tight font-bold ${
+                        slideIssues[n] === "error" ? "text-red-600 bg-red-100" : "text-amber-600 bg-amber-100"
+                      }`}>
+                      {slideIssues[n] === "error" ? "✕" : "⚠"}
+                    </span>
+                  )}
+                  {pinnedSlides.has(n) && (
+                    <span title="Pinned" className="absolute bottom-0.5 left-0.5 text-[9px]">📌</span>
+                  )}
+                  {hiddenSlides.has(n) && (
+                    <span className="absolute inset-0 flex items-center justify-center bg-white/50 text-[9px] text-gray-500 font-semibold tracking-wider uppercase pointer-events-none">
+                      Hidden
+                    </span>
+                  )}
+                  {dirty && (
+                    <span className="absolute top-0.5 left-0.5 w-1.5 h-1.5 rounded-full bg-orange-500" title="Unsaved changes" />
+                  )}
+                </div>
+
+                {/* ── Number + label below thumbnail (PPT style) ── */}
+                <div className="flex items-center gap-1 mt-0.5 px-0.5">
+                  <span className={`text-[10px] font-medium tabular-nums shrink-0 ${active ? "text-[#2b579a]" : "text-gray-500"}`}>
+                    {n}
+                  </span>
+                  {editingLabel === n ? (
+                    <input
+                      autoFocus
+                      value={editLabelText}
+                      onChange={(e) => setEditLabelText(e.target.value)}
+                      onBlur={() => commitLabel(n, editLabelText)}
+                      onKeyDown={(e) => {
                         e.stopPropagation()
-                        const newRating = current === star ? null : star
-                        setSlideRatings((prev) => {
-                          const next = { ...prev }
-                          if (newRating === null) delete next[n]; else next[n] = newRating
-                          return next
-                        })
-                        await setSlideRating(docId, n, newRating).catch(() => {})
+                        if (e.key === "Enter") { e.preventDefault(); commitLabel(n, editLabelText) }
+                        if (e.key === "Escape") { setEditingLabel(null) }
                       }}
-                      className={`text-[9px] transition-colors leading-none ${
-                        filled ? "text-amber-400" : "text-white/15 hover:text-amber-300/50"
-                      }`}
+                      className="flex-1 min-w-0 text-[9px] bg-white border border-[#2b579a] rounded px-1 py-0 text-gray-800 focus:outline-none"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  ) : slideLabels[n] ? (
+                    <span
+                      title={`Label: ${slideLabels[n]} — double-click to edit`}
+                      onDoubleClick={(e) => { e.stopPropagation(); setEditingLabel(n); setEditLabelText(slideLabels[n] ?? "") }}
+                      className="flex-1 min-w-0 text-[9px] text-gray-500 truncate cursor-text"
                     >
-                      ★
-                    </button>
-                  )
-                })}
+                      {slideLabels[n]}
+                    </span>
+                  ) : (
+                    <span
+                      title="Double-click to add a label"
+                      onDoubleClick={(e) => { e.stopPropagation(); setEditingLabel(n); setEditLabelText("") }}
+                      className="flex-1 text-[9px] text-transparent hover:text-gray-300 transition-colors cursor-text"
+                    >
+                      +label
+                    </span>
+                  )}
+                  {/* star rating — visible on hover or when rated */}
+                  <div
+                    className={`flex items-center gap-0.5 shrink-0 transition-opacity ${
+                      (slideRatings[n] ?? 0) > 0 || hoverN === n ? "opacity-100" : "opacity-0"
+                    }`}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {[1, 2, 3, 4, 5].map((star) => {
+                      const current = slideRatings[n] ?? 0
+                      return (
+                        <button key={star}
+                          title={current === star ? "Clear rating" : `Rate ${star} star${star !== 1 ? "s" : ""}`}
+                          onClick={async (e) => {
+                            e.stopPropagation()
+                            const newRating = current === star ? null : star
+                            setSlideRatings((prev) => { const next = { ...prev }; if (newRating === null) delete next[n]; else next[n] = newRating; return next })
+                            await setSlideRating(docId, n, newRating).catch(() => {})
+                          }}
+                          className={`text-[8px] leading-none ${star <= current ? "text-amber-500" : "text-gray-300 hover:text-amber-400"}`}
+                        >★</button>
+                      )
+                    })}
+                  </div>
+                </div>
               </div>
-              </div>
-            </div>}
+            )}
             </div>
           )
         })}
@@ -733,31 +710,31 @@ export default function StudioSlideStrip({
         <div
           className="fixed z-[9999] pointer-events-none"
           style={{
-            left: thumbnailSize === "md" ? 168 : 110,
+            left: 180,
             top: Math.max(8, Math.min(hoverY - 20, window.innerHeight - 130)),
           }}
         >
-          <div className="bg-surface border border-edge rounded shadow-2xl p-1 w-56">
+          <div className="bg-white border border-gray-300 rounded shadow-2xl p-1 w-64">
             <img
               src={`/api/docs/${docId}/slides/${hoverN}/bridge.png?v=${stripKey}-${refreshKey ?? 0}`}
               alt={`Slide ${hoverN} preview`}
               className="w-full aspect-video rounded object-cover block"
             />
             <div className="flex items-center justify-between px-1 pt-1 pb-0.5">
-              <span className="text-[10px] text-muted">Slide {hoverN}</span>
+              <span className="text-[10px] text-gray-500">Slide {hoverN}</span>
               <div className="flex items-center gap-1">
-                {hiddenSlides.has(hoverN) && <span className="text-[8px] text-white/40">hidden</span>}
+                {hiddenSlides.has(hoverN) && <span className="text-[8px] text-gray-400">hidden</span>}
                 {pinnedSlides.has(hoverN) && <span className="text-[9px]">📌</span>}
-                {slideRatings[hoverN] && <span className="text-[9px] text-amber-400">{"★".repeat(slideRatings[hoverN])}</span>}
+                {slideRatings[hoverN] && <span className="text-[9px] text-amber-500">{"★".repeat(slideRatings[hoverN])}</span>}
               </div>
             </div>
             {(slideSections[hoverN] || notesWordCounts[hoverN] > 0 || slideIssues[hoverN]) && (
               <div className="flex flex-wrap gap-1 px-1 pb-1">
                 {slideSections[hoverN] && (
-                  <span className="text-[8px] text-paper/70">§ {slideSections[hoverN]}</span>
+                  <span className="text-[8px] text-gray-500">§ {slideSections[hoverN]}</span>
                 )}
                 {notesWordCounts[hoverN] > 0 && (
-                  <span className="text-[8px] text-emerald-400/60">{notesWordCounts[hoverN]}w notes</span>
+                  <span className="text-[8px] text-emerald-600">{notesWordCounts[hoverN]}w notes</span>
                 )}
                 {slideIssues[hoverN] && (
                   <span className={`text-[8px] font-bold ${slideIssues[hoverN] === "error" ? "text-red-400" : "text-amber-400"}`}>
@@ -773,7 +750,7 @@ export default function StudioSlideStrip({
       {/* context menu */}
       {contextMenu && (
         <div
-          className="fixed z-[9999] bg-surface border border-edge rounded shadow-xl py-1 min-w-[160px]"
+          className="fixed z-[9999] bg-white border border-gray-300 rounded shadow-xl py-1 min-w-[180px]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onMouseDown={(e) => e.stopPropagation()}
         >
@@ -798,7 +775,7 @@ export default function StudioSlideStrip({
           </CtxItem>
           {/* tag color picker */}
           <div className="px-3 py-1.5">
-            <div className="text-[9px] text-muted/60 mb-1.5 uppercase tracking-wider">Color tag</div>
+            <div className="text-[9px] text-gray-400 mb-1.5 uppercase tracking-wider">Color tag</div>
             <div className="flex flex-wrap gap-1">
               {TAG_COLORS.map((t) => (
                 <button
@@ -825,7 +802,7 @@ export default function StudioSlideStrip({
           </div>
           {/* transition picker */}
           <div className="px-3 py-1.5">
-            <div className="text-[9px] text-muted/60 mb-1.5 uppercase tracking-wider">Transition</div>
+            <div className="text-[9px] text-gray-400 mb-1.5 uppercase tracking-wider">Transition</div>
             <div className="flex flex-wrap gap-1">
               {(["none","fade","slide","zoom","flip","push","wipe","dissolve"] as const).map((t) => {
                 const active = (slideTransitions[contextMenu.slideN] ?? "none") === t
@@ -845,8 +822,8 @@ export default function StudioSlideStrip({
                     }}
                     className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors capitalize ${
                       active
-                        ? "bg-paper/30 text-paper border-paper/40"
-                        : "bg-white/5 text-muted border-edge hover:bg-white/10 hover:text-slate-300"
+                        ? "bg-[#2b579a]/10 text-[#2b579a] border-[#2b579a]/30"
+                        : "bg-white text-gray-600 border-gray-300 hover:bg-gray-100"
                     }`}
                   >
                     {t}
@@ -855,7 +832,7 @@ export default function StudioSlideStrip({
               })}
             </div>
           </div>
-          <div className="border-t border-edge/50 my-1" />
+          <div className="border-t border-gray-200 my-1" />
           <CtxItem onClick={() => run(() => addSlide(docId, contextMenu.slideN - 1), (r) => r.new_slide_n ?? contextMenu.slideN)}>
             Insert before
           </CtxItem>
@@ -863,14 +840,14 @@ export default function StudioSlideStrip({
             Insert after
           </CtxItem>
           <CtxItem onClick={() => handleDuplicate(contextMenu.slideN)}>Duplicate slide</CtxItem>
-          <div className="border-t border-edge/50 my-1" />
+          <div className="border-t border-gray-200 my-1" />
           <CtxItem onClick={() => handleMoveUp(contextMenu.slideN)} disabled={contextMenu.slideN <= 1}>
             Move up
           </CtxItem>
           <CtxItem onClick={() => handleMoveDown(contextMenu.slideN)} disabled={contextMenu.slideN >= slideCount}>
             Move down
           </CtxItem>
-          <div className="border-t border-edge/50 my-1" />
+          <div className="border-t border-gray-200 my-1" />
           <CtxItem onClick={async () => {
             const n = contextMenu.slideN
             const isHidden = hiddenSlides.has(n)
@@ -911,7 +888,7 @@ export default function StudioSlideStrip({
           <CtxItem onClick={() => { window.open(exportSlideUrl(docId, contextMenu.slideN), "_blank"); setContextMenu(null) }}>
             Download as PPTX
           </CtxItem>
-          <div className="border-t border-edge/50 my-1" />
+          <div className="border-t border-gray-200 my-1" />
           <CtxItem
             onClick={() => handleDelete(contextMenu.slideN)}
             disabled={slideCount <= 1}
@@ -933,10 +910,10 @@ function CtxItem({
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
       className={[
-        "w-full text-left px-3 py-1 text-xs transition-colors",
-        disabled ? "text-muted/40 cursor-default" :
-        danger   ? "text-bad hover:bg-bad/10" :
-                   "text-slate-300 hover:bg-white/10 hover:text-slate-100",
+        "w-full text-left px-3 py-1 text-[12px] transition-colors",
+        disabled ? "text-gray-300 cursor-default" :
+        danger   ? "text-red-600 hover:bg-red-50" :
+                   "text-gray-700 hover:bg-gray-100",
       ].join(" ")}
     >
       {children}
