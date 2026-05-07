@@ -55,11 +55,17 @@ function TiptapShapeRendererImpl({
       .catch(() => { if (!cancelled) setContent(null) })
   }, [docId, slideN, element.id, renderKey])
 
-  useEffect(() => { if (!selected && editing) setEditing(false) }, [selected, editing])
+  // Track whether the element has ever been explicitly selected so we know when
+  // a deselect is intentional vs just the initial unselected state on mount.
+  const hasBeenSelectedRef = useRef(false)
+  useEffect(() => {
+    if (selected) hasBeenSelectedRef.current = true
+    if (!selected && editing && hasBeenSelectedRef.current) setEditing(false)
+  }, [selected, editing])
 
   // Auto-enter edit mode when this element was just inserted (text box insert).
   // No `selected` guard — selectedIds in StudioCanvas is internal and won't be
-  // set yet at the time this effect fires on first mount.
+  // set yet when this effect fires on first mount after a programmatic insert.
   useEffect(() => {
     if (consumePendingAutoEdit(element.id)) setEditing(true)
   }, [element.id])

@@ -61,10 +61,16 @@ function TiptapTextRendererImpl({
     return () => { cancelled = true }
   }, [docId, slideN, element.id, renderKey])
 
-  // Exit edit mode if the element is deselected
-  useEffect(() => { if (!selected && editing) setEditing(false) }, [selected, editing])
+  // Only exit edit mode when the element is explicitly deselected after having
+  // been selected. The hasBeenSelected guard prevents the initial unselected
+  // state (on auto-insert) from immediately cancelling editing.
+  const hasBeenSelectedRef = useRef(false)
+  useEffect(() => {
+    if (selected) hasBeenSelectedRef.current = true
+    if (!selected && editing && hasBeenSelectedRef.current) setEditing(false)
+  }, [selected, editing])
 
-    // Auto-enter edit mode when this element was just inserted.
+  // Auto-enter edit mode when this element was just inserted.
   // No `selected` guard — selectedIds in StudioCanvas is internal state that
   // hasn't been updated yet when this effect first fires on mount.
   useEffect(() => {
