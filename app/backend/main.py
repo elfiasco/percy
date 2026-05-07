@@ -233,14 +233,34 @@ if _SPA_DIR is not None:
             return FileResponse(str(candidate))
         return FileResponse(str(_SPA_DIR / "index.html"))
 
+# ── global 500 exception handler — surfaces traceback for debugging ───────────
+@app.exception_handler(Exception)
+async def _debug_500_handler(request: Request, exc: Exception):
+    import traceback as _tb
+    tb = _tb.format_exc()
+    log.error("500 %s %s: %r\n%s", request.method, request.url.path, exc, tb)
+    return JSONResponse({"detail": f"{type(exc).__name__}: {exc}", "traceback": tb[-2000:]},
+                        status_code=500)
+
 # ── request logging middleware ────────────────────────────────────────────────
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
+    import traceback as _tb
     start = time.perf_counter()
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        ms = (time.perf_counter() - start) * 1000
+        log.error("UNHANDLED %-6s %-45s %.0f ms: %s\n%s",
+                  request.method, request.url.path, ms, exc, _tb.format_exc())
+        return JSONResponse({"detail": f"{type(exc).__name__}: {exc}"}, status_code=500)
     ms = (time.perf_counter() - start) * 1000
-    log.info("%-6s %-45s → %d  (%.0f ms)",
-             request.method, request.url.path, response.status_code, ms)
+    if response.status_code >= 500:
+        log.error("%-6s %-45s → %d  (%.0f ms) [server error]",
+                  request.method, request.url.path, response.status_code, ms)
+    else:
+        log.info("%-6s %-45s → %d  (%.0f ms)",
+                 request.method, request.url.path, response.status_code, ms)
     return response
 
 # ── dirs ──────────────────────────────────────────────────────────────────────
