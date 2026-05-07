@@ -346,6 +346,7 @@ import { useStudioCollab } from "../../lib/collab/useStudioCollab"
 import { getCollabContext } from "../../lib/collab/collabContext"
 import { hydrateElement as ydocHydrateElement, deleteElement as ydocDeleteElement } from "../../lib/collab/bridgeYjsAdapter"
 import { useAuth } from "../../auth/AuthContext"
+import { setPendingAutoEdit } from "../../lib/pendingAutoEdit"
 
 setupNativeRenderers()
 
@@ -1013,9 +1014,10 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       const el = await createNewElement(doc.doc_id, selectedSlideRef.current, {
         shape_type: shapeType,
         left_in: bestL, top_in: bestT, width_in: W, height_in: H,
-        fill_color: "#4472C4",
+        fill_color: shapeType === "text_box" ? "" : "#4472C4",
         label: shapeType.charAt(0).toUpperCase() + shapeType.slice(1),
       })
+      if (shapeType === "text_box") setPendingAutoEdit(el.id)
       setSelectedElement(el)
       // Phase D: write the new element to Y.Doc so peers see it instantly.
       const collab = getCollabContext()

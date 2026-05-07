@@ -11,6 +11,7 @@ import { getCollabContext } from "../../../lib/collab/collabContext"
 import { hydrateElementText } from "../../../lib/collab/bridgeYjsSync"
 import { getAwareness, setLocalEditing } from "../../../lib/collab/awareness"
 import { registerRenderer, type NativeRendererProps } from "./RendererRegistry"
+import { consumePendingAutoEdit } from "../../../lib/pendingAutoEdit"
 import TextBubbleMenu from "../TextBubbleMenu"
 import { yXmlFragmentToProsemirrorJSON } from "y-prosemirror"
 
@@ -63,6 +64,11 @@ function TiptapTextRendererImpl({
   // Exit edit mode if the element is deselected
   useEffect(() => { if (!selected && editing) setEditing(false) }, [selected, editing])
 
+  // Auto-enter edit mode when this element was just inserted (text box insert)
+  useEffect(() => {
+    if (selected && consumePendingAutoEdit(element.id)) setEditing(true)
+  }, [selected, element.id])
+
   // Broadcast edit-presence so peers know we're typing here.
   useEffect(() => {
     const collab = getCollabContext()
@@ -99,12 +105,17 @@ function TiptapTextRendererImpl({
   if (error)    return <div style={ERR_STYLE}>! text load failed</div>
   if (!content) return <div style={{ width: "100%", height: "100%" }} />
 
+  const isEmpty = !content || (content.kind === "paragraphs" && content.paragraphs.every((p) => !p.runs?.length && !p.text))
   const containerStyle: React.CSSProperties = {
     width:          "100%",
     height:         "100%",
     boxSizing:      "border-box",
-    background:     style?.fill_color ?? "transparent",
-    border:         style?.line_color ? `${style.line_width ?? 1}px solid ${style.line_color}` : undefined,
+    background:     style?.fill_color || "transparent",
+    border:         style?.line_color
+      ? `${style.line_width ?? 1}px solid ${style.line_color}`
+      : isEmpty
+        ? "1.5px dashed rgba(99,102,241,0.55)"
+        : undefined,
     opacity:        style?.opacity ?? 1,
     padding:        "0.12em 0.18em",
     overflow:       "hidden",

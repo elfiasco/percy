@@ -314,10 +314,10 @@ export default function StudioSlideStrip({
   return (
     <div
       ref={stripRef}
-      className={`${thumbnailSize === "md" ? "w-40" : "w-28"} shrink-0 flex flex-col border-r border-edge bg-surface min-h-0 transition-all`}
+      className={`${thumbnailSize === "md" ? "w-40" : "w-28"} shrink-0 flex flex-col border-r border-edge bg-surface min-h-0 transition-all border-l-2 border-l-paper/10`}
     >
-      {/* header */}
-      <div className="px-2 py-1.5 text-[10px] text-muted uppercase tracking-widest font-semibold border-b border-edge shrink-0 flex items-center justify-between">
+      {/* header — visually distinct from the ribbon: this panel is for NAVIGATION, not editing tools */}
+      <div className="px-2 py-1.5 text-[10px] uppercase tracking-widest font-semibold border-b border-edge shrink-0 flex items-center justify-between bg-surface/80">
         {multiSelected.size > 0 ? (
           <div className="flex items-center gap-1">
             <span className="text-paper">{multiSelected.size} sel.</span>
@@ -357,7 +357,7 @@ export default function StudioSlideStrip({
             </label>
           </div>
         ) : (
-          <span>Slides</span>
+          <span className="text-paper/60 tracking-[0.22em]">SLIDES</span>
         )}
         <div className="flex items-center gap-0.5">
           <button

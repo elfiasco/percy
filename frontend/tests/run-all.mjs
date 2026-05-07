@@ -5,11 +5,22 @@
  * Usage:
  *   node tests/run-all.mjs [BASE_URL] [LM_STUDIO_URL]
  *
- * Suites run:
- *   1. holistic-ui       — critical path smoke test (22 checks)
- *   2. new-project-flow  — full new-user golden path
- *   3. adversarial-users — LM Studio generates edge cases, tests resilience
- *   4. vision-critique   — LM Studio Gemma 4 vision reviews every major page
+ * Suites run (critical):
+ *   1.  holistic-ui              — smoke test (28 checks, 2 browser contexts)
+ *   2.  new-project-flow         — full new-user golden path (20 steps)
+ *   3.  create-deck-from-scratch — UI-driven deck creation (11 steps)
+ *   4.  database-health          — API smoke test covering every major endpoint
+ *   5.  api-health               — deep API endpoint health check (21 checks)
+ *   6.  slide-operations         — slide CRUD (add/delete/bg/notes/elements)
+ *   7.  element-operations       — element CRUD (create/edit/style/duplicate/delete)
+ *   8.  auth-flow                — full auth lifecycle (signup/login/settings/logout)
+ * Suites run (optional):
+ *   9.  export-test              — PPTX download + re-upload round-trip
+ *   10. collab-yjs               — Yjs real-time collab (2 browser sessions)
+ *   11. performance-smoke        — Response time measurements (no hard fail)
+ *   12. agent-mode               — AI agent panel UI + API checks (needs API key)
+ *   13. adversarial-users        — LM Studio generates edge cases
+ *   14. vision-critique          — Gemma 4 vision reviews every major page
  *
  * Each suite writes its own timestamped JSON to tests/results/.
  * This file appends a summary row to test-log.json after every run.
@@ -28,10 +39,22 @@ const TAG     = Date.now()
 await mkdir(OUT, { recursive: true })
 
 const SUITES = [
-  { name: "holistic-ui",      file: "tests/holistic-ui.mjs",      args: [BASE],           critical: true },
-  { name: "new-project-flow", file: "tests/new-project-flow.mjs",  args: [BASE],           critical: true },
-  { name: "adversarial-users",file: "tests/adversarial-users.mjs", args: [BASE, LM_URL],   critical: false },
-  { name: "vision-critique",  file: "tests/vision-critique.mjs",   args: [BASE, LM_URL],   critical: false },
+  // Critical: these must pass on every deploy
+  { name: "holistic-ui",              file: "tests/holistic-ui.mjs",              args: [BASE],           critical: true  },
+  { name: "new-project-flow",         file: "tests/new-project-flow.mjs",         args: [BASE],           critical: true  },
+  { name: "create-deck-from-scratch", file: "tests/create-deck-from-scratch.mjs", args: [BASE],           critical: true  },
+  { name: "database-health",          file: "tests/database-health.mjs",          args: [BASE],           critical: true  },
+  { name: "api-health",               file: "tests/api-health.mjs",               args: [BASE],           critical: true  },
+  { name: "slide-operations",         file: "tests/slide-operations.mjs",         args: [BASE],           critical: true  },
+  { name: "element-operations",       file: "tests/element-operations.mjs",       args: [BASE],           critical: true  },
+  { name: "auth-flow",                file: "tests/auth-flow.mjs",                args: [BASE],           critical: true  },
+  { name: "export-test",              file: "tests/export-test.mjs",              args: [BASE],           critical: false },
+  { name: "collab-yjs",               file: "tests/collab-yjs.mjs",               args: [BASE],           critical: false },
+  { name: "performance-smoke",        file: "tests/performance-smoke.mjs",        args: [BASE],           critical: false },
+  // Optional: require LM Studio or external services
+  { name: "agent-mode",               file: "tests/agent-mode.mjs",               args: [BASE],           critical: false },
+  { name: "adversarial-users",        file: "tests/adversarial-users.mjs",        args: [BASE, LM_URL],   critical: false },
+  { name: "vision-critique",          file: "tests/vision-critique.mjs",          args: [BASE, LM_URL],   critical: false },
 ]
 
 console.log("╔══════════════════════════════════════╗")

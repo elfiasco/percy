@@ -9,7 +9,6 @@ import {
 } from "../lib/authApi"
 import OrgSettings from "./OrgSettings"
 import AccountSettings from "./AccountSettings"
-import WelcomeModal, { shouldShowWelcome } from "./WelcomeModal"
 import NewProjectModal from "../components/NewProjectModal"
 import { useToast, useDialog } from "../components/Toaster"
 import WorkspaceSearchTrigger from "../components/WorkspaceSearchTrigger"
@@ -221,7 +220,6 @@ export default function ProjectsPage() {
   const [error,          setError]          = useState<string | null>(null)
   const [settingsOpen,   setSettingsOpen]   = useState(false)
   const [accountOpen,    setAccountOpen]    = useState(false)
-  const [welcomeOpen,    setWelcomeOpen]    = useState(false)
   const [newProjectOpen, setNewProjectOpen] = useState(false)
 
   // Allow other pages to open the new-project modal via URL: /projects?new=1
@@ -234,11 +232,6 @@ export default function ProjectsPage() {
       setSearchParams(next, { replace: true })
     }
   }, [searchParams, setSearchParams])
-
-  // Show welcome modal once per user (localStorage key)
-  useEffect(() => {
-    if (user && shouldShowWelcome(user)) setWelcomeOpen(true)
-  }, [user])
 
   // Pick the user's first org by default
   useEffect(() => {
@@ -481,7 +474,6 @@ export default function ProjectsPage() {
 
       {settingsOpen && <OrgSettings org={activeOrg} onClose={() => setSettingsOpen(false)} />}
       {accountOpen  && <AccountSettings onClose={() => setAccountOpen(false)} />}
-      {welcomeOpen && user && <WelcomeModal user={user} onClose={() => setWelcomeOpen(false)} />}
       {newProjectOpen && (
         <NewProjectModal
           orgId={activeOrg.id}
@@ -519,6 +511,12 @@ function ProjectCard({ project, folders, onOpen, onDelete, onRename, onMove, ope
   const [editing,  setEditing]  = useState(false)
   const [draft,    setDraft]    = useState(project.name)
   const updated = new Date(project.updated_at * 1000)
+  const daysAgo = Math.floor((Date.now() - project.updated_at * 1000) / 86400_000)
+  const relativeTime = daysAgo === 0 ? "Edited today"
+    : daysAgo === 1 ? "Edited yesterday"
+    : daysAgo < 30  ? `Edited ${daysAgo} days ago`
+    : daysAgo < 365 ? `Edited ${Math.floor(daysAgo / 30)}mo ago`
+    : `Edited ${updated.toLocaleDateString(undefined, { month: "short", year: "numeric" })}`
 
   return (
     <div className="bg-surface border border-edge overflow-hidden hover:border-paper/30 transition-colors group relative">
@@ -551,7 +549,7 @@ function ProjectCard({ project, folders, onOpen, onDelete, onRename, onMove, ope
             >{project.name}</div>
           )}
           <div className="text-[10px] text-muted/70">
-            {opening ? "Opening…" : project.doc_source ? `Updated ${updated.toLocaleDateString()}` : "No file uploaded yet"}
+            {opening ? "Opening…" : project.doc_source ? relativeTime : "No file uploaded yet"}
           </div>
         </div>
         <div className="relative">
