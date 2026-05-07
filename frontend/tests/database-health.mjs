@@ -122,17 +122,12 @@ if (orgId) {
   }
 
   {
-    const r = await page.request.get(`${BASE}/api/projects`)
+    const r = await page.request.get(`${BASE}/api/orgs/${orgId}/projects`)
     const b = await r.json().catch(() => ({}))
-    chk("GET /api/projects", r.status(), b)
+    chk("GET /api/orgs/:orgId/projects", r.status(), b)
   }
 
   if (projId) {
-    {
-      const r = await page.request.get(`${BASE}/api/projects/${projId}`)
-      const b = await r.json().catch(() => ({}))
-      chk(`GET /api/projects/:id`, r.status(), b)
-    }
     {
       const r = await page.request.patch(`${BASE}/api/projects/${projId}`, {
         data: { name: `DBH-Renamed-${TAG}` },

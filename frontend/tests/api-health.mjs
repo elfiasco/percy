@@ -148,13 +148,9 @@ await check("POST /api/projects", async () => {
   return r
 })
 
-await check("GET /api/projects", async () => {
-  return page.request.get(`${BASE}/api/projects`)
-})
-
-await check("GET /api/projects/:projId", async () => {
-  if (!projId) throw new Error("projId not available — prior step failed")
-  return page.request.get(`${BASE}/api/projects/${projId}`)
+await check("GET /api/orgs/:orgId/projects", async () => {
+  if (!orgId) throw new Error("orgId not available — prior step failed")
+  return page.request.get(`${BASE}/api/orgs/${orgId}/projects`)
 })
 
 await check("PATCH /api/projects/:projId (rename)", async () => {
