@@ -313,6 +313,16 @@ async def agent_chat(request: Request):
     except Exception as exc:
         raise HTTPException(503, f"no LLM available: {exc}")
 
+    def _safe_llm(system: str, user: str) -> str:
+        try:
+            return llm(system, user)
+        except RuntimeError as exc:
+            raise HTTPException(503, f"LLM unavailable: {exc}")
+        except Exception as exc:
+            raise HTTPException(503, f"LLM error: {exc}")
+
+    llm = _safe_llm
+
     decision = agent_router.classify(user_prompt, llm_call=llm)
     log.info("agent_chat: mode=%s (%.2f, %s) prompt=%r",
              decision.mode, decision.confidence, decision.method, user_prompt[:80])

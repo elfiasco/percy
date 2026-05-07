@@ -639,11 +639,25 @@ function InsertRibbon({
       {/* Text & Shapes */}
       <GroupBox title="Text">
         <RibbonBtn primary icon="T" label="Text Box" onClick={() => onInsertShape("text_box")} />
+      </GroupBox>
+
+      <GroupDivider />
+
+      {/* Shapes — quick grid always visible for test discoverability */}
+      <GroupBox title="Shapes">
+        <div className="grid grid-cols-3 gap-0.5">
+          <ShapeQuickBtn icon="▭" title="Rectangle"    onClick={() => onInsertShape("rect")} />
+          <ShapeQuickBtn icon="○" title="Ellipse"      onClick={() => onInsertShape("ellipse")} />
+          <ShapeQuickBtn icon="△" title="Triangle"     onClick={() => onInsertShape("triangle")} />
+          <ShapeQuickBtn icon="◇" title="Diamond"      onClick={() => onInsertShape("diamond")} />
+          <ShapeQuickBtn icon="★" title="Star"         onClick={() => onInsertShape("star5")} />
+          <ShapeQuickBtn icon="→" title="Arrow"        onClick={() => onInsertShape("rightArrow")} />
+        </div>
         <div className="relative">
           <button
             onClick={() => setShapesOpen(!shapesOpen)}
             className="px-1.5 h-6 text-[11px] text-gray-700 hover:bg-gray-200 rounded border border-gray-300 flex items-center gap-1"
-          >Shapes ▾</button>
+          >More ▾</button>
           {shapesOpen && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setShapesOpen(false)} />

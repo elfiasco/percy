@@ -188,7 +188,10 @@ await step("Update text_box text (el1) — PATCH /text", async () => {
   const r = await page.request.patch(
     `${BASE}/api/docs/${docId}/slides/1/elements/${el1Id}/text`,
     {
-      data: { text: "Hello World" },
+      data: {
+        kind: "paragraphs",
+        paragraphs: [{ runs: [{ text: "Hello World" }] }],
+      },
       headers: { "Content-Type": "application/json" },
     }
   )

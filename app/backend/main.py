@@ -3486,6 +3486,7 @@ def add_slide(doc_id: str, after_n: int = 0):
     # renumber
     for i, s in enumerate(doc.slides):
         s.slide_number = i + 1
+    d["slide_count"] = len(doc.slides)
     log.info("studio: added blank slide at position %d in %s", pos, doc_id)
     return {"slide_count": len(doc.slides), "new_slide_n": pos}
 
@@ -3504,6 +3505,7 @@ def delete_slide(doc_id: str, n: int):
     doc.slides.pop(idx)
     for i, s in enumerate(doc.slides):
         s.slide_number = i + 1
+    d["slide_count"] = len(doc.slides)
     log.info("studio: deleted slide %d from %s", n, doc_id)
     return {"slide_count": len(doc.slides)}
 
@@ -7520,6 +7522,21 @@ def _apply_text_update(el: Any, el_type: str, req: TextUpdateRequest) -> None:
             if tc.font_italic is not None: cf.font.font_italic = tc.font_italic
             if tc.font_size   is not None: cf.font.font_size   = tc.font_size
             if tc.font_name   is not None: cf.font.font_name   = tc.font_name
+
+
+@app.get("/api/docs/{doc_id}/slides/{n}/elements/{element_id}")
+def get_element(doc_id: str, n: int, element_id: str):
+    """Return a single element's serialized representation."""
+    d = _require(doc_id)
+    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
+    for i, e in enumerate(slide.elements):
+        if _element_id(e, i) == element_id:
+            w = getattr(slide, "width", 13.333)
+            h = getattr(slide, "height", 7.5)
+            return _serialize_element(e, i, w, h)
+    raise HTTPException(404, f"Element {element_id!r} not found on slide {n}")
 
 
 # ── Text content endpoints ─────────────────────────────────────────────────────

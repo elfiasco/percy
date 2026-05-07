@@ -142,7 +142,7 @@ await step("Click Insert tab in ribbon", async () => {
 await snap("02-insert-tab")
 
 await step("Click Text Box button", async () => {
-  const textBtn = page.locator('button').filter({ hasText: /^text.?box$/i }).first()
+  const textBtn = page.locator('button').filter({ hasText: /text.?box/i }).first()
   if (await textBtn.count() === 0) throw new Error("Text Box button not found")
   await textBtn.click()
   await page.waitForTimeout(800)
@@ -194,7 +194,7 @@ await step("Insert subtitle text box (2nd text element)", async () => {
   const insertTab = page.locator('[role="tab"], button').filter({ hasText: /^insert$/i }).first()
   if (await insertTab.count()) await insertTab.click()
   await page.waitForTimeout(300)
-  const textBtn = page.locator('button').filter({ hasText: /^text.?box$/i }).first()
+  const textBtn = page.locator('button').filter({ hasText: /text.?box/i }).first()
   if (await textBtn.count()) {
     await textBtn.click()
     await page.waitForTimeout(600)
@@ -258,7 +258,7 @@ await step("Add content text box on slide 2", async () => {
   const insertTab = page.locator('[role="tab"], button').filter({ hasText: /^insert$/i }).first()
   if (await insertTab.count()) await insertTab.click()
   await page.waitForTimeout(300)
-  const textBtn = page.locator('button').filter({ hasText: /^text.?box$/i }).first()
+  const textBtn = page.locator('button').filter({ hasText: /text.?box/i }).first()
   if (await textBtn.count()) {
     await textBtn.click()
     await page.waitForTimeout(600)
