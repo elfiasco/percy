@@ -5590,6 +5590,26 @@ def delete_element(doc_id: str, n: int, element_id: str):
     raise HTTPException(404, f"Element {element_id!r} not found on slide {n}")
 
 
+class BulkDeleteElementsRequest(BaseModel):
+    element_ids: list[str]
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/elements/bulk-delete")
+def bulk_delete_elements(doc_id: str, n: int, req: BulkDeleteElementsRequest):
+    """Delete multiple elements in a single undo-able operation."""
+    _snapshot_doc(doc_id)
+    d    = _require(doc_id)
+    doc  = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
+    id_set = set(req.element_ids)
+    before = len(slide.elements)
+    slide.elements = [e for i, e in enumerate(slide.elements) if _element_id(e, i) not in id_set]
+    deleted = before - len(slide.elements)
+    return {"ok": True, "deleted": deleted}
+
+
 @app.post("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/duplicate")
 def duplicate_element(doc_id: str, n: int, element_id: str):
     """Deep-copy an element, offset by 0.25 inches, append to slide."""

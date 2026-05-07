@@ -51,15 +51,14 @@ async function snap(name) {
 }
 
 async function apiElements(docId) {
-  for (let i = 0; i < 2; i++) {
-    const r = await page.request.get(`${BASE}/api/docs/${docId}/slides/1/elements`)
-    if (r.ok()) {
-      const b = await r.json()
-      return b.elements ?? []
-    }
-    await page.waitForTimeout(1000)
-  }
-  throw new Error("GET elements failed after retry")
+  const result = await page.evaluate(async ({ base, id }) => {
+    const r = await fetch(`${base}/api/docs/${id}/slides/1/elements`)
+    if (!r.ok) return { error: r.status }
+    const b = await r.json()
+    return { elements: b.elements ?? [] }
+  }, { base: BASE, id: docId })
+  if (result.error) throw new Error(`GET elements HTTP ${result.error}`)
+  return result.elements
 }
 
 // Find an input in a label whose span matches the given letter (X, Y, W, or H)
@@ -87,9 +86,17 @@ async function findPositionInput(letter) {
 
 async function setPositionInput(letter, value) {
   const inp = await findPositionInput(letter)
-  await inp.click({ clickCount: 3 })
-  await inp.fill(String(value))
-  await inp.press("Enter")
+  // Click once to move focus (this may trigger onBlur on the previous input,
+  // causing a PATCH + setSelectedElement → useEffect reset of all input values).
+  await inp.click()
+  // Wait for any blur-triggered PATCH to complete and for React's useEffect
+  // to fire and reset the input states before we start typing.
+  await page.waitForTimeout(800)
+  // Now select all and type the new value
+  await page.keyboard.press("Control+a")
+  await page.keyboard.type(String(value))
+  await page.waitForTimeout(200)
+  await page.keyboard.press("Enter")
   await page.waitForTimeout(1500)
 }
 
@@ -108,6 +115,7 @@ page = await ctx.newPage()
 page.on("console", (msg) => {
   if (msg.type() === "error") console.warn(`     [browser] ${msg.text().slice(0, 100)}`)
 })
+
 
 // ── Phase 1: Auth + project setup ─────────────────────────────────────────────
 console.log("── Phase 1: Setup")
@@ -189,9 +197,13 @@ await snap("01-studio-open")
 console.log("\n── Phase 3: Select element → Shape Format")
 
 await step("Click the element div to select it", async () => {
-  const el = page.locator('[data-element="true"]').first()
-  if (!await el.count()) throw new Error("element not found on canvas")
-  await el.click()
+  const found = await page.evaluate(() => {
+    const el = document.querySelector('[data-element="true"]')
+    if (!el) return false
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
+    return true
+  })
+  if (!found) throw new Error("element not found on canvas")
   await page.waitForTimeout(500)
 })
 await snap("02-element-selected")

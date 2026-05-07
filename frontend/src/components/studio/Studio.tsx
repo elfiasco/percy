@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import type { DocInfo } from "../../lib/types"
 import type { StudioElement } from "../../lib/studioTypes"
-import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, duplicateElement as duplicateElementApi, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, updateElementFlags, applyLayoutPreset, groupElements, ungroupElement, generateSlideContent, rerenderAllSlides, importSlides, bulkUpdateStyle, generateNotesBulk, addSlide, duplicateSlide, fetchSlidePins, pinSlide, bulkDeleteElementsByName, optimizeSlideLayout, splitElementToSlides, insertSummarySlide, autoDetectSections, fitTextToElements, optimizeImages, expandSlide, mergeElements, generateAltTextBulk, statsExportCsvUrl, statsExportJsonUrl, polishSlideText, insertToc, outlineExportUrl, notesExportUrl, generateConclusionSlide, thumbnailsZipUrl, textExportUrl, fixNumberedLists, cloneSlideTo, duplicateDeck, bulkFontReplace, clearNotes } from "../../lib/studioApi"
+import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, bulkDeleteElements, duplicateElement as duplicateElementApi, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, updateElementFlags, applyLayoutPreset, groupElements, ungroupElement, generateSlideContent, rerenderAllSlides, importSlides, bulkUpdateStyle, generateNotesBulk, addSlide, duplicateSlide, fetchSlidePins, pinSlide, bulkDeleteElementsByName, optimizeSlideLayout, splitElementToSlides, insertSummarySlide, autoDetectSections, fitTextToElements, optimizeImages, expandSlide, mergeElements, generateAltTextBulk, statsExportCsvUrl, statsExportJsonUrl, polishSlideText, insertToc, outlineExportUrl, notesExportUrl, generateConclusionSlide, thumbnailsZipUrl, textExportUrl, fixNumberedLists, cloneSlideTo, duplicateDeck, bulkFontReplace, clearNotes } from "../../lib/studioApi"
 import type { ElementStyleData } from "../../lib/studioTypes"
 import * as api from "../../lib/api"
 import StudioSlideStrip from "./StudioSlideStrip"
@@ -843,8 +843,10 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       } catch (e) { console.warn("[Percy] Y.Doc delete failed:", e) }
     }
     try {
-      for (const id of toDelete) {
-        await deleteElement(doc.doc_id, selectedSlideRef.current, id)
+      if (toDelete.length > 1) {
+        await bulkDeleteElements(doc.doc_id, selectedSlideRef.current, toDelete)
+      } else {
+        await deleteElement(doc.doc_id, selectedSlideRef.current, toDelete[0])
       }
       setSelectedElement(null)
       setMultiSelectIds(new Set())
@@ -1044,9 +1046,9 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       // character — the bug the user reported as "backspace spazzes out".
       if (target.isContentEditable || target.closest('[contenteditable="true"]')) return
 
-      // Delete / Backspace → remove element
+      // Delete / Backspace → remove element (single or multi-select)
       if (e.key === "Delete" || e.key === "Backspace") {
-        if (selectedElementRef.current) { e.preventDefault(); handleDelete() }
+        if (selectedElementRef.current || multiSelectIdsRef.current.size > 0) { e.preventDefault(); handleDelete() }
         return
       }
 

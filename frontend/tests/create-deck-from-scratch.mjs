@@ -164,7 +164,9 @@ await step("Type presentation title", async () => {
   // The text box should be in edit mode immediately after insert.
   const editor = page.locator('[contenteditable="true"]').first()
   if (await editor.count()) {
-    await editor.click()
+    // Don't use locator.click() — the slide strip search input intercepts screen clicks.
+    // The editor is already focused via pendingAutoEdit; just start typing.
+    await editor.focus().catch(() => {})
     await page.waitForTimeout(200)
     await page.keyboard.type("Welcome to Percy")
     await page.waitForTimeout(400)

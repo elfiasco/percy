@@ -54,21 +54,16 @@ async function snap(name) {
   await page.screenshot({ path: `${OUT}/${name}.png`, fullPage: false }).catch(() => {})
 }
 
-async function apiElementCount(docId, retries = 3) {
-  for (let i = 0; i < retries; i++) {
-    const r = await page.request.get(`${BASE}/api/docs/${docId}/slides/1/elements`)
-    if (r.ok()) {
-      const b = await r.json()
-      return b.element_count ?? b.elements?.length ?? 0
-    }
-    const body = await r.text().catch(() => "")
-    if (i < retries - 1) {
-      console.log(`     ⚠ elements ${r.status()} retry ${i + 1}: ${body.slice(0, 120)}`)
-      await new Promise((res) => setTimeout(res, 1500))
-    } else {
-      throw new Error(`GET elements HTTP ${r.status()}: ${body.slice(0, 300)}`)
-    }
-  }
+async function apiElementCount(docId) {
+  // Use in-browser fetch so the request hits the same App Runner instance as the UI
+  const result = await page.evaluate(async ({ base, id }) => {
+    const r = await fetch(`${base}/api/docs/${id}/slides/1/elements`)
+    if (!r.ok) return { error: r.status, body: await r.text().catch(() => "") }
+    const b = await r.json()
+    return { count: b.element_count ?? b.elements?.length ?? 0 }
+  }, { base: BASE, id: docId })
+  if (result.error) throw new Error(`GET elements HTTP ${result.error}: ${result.body.slice(0, 300)}`)
+  return result.count
 }
 
 async function clickInsertTab() {
@@ -170,7 +165,9 @@ await step("Insert Text Box via ribbon", async () => {
   const btn = page.locator('button').filter({ hasText: /text.?box/i }).first()
   if (!await btn.count()) throw new Error("Text Box button not found in Insert ribbon")
   await btn.click()
-  await page.waitForTimeout(1500)
+  await page.waitForTimeout(1200)
+  await page.keyboard.press("Escape")
+  await page.waitForTimeout(500)
 })
 
 await step("API confirms 1 element after text box insert", async () => {
@@ -184,7 +181,9 @@ await step("Insert Rectangle via ribbon", async () => {
   const btn = page.locator('button[title="Rectangle"]').first()
   if (!await btn.count()) throw new Error("Rectangle button not found")
   await btn.click()
-  await page.waitForTimeout(1500)
+  await page.waitForTimeout(1200)
+  await page.keyboard.press("Escape")
+  await page.waitForTimeout(500)
 })
 
 await step("API confirms 2 elements after rectangle insert", async () => {

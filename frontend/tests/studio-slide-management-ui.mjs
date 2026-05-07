@@ -52,27 +52,25 @@ async function snap(name) {
 }
 
 async function apiSlideCount(docId) {
-  for (let i = 0; i < 2; i++) {
-    const r = await page.request.get(`${BASE}/api/docs/${docId}/slides`)
-    if (r.ok()) {
-      const b = await r.json()
-      return b.slide_count ?? b.slides?.length ?? 0
-    }
-    await page.waitForTimeout(1000)
-  }
-  throw new Error("GET slides failed after retry")
+  const result = await page.evaluate(async ({ base, id }) => {
+    const r = await fetch(`${base}/api/docs/${id}/stats`)
+    if (!r.ok) return { error: r.status, body: await r.text().catch(() => "") }
+    const b = await r.json()
+    return { count: b.slide_count ?? 0 }
+  }, { base: BASE, id: docId })
+  if (result.error) throw new Error(`GET stats HTTP ${result.error}: ${result.body.slice(0, 200)}`)
+  return result.count
 }
 
 async function apiElementCount(docId, slideNum) {
-  for (let i = 0; i < 2; i++) {
-    const r = await page.request.get(`${BASE}/api/docs/${docId}/slides/${slideNum}/elements`)
-    if (r.ok()) {
-      const b = await r.json()
-      return b.element_count ?? b.elements?.length ?? 0
-    }
-    await page.waitForTimeout(1000)
-  }
-  throw new Error(`GET elements for slide ${slideNum} failed after retry`)
+  const result = await page.evaluate(async ({ base, id, slide }) => {
+    const r = await fetch(`${base}/api/docs/${id}/slides/${slide}/elements`)
+    if (!r.ok) return { error: r.status, body: await r.text().catch(() => "") }
+    const b = await r.json()
+    return { count: b.element_count ?? b.elements?.length ?? 0 }
+  }, { base: BASE, id: docId, slide: slideNum })
+  if (result.error) throw new Error(`GET elements HTTP ${result.error}: ${result.body.slice(0, 200)}`)
+  return result.count
 }
 
 async function clickInsertTab() {
@@ -209,29 +207,17 @@ await snap("03-three-slides")
 console.log("\n── Phase 4: Navigate slide strip")
 
 await step("Click slide 2 in slide strip", async () => {
-  // Try multiple selectors for slide strip items
-  const stripSelectors = [
-    page.locator('[data-slide-strip]').nth(1),
-    page.locator('[data-slide-index="1"]').first(),
-    page.locator('[data-slide-index="2"]').first(),
-  ]
-  let clicked = false
-  for (const sel of stripSelectors) {
-    if (await sel.count()) {
-      await sel.click()
-      await page.waitForTimeout(800)
-      clicked = true
-      break
-    }
-  }
-  if (!clicked) {
-    // Fallback: look for numbered slide thumbnails
-    console.log("     Trying fallback slide strip click")
-    const slides = page.locator('[data-slide-strip]')
-    const total = await slides.count()
-    console.log(`     Found ${total} slide strip items`)
+  const slide2 = page.locator('[data-slide-strip][data-slide-n="2"]').first()
+  if (await slide2.count()) {
+    await slide2.click()
+    await page.waitForTimeout(800)
+  } else {
+    // Fallback: nth(1) in case data-slide-n is not rendered yet
+    const strips = page.locator('[data-slide-strip]')
+    const total = await strips.count()
+    console.log(`     Found ${total} slide strip items (data-slide-n="2" not found)`)
     if (total >= 2) {
-      await slides.nth(1).click()
+      await strips.nth(1).click()
       await page.waitForTimeout(800)
     } else {
       throw new Error("Could not find slide 2 in strip")
@@ -298,14 +284,18 @@ await step("API confirms ≥1 element on slide 1", async () => {
 await snap("06-element-on-slide-1")
 
 await step("Click slide 2 in strip to switch to it", async () => {
-  const strips = page.locator('[data-slide-strip]')
-  const total = await strips.count()
+  const slide2 = page.locator('[data-slide-strip][data-slide-n="2"]').first()
+  const strips  = page.locator('[data-slide-strip]')
+  const total   = await strips.count()
   console.log(`     Slide strip items: ${total}`)
-  if (total >= 2) {
+  if (await slide2.count()) {
+    await slide2.click()
+    await page.waitForTimeout(800)
+  } else if (total >= 2) {
     await strips.nth(1).click()
     await page.waitForTimeout(800)
   } else {
-    console.log("     Only 1 slide strip item visible — trying new slide button")
+    console.log("     Only 1 slide strip item visible — using new slide button")
     await clickNewSlide()
   }
 })

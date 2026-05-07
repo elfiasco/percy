@@ -55,29 +55,30 @@ async function snap(name) {
 }
 
 async function apiElements(docId) {
-  for (let i = 0; i < 2; i++) {
-    const r = await page.request.get(`${BASE}/api/docs/${docId}/slides/1/elements`)
-    if (r.ok()) {
-      const b = await r.json()
-      return b.elements ?? []
-    }
-    await page.waitForTimeout(1000)
-  }
-  throw new Error("GET elements failed after retry")
+  const result = await page.evaluate(async ({ base, id }) => {
+    const r = await fetch(`${base}/api/docs/${id}/slides/1/elements`)
+    if (!r.ok) return { error: r.status }
+    const b = await r.json()
+    return { elements: b.elements ?? [] }
+  }, { base: BASE, id: docId })
+  if (result.error) throw new Error(`GET elements HTTP ${result.error}`)
+  return result.elements
 }
 
 async function apiElementText(docId, elId) {
   for (let i = 0; i < 4; i++) {
-    const r = await page.request.get(`${BASE}/api/docs/${docId}/slides/1/elements/${elId}/text`)
-    if (r.ok()) {
+    const result = await page.evaluate(async ({ base, id, el }) => {
+      const r = await fetch(`${base}/api/docs/${id}/slides/1/elements/${el}/text`)
+      if (!r.ok) return { error: r.status }
       const b = await r.json()
-      // Support multiple response shapes
       const txt = b.paragraphs?.[0]?.runs?.[0]?.text
         ?? b.paragraphs?.[0]?.text
         ?? b.text
         ?? ""
-      if (txt) return txt
-    }
+      return { txt }
+    }, { base: BASE, id: docId, el: elId })
+    if (result.error) { await page.waitForTimeout(1000); continue }
+    if (result.txt) return result.txt
     await page.waitForTimeout(1000)
   }
   return ""
@@ -99,9 +100,13 @@ async function insertTextBox(text) {
 
   const editor = page.locator('[contenteditable="true"]').first()
   if (await editor.count()) {
-    await editor.fill(text)
+    // Use keyboard.type() so Tiptap's onUpdate fires (fill() bypasses ProseMirror input events).
+    // Use Ctrl+Enter to save — Escape calls onCancel() which discards edits in headless Chrome.
+    await editor.focus().catch(() => {})
+    await page.waitForTimeout(200)
+    await page.keyboard.type(text)
     await page.waitForTimeout(400)
-    await page.keyboard.press("Escape")
+    await page.keyboard.press("Control+Enter")
     await page.waitForTimeout(1000)
   } else {
     throw new Error("contenteditable not found after text box insert")
@@ -277,12 +282,26 @@ await step("API confirms 3 elements", async () => {
 await snap("05-three-elements")
 
 await step("Click element 2 (Delete Me) to select it", async () => {
-  const els = page.locator('[data-element="true"]')
-  const count = await els.count()
+  const count = await page.locator('[data-element="true"]').count()
   console.log(`     Canvas element divs: ${count}`)
   if (count < 3) throw new Error(`Expected ≥3 element divs, got ${count}`)
-  await els.nth(count - 1).click()
+  const found = await page.evaluate((idx) => {
+    const els = document.querySelectorAll('[data-element="true"]')
+    const el = els[idx]
+    if (!el) return false
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
+    return true
+  }, count - 1)
+  if (!found) throw new Error("last element not found via dispatch")
   await page.waitForTimeout(400)
+  const inEditMode = await page.evaluate(() => {
+    const a = document.activeElement
+    return !!(a?.isContentEditable || a?.closest?.('[contenteditable="true"]'))
+  })
+  if (inEditMode) {
+    await page.keyboard.press("Escape")
+    await page.waitForTimeout(300)
+  }
 })
 
 await step("Press Delete to remove the 3rd text box", async () => {

@@ -287,6 +287,8 @@ function RichTextEditor({
       // Y.Doc is the truth — server worker will persist. Just notify parent.
       lastSavedJSON.current = jsonStr
       onSaved(next)
+      // Also persist to REST API so text is readable by non-collab clients / tests.
+      updateElementText(docId, slideN, elementId, next).catch(() => {})
       return
     }
     try {

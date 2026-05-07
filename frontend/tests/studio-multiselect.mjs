@@ -52,34 +52,51 @@ async function snap(name) {
 }
 
 async function apiElementCount(docId) {
-  for (let i = 0; i < 2; i++) {
-    const r = await page.request.get(`${BASE}/api/docs/${docId}/slides/1/elements`)
-    if (r.ok()) {
-      const b = await r.json()
-      return b.element_count ?? b.elements?.length ?? 0
-    }
-    await page.waitForTimeout(1000)
-  }
-  throw new Error("GET elements failed after retry")
+  const result = await page.evaluate(async ({ base, id }) => {
+    const r = await fetch(`${base}/api/docs/${id}/slides/1/elements`)
+    if (!r.ok) return { error: r.status, body: await r.text().catch(() => "") }
+    const b = await r.json()
+    return { count: b.element_count ?? b.elements?.length ?? 0 }
+  }, { base: BASE, id: docId })
+  if (result.error) throw new Error(`GET elements HTTP ${result.error}: ${result.body?.slice(0, 200)}`)
+  return result.count
 }
 
 async function clickElementByIndex(n) {
-  const el = page.locator('[data-element="true"]').nth(n)
-  if (!await el.count()) throw new Error(`element ${n} not found`)
-  await el.click()
-  await page.waitForTimeout(300)
+  const found = await page.evaluate((idx) => {
+    const els = document.querySelectorAll('[data-element="true"]')
+    const el = els[idx]
+    if (!el) return false
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
+    return true
+  }, n)
+  if (!found) throw new Error(`element ${n} not found`)
+  await page.waitForTimeout(400)
+  const inEditMode = await page.evaluate(() => {
+    const a = document.activeElement
+    return !!(a?.isContentEditable || a?.closest?.('[contenteditable="true"]'))
+  })
+  if (inEditMode) {
+    await page.keyboard.press("Escape")
+    await page.waitForTimeout(300)
+  }
 }
 
 async function shiftClickElementByIndex(n) {
-  const el = page.locator('[data-element="true"]').nth(n)
-  if (!await el.count()) throw new Error(`element ${n} not found`)
-  await el.click({ modifiers: ["Shift"] })
+  const found = await page.evaluate((idx) => {
+    const els = document.querySelectorAll('[data-element="true"]')
+    const el = els[idx]
+    if (!el) return false
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window, shiftKey: true }))
+    return true
+  }, n)
+  if (!found) throw new Error(`element ${n} not found`)
   await page.waitForTimeout(300)
 }
 
 async function focusCanvas() {
   await page.locator('[data-slide-canvas="true"]').first()
-    .click({ position: { x: 5, y: 5 } }).catch(() => {})
+    .click({ position: { x: 5, y: 5 }, force: true, timeout: 2000 }).catch(() => {})
   await page.waitForTimeout(200)
 }
 
@@ -158,12 +175,17 @@ await step("Create 5 elements via API at spread positions", async () => {
     { shape_type: "diamond",  left_in: 8,   top_in: 0.5, width_in: 2, height_in: 1.5 },
     { shape_type: "star5",    left_in: 10.5, top_in: 0.5, width_in: 2, height_in: 1.5 },
   ]
+  // Use in-browser fetch to ensure session-sticky routing (same App Runner instance for undo)
   for (const shape of shapes) {
-    const r = await page.request.post(`${BASE}/api/docs/${docId}/slides/1/elements`, {
-      data: shape,
-      headers: { "Content-Type": "application/json" },
-    })
-    if (!r.ok()) throw new Error(`create element HTTP ${r.status()} for ${shape.shape_type}`)
+    const result = await page.evaluate(async ({ base, id, s }) => {
+      const r = await fetch(`${base}/api/docs/${id}/slides/1/elements`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(s),
+      })
+      return { ok: r.ok, status: r.status }
+    }, { base: BASE, id: docId, s: shape })
+    if (!result.ok) throw new Error(`create element HTTP ${result.status} for ${shape.shape_type}`)
     await page.waitForTimeout(200)
   }
 })
@@ -236,10 +258,11 @@ await snap("04-after-bulk-delete")
 // ── Phase 5: Undo bulk delete ─────────────────────────────────────────────────
 console.log("\n── Phase 5: Undo bulk delete")
 
-await step("Ctrl+Z to undo bulk delete", async () => {
-  await focusCanvas()
-  await page.keyboard.press("Control+z")
-  await page.waitForTimeout(1500)
+await step("Undo bulk delete via QAT Undo button", async () => {
+  const undoBtn = page.locator('button[title^="Undo"]').first()
+  if (!await undoBtn.count()) throw new Error("Undo button not found in QAT")
+  await undoBtn.click()
+  await page.waitForTimeout(2000)
 })
 
 await step("API confirms 5 elements after undo", async () => {

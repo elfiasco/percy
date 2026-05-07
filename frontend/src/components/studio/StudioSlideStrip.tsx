@@ -552,6 +552,8 @@ export default function StudioSlideStrip({
             {!isCollapsed && (
               <div
                 draggable
+                data-slide-strip
+                data-slide-n={n}
                 onDragStart={(e) => handleDragStart(e, n)}
                 onDragOver={(e) => handleDragOver(e, n)}
                 onDrop={(e) => handleDrop(e, n)}

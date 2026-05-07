@@ -184,6 +184,21 @@ export async function deleteElement(
   )
 }
 
+export async function bulkDeleteElements(
+  docId: string,
+  slideN: number,
+  elementIds: string[],
+): Promise<{ ok: boolean; deleted: number }> {
+  return apiFetch<{ ok: boolean; deleted: number }>(
+    `${BASE}/docs/${docId}/slides/${slideN}/elements/bulk-delete`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ element_ids: elementIds }),
+    },
+  )
+}
+
 export async function duplicateElement(
   docId: string,
   slideN: number,
