@@ -77,6 +77,14 @@ from app.backend import billing_api as _billing_api  # noqa: E402
 from app.backend import sso_api as _sso_api  # noqa: E402
 from app.backend import admin_api as _admin_api  # noqa: E402
 _auth_db_mod.init_db()
+
+# ── Rate limit middleware — must be installed BEFORE auth so that when it runs
+#    the auth middleware has already set request.state.user (inner → outer order:
+#    last add_middleware call is outermost, so rate_limit is installed first =
+#    innermost, auth installed last = outermost and runs first on each request).
+from app.backend import rate_limit as _rate_limit  # noqa: E402
+_rate_limit.install(app)
+
 app.add_middleware(_auth_mod.AuthMiddleware)
 app.include_router(_auth_mod.router)
 app.include_router(_workspace_api.router)
@@ -103,9 +111,7 @@ from app.backend import audit_middleware as _audit_mw  # noqa: E402
 _audit_mw.install(app)
 
 
-# ── Rate limit middleware (token-bucket per user / per IP) ────────────────────
-from app.backend import rate_limit as _rate_limit  # noqa: E402
-_rate_limit.install(app)
+
 
 
 @app.get("/api/health", include_in_schema=False)
