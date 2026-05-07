@@ -64,10 +64,12 @@ function TiptapTextRendererImpl({
   // Exit edit mode if the element is deselected
   useEffect(() => { if (!selected && editing) setEditing(false) }, [selected, editing])
 
-  // Auto-enter edit mode when this element was just inserted (text box insert)
+    // Auto-enter edit mode when this element was just inserted.
+  // No `selected` guard — selectedIds in StudioCanvas is internal state that
+  // hasn't been updated yet when this effect first fires on mount.
   useEffect(() => {
-    if (selected && consumePendingAutoEdit(element.id)) setEditing(true)
-  }, [selected, element.id])
+    if (consumePendingAutoEdit(element.id)) setEditing(true)
+  }, [element.id])
 
   // Broadcast edit-presence so peers know we're typing here.
   useEffect(() => {

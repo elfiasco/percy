@@ -57,10 +57,12 @@ function TiptapShapeRendererImpl({
 
   useEffect(() => { if (!selected && editing) setEditing(false) }, [selected, editing])
 
-  // Auto-enter edit mode when this element was just inserted (text box insert)
+  // Auto-enter edit mode when this element was just inserted (text box insert).
+  // No `selected` guard — selectedIds in StudioCanvas is internal and won't be
+  // set yet at the time this effect fires on first mount.
   useEffect(() => {
-    if (selected && consumePendingAutoEdit(element.id)) setEditing(true)
-  }, [selected, element.id])
+    if (consumePendingAutoEdit(element.id)) setEditing(true)
+  }, [element.id])
 
   // Broadcast edit-presence so peers know we're typing here.
   useEffect(() => {
@@ -94,13 +96,14 @@ function TiptapShapeRendererImpl({
 
   const pngUrl = `${elementPngUrl(docId, slideN, element.id)}?v=${renderKey}`
 
-  if (editing && content) {
+  const editContent = content ?? { kind: "paragraphs" as const, paragraphs: [] }
+  if (editing) {
     return (
       <ShapeTextEditor
         elementId={element.id}
         docId={docId}
         slideN={slideN}
-        initialContent={content}
+        initialContent={editContent}
         onSaved={(c) => { setContent(c); setEditing(false) }}
         onCancel={() => setEditing(false)}
       />
