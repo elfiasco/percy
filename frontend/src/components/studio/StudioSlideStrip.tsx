@@ -499,7 +499,7 @@ export default function StudioSlideStrip({
         {timerBudgetMin !== null && !editingTimer && (
           <button
             onClick={async () => { setTimerBudgetMin(null); try { await setTimerBudget(docId, null) } catch { /* ignore */ } }}
-            className="text-[8px] text-muted/30 hover:text-bad transition-colors ml-auto shrink-0"
+            className="text-[8px] text-gray-300 hover:text-red-500 transition-colors ml-auto shrink-0"
             title="Clear timer budget"
           >×</button>
         )}
