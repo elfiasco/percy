@@ -15,13 +15,14 @@
  *   7.  element-operations       — element CRUD (create/edit/style/duplicate/delete)
  *   8.  element-gallery          — all 12 shape types + image upload, style/text/position
  *   9.  auth-flow                — full auth lifecycle (signup/login/settings/logout)
+ *   10. studio-ui-flow           — UI-driven deck creation, shape inserts, text edit, delete
  * Suites run (optional):
- *   10. export-test              — PPTX download + re-upload round-trip
- *   11. collab-yjs               — Yjs real-time collab (2 browser sessions)
- *   12. performance-smoke        — Response time measurements (no hard fail)
- *   13. agent-mode               — AI agent panel UI + API checks (needs API key)
- *   14. adversarial-users        — LM Studio generates edge cases
- *   15. vision-critique          — Gemma 4 vision reviews every major page
+ *   11. export-test              — PPTX download + re-upload round-trip
+ *   12. collab-yjs               — Yjs real-time collab (2 browser sessions)
+ *   13. performance-smoke        — Response time measurements (no hard fail)
+ *   14. agent-mode               — AI agent panel UI + API checks (needs API key)
+ *   15. adversarial-users        — LM Studio generates edge cases
+ *   16. vision-critique          — Gemma 4 vision reviews every major page
  *
  * Each suite writes its own timestamped JSON to tests/results/.
  * This file appends a summary row to test-log.json after every run.
@@ -50,6 +51,7 @@ const SUITES = [
   { name: "element-operations",       file: "tests/element-operations.mjs",       args: [BASE],           critical: true  },
   { name: "element-gallery",          file: "tests/element-gallery.mjs",          args: [BASE],           critical: true  },
   { name: "auth-flow",                file: "tests/auth-flow.mjs",                args: [BASE],           critical: true  },
+  { name: "studio-ui-flow",           file: "tests/studio-ui-flow.mjs",           args: [BASE],           critical: true  },
   { name: "export-test",              file: "tests/export-test.mjs",              args: [BASE],           critical: false },
   { name: "collab-yjs",               file: "tests/collab-yjs.mjs",               args: [BASE],           critical: false },
   { name: "performance-smoke",        file: "tests/performance-smoke.mjs",        args: [BASE],           critical: false },
