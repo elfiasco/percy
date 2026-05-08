@@ -1,0 +1,120 @@
+/*
+ * PercyLoader animations.
+ *
+ * The variable-width polygons + residuals form a 100% pixel-perfect render
+ * of the mark. We animate via thick stroked centerlines drawing inside the
+ * polygons' masks — as the centerline reveals along its arc, the polygon
+ * underneath becomes visible.
+ *
+ *   0    -> 700ms    bowl centerline draws → bowl polygon reveals
+ *   700  -> 850ms    held breath
+ *   850  -> 1100ms   slash centerline strikes → slash polygon reveals
+ *   1100ms           impact pulse
+ *   1700ms -> ∞      ambient breath
+ */
+
+.percy-loader {
+  display: inline-block;
+  overflow: visible;
+}
+
+/* === Breath: ambient idle, infinite loop. ================================ */
+
+.percy-loader__breath {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: percy-breath 5.5s ease-in-out 1.7s infinite;
+}
+
+@keyframes percy-breath {
+  0%, 100% { transform: scale(1) rotate(0deg); }
+  50%      { transform: scale(1.012) rotate(0.5deg); }
+}
+
+/* === Impact pulse at strike completion. ================================== */
+
+.percy-loader__impact {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: percy-impact 1.7s linear forwards;
+}
+
+@keyframes percy-impact {
+  0%, 64% { transform: scale(1); }
+  68%     { transform: scale(1.022); animation-timing-function: cubic-bezier(0.34, 1.56, 0.64, 1); }
+  76%     { transform: scale(0.997); }
+  84%     { transform: scale(1.004); }
+  100%    { transform: scale(1); }
+}
+
+/* === Bowl phase: centerline draws inside the bowl mask, revealing the
+ *     polygon as it goes. =========================================== */
+
+.percy-loader__bowl-mask-stroke {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation: percy-bowl-reveal 0.7s cubic-bezier(0.45, 0.05, 0.5, 0.95) forwards;
+}
+
+/* Residuals draw with the same easing as the bowl mask so they appear
+ * along with the bowl reveal rather than on their own clock. */
+.percy-loader__bowl-residual {
+  stroke-dasharray: 1000;
+  stroke-dashoffset: 1000;
+  animation: percy-bowl-residual 0.7s cubic-bezier(0.45, 0.05, 0.5, 0.95) forwards;
+}
+
+@keyframes percy-bowl-reveal {
+  0%   { stroke-dashoffset: 100; }
+  100% { stroke-dashoffset: 0; }
+}
+
+@keyframes percy-bowl-residual {
+  0%   { stroke-dashoffset: 1000; }
+  100% { stroke-dashoffset: 0; }
+}
+
+/* === Slash phase: same idea, faster easing, after the bowl pause. ======= */
+
+.percy-loader__slash-mask-stroke {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation: percy-slash-reveal 0.25s cubic-bezier(0.55, 0, 0.2, 1) 0.85s forwards;
+}
+
+.percy-loader__slash-residual {
+  stroke-dasharray: 1000;
+  stroke-dashoffset: 1000;
+  animation: percy-slash-residual 0.25s cubic-bezier(0.55, 0, 0.2, 1) 0.85s forwards;
+}
+
+@keyframes percy-slash-reveal {
+  0%   { stroke-dashoffset: 100; }
+  100% { stroke-dashoffset: 0; }
+}
+
+@keyframes percy-slash-residual {
+  0%   { stroke-dashoffset: 1000; }
+  100% { stroke-dashoffset: 0; }
+}
+
+/* === Reduced motion: render the final mark statically. ================== */
+
+@media (prefers-reduced-motion: reduce) {
+  .percy-loader__breath,
+  .percy-loader__impact,
+  .percy-loader__bowl-mask-stroke,
+  .percy-loader__slash-mask-stroke,
+  .percy-loader__bowl-residual,
+  .percy-loader__slash-residual {
+    animation: none !important;
+  }
+  .percy-loader__bowl-mask-stroke,
+  .percy-loader__slash-mask-stroke {
+    stroke-dashoffset: 0;
+  }
+  .percy-loader__bowl-residual,
+  .percy-loader__slash-residual {
+    stroke-dashoffset: 0;
+  }
+}

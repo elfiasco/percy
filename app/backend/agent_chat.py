@@ -89,7 +89,7 @@ def _make_llm_call(model_hint: str | None = None):
 
     if provider == "bedrock" or (not provider and os.environ.get("PERCY_BEDROCK_MODEL")):
         return _bedrock_call(model_hint or os.environ.get("PERCY_BEDROCK_MODEL")
-                             or "anthropic.claude-sonnet-4-v1:0")
+                             or "us.anthropic.claude-sonnet-4-6")
     if provider == "anthropic" or (not provider and os.environ.get("ANTHROPIC_API_KEY")):
         return _anthropic_call(model_hint or "claude-sonnet-4-6")
     if provider == "openai" or (not provider and os.environ.get("OPENAI_API_KEY")):
@@ -191,6 +191,79 @@ def _openai_call(model: str):
             data = json.loads(r.read())
         return data["choices"][0]["message"]["content"]
     return call
+
+
+def _codex_call(model: str):
+    """OpenAI Codex via the Responses API.
+
+    Codex models (codex-mini-latest, o4-mini, o3) use /v1/responses rather
+    than /v1/chat/completions. The system prompt is passed as developer-role
+    context; the user turn goes in ``input``.
+
+    Usage token telemetry is captured in the same per-call stash as the
+    Anthropic wrappers so cost tracking works end-to-end.
+    """
+    import urllib.request, urllib.error
+    api_key = os.environ["OPENAI_API_KEY"]
+
+    def call(system: str, user: str) -> str:
+        # Codex Responses API supports reasoning + coding tools.
+        # ``reasoning.effort`` defaults to "medium"; set higher for complex scripts.
+        reasoning_effort = os.environ.get("PERCY_CODEX_REASONING", "medium")
+        body: dict = {
+            "model": model,
+            "input": [
+                {"role": "developer", "content": system},
+                {"role": "user",      "content": user},
+            ],
+            "reasoning": {"effort": reasoning_effort},
+        }
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/responses",
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=180) as r:
+                data = json.loads(r.read())
+        except urllib.error.HTTPError as exc:
+            err_body = exc.read().decode("utf-8", "replace")[:400]
+            raise RuntimeError(f"Codex HTTP {exc.code}: {err_body}")
+        # Harvest usage for cost tracking
+        usage = data.get("usage") or {}
+        if usage:
+            _stash_usage("openai", model,
+                         usage.get("input_tokens", 0),
+                         usage.get("output_tokens", 0))
+        # Extract text from the response output list
+        for item in data.get("output", []):
+            if item.get("type") == "message":
+                for chunk in item.get("content", []):
+                    if chunk.get("type") == "output_text":
+                        return chunk["text"]
+        raise RuntimeError(f"Codex returned no text output: {json.dumps(data)[:300]}")
+    return call
+
+
+def _make_coder_llm_call(model_hint: str | None = None):
+    """Return a callable for the Coder skill (scripted_plan mode).
+
+    Preference order:
+      1. PERCY_CODER_MODEL set → use Codex (or explicit model) via OpenAI
+      2. OPENAI_API_KEY present → codex-mini-latest
+      3. Fall back to the same LLM as the Editor skill
+    """
+    coder_model = model_hint or os.environ.get("PERCY_CODER_MODEL", "")
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    if coder_model and api_key:
+        return _codex_call(coder_model)
+    if api_key and not coder_model:
+        return _codex_call("codex-mini-latest")
+    # No OpenAI key — reuse the main LLM (Bedrock Claude etc.)
+    return _make_llm_call()
 
 
 _LMSTUDIO_BASE = os.environ.get("PERCY_LMSTUDIO_URL", "http://localhost:1234").rstrip("/")
@@ -309,13 +382,13 @@ async def agent_chat(request: Request):
     # --- 1. Classify mode ---------------------------------------------------
     t_start = time.time()
     try:
-        llm = _make_llm_call(ctx.get("model"))
+        _raw_llm = _make_llm_call(ctx.get("model"))
     except Exception as exc:
         raise HTTPException(503, f"no LLM available: {exc}")
 
     def _safe_llm(system: str, user: str) -> str:
         try:
-            return llm(system, user)
+            return _raw_llm(system, user)
         except RuntimeError as exc:
             raise HTTPException(503, f"LLM unavailable: {exc}")
         except Exception as exc:
@@ -364,8 +437,23 @@ async def agent_chat(request: Request):
             log.warning("agent_chat: materials retrieval failed: %s", exc)
 
     if decision.mode == "scripted_plan":
+        # Use Codex (OpenAI Responses API) when available — it excels at
+        # generating Python scripts. Falls back to the main LLM if no key.
+        coder_model_hint = ctx.get("coder_model")
+        _raw_coder_llm = _make_coder_llm_call(coder_model_hint)
+        if _raw_coder_llm is not _raw_llm:
+            def _safe_coder(system: str, user: str) -> str:
+                try:
+                    return _raw_coder_llm(system, user)
+                except RuntimeError as exc:
+                    raise HTTPException(503, f"Codex unavailable: {exc}")
+                except Exception as exc:
+                    raise HTTPException(503, f"Codex error: {exc}")
+            coder_llm = _safe_coder
+        else:
+            coder_llm = llm
         plan = planner.plan_scripted(user_prompt, catalog_json=catalog_json,
-                                      context=planner_context, llm_call=llm)
+                                      context=planner_context, llm_call=coder_llm)
     elif decision.mode == "iterative_plan":
         plan = _run_iterative(user_prompt, catalog_json=catalog_json,
                               context=planner_context, llm_call=llm,

@@ -1,10 +1,18 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 import type { StudioElement } from "../../lib/studioTypes"
+import { agentChat, type AgentChatResponse } from "../../lib/agentApi"
 
 interface ChatMessage {
   role: "user" | "assistant"
   content: string
   ts: number
+  meta?: {
+    mode?: string
+    actions_taken?: number
+    ok?: boolean
+    error?: string | null
+    needs_clarification?: boolean
+  }
 }
 
 interface Props {
@@ -15,27 +23,10 @@ interface Props {
   onRefresh?: () => void
 }
 
-async function sendChat(
-  docId: string,
-  slideN: number,
-  elementId: string | null,
-  messages: ChatMessage[],
-): Promise<{ reply: string; actions_taken: number }> {
-  const res = await fetch(`/api/docs/${docId}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      slide_n:    slideN,
-      element_id: elementId,
-      messages:   messages.map((m) => ({ role: m.role, content: m.content })),
-    }),
-  })
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText)
-    throw new Error(`${res.status} ${text}`)
-  }
-  const data = await res.json()
-  return { reply: data.reply as string, actions_taken: (data.actions_taken as number) ?? 0 }
+const MODE_LABELS: Record<string, string> = {
+  static_plan:   "editor",
+  iterative_plan: "iterative",
+  scripted_plan:  "coder",
 }
 
 export default function StudioChat({ docId, slideN, selectedElement, onClose, onRefresh }: Props) {
@@ -49,10 +40,9 @@ export default function StudioChat({ docId, slideN, selectedElement, onClose, on
     setError(null)
     setInput("")
   }, [])
-  const bottomRef               = useRef<HTMLDivElement>(null)
-  const inputRef                = useRef<HTMLTextAreaElement>(null)
+  const bottomRef = useRef<HTMLDivElement>(null)
+  const inputRef  = useRef<HTMLTextAreaElement>(null)
 
-  // auto-scroll on new messages
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages, thinking])
@@ -62,21 +52,43 @@ export default function StudioChat({ docId, slideN, selectedElement, onClose, on
     if (!text || thinking) return
 
     const userMsg: ChatMessage = { role: "user", content: text, ts: Date.now() }
-    setMessages((prev) => [...prev, userMsg])
+    const history = [...messages, userMsg]
+    setMessages(history)
     setInput("")
     setError(null)
     setThinking(true)
 
     try {
-      const { reply, actions_taken } = await sendChat(docId, slideN, selectedElement?.id ?? null, [...messages, userMsg])
-      setMessages((prev) => [...prev, { role: "assistant", content: reply, ts: Date.now() }])
-      if (actions_taken > 0) onRefresh?.()
+      const resp: AgentChatResponse = await agentChat(
+        docId,
+        history.map((m) => ({ role: m.role, content: m.content })),
+        {
+          viewing_slide_n:     slideN,
+          selected_element_id: selectedElement?.id ?? null,
+        },
+      )
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: resp.reply,
+          ts: Date.now(),
+          meta: {
+            mode:               resp.mode,
+            actions_taken:      resp.actions_taken,
+            ok:                 resp.execution?.ok,
+            error:              resp.execution?.error,
+            needs_clarification: resp.needs_clarification,
+          },
+        },
+      ])
+      if ((resp.actions_taken ?? 0) > 0) onRefresh?.()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setThinking(false)
     }
-  }, [input, thinking, docId, slideN, selectedElement, messages])
+  }, [input, thinking, docId, slideN, selectedElement, messages, onRefresh])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -91,7 +103,7 @@ export default function StudioChat({ docId, slideN, selectedElement, onClose, on
       <div className="h-10 shrink-0 flex items-center justify-between px-3 border-b border-edge">
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-bold text-accent uppercase tracking-widest">AI Chat</span>
-          <span className="text-[10px] text-muted">Percy Assistant</span>
+          <span className="text-[10px] text-muted">Percy Agent</span>
         </div>
         <div className="flex items-center gap-0.5">
           <button
@@ -137,10 +149,11 @@ export default function StudioChat({ docId, slideN, selectedElement, onClose, on
                 "Insert a red rectangle at the top",
                 "Move this element to the center",
                 "Set the slide background to #1a1a2e",
-                "Duplicate this element",
-                "Delete this element",
+                "Add a bar chart of Q1–Q4 revenue",
+                "For each row in the data, add a tile",
               ].map((hint) => (
-                <li key={hint}
+                <li
+                  key={hint}
                   className="cursor-pointer px-2 py-1 rounded hover:bg-white/5 transition-colors text-muted/70 hover:text-slate-300"
                   onClick={() => setInput(hint)}
                 >
@@ -164,6 +177,30 @@ export default function StudioChat({ docId, slideN, selectedElement, onClose, on
               }`}
             >
               {msg.content}
+              {msg.meta && msg.role === "assistant" && (
+                <div className="mt-1.5 flex flex-wrap gap-1 items-center">
+                  {msg.meta.mode && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-accent/10 text-accent/70 border border-accent/20">
+                      {MODE_LABELS[msg.meta.mode] ?? msg.meta.mode}
+                    </span>
+                  )}
+                  {(msg.meta.actions_taken ?? 0) > 0 && !msg.meta.needs_clarification && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-good/10 text-good/80 border border-good/20">
+                      {msg.meta.actions_taken} change{msg.meta.actions_taken !== 1 ? "s" : ""}
+                    </span>
+                  )}
+                  {msg.meta.ok === false && msg.meta.error && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-bad/10 text-bad/80 border border-bad/20" title={msg.meta.error}>
+                      failed
+                    </span>
+                  )}
+                  {msg.meta.needs_clarification && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400/80 border border-amber-500/20">
+                      needs info
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         ))}

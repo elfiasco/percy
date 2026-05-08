@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react"
 import {
   ResponsiveContainer,
   BarChart, Bar,
@@ -10,7 +9,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, LabelList,
 } from "recharts"
 import type { ChartData, ChartSeriesData, ChartLegendData } from "../../../lib/studioTypes"
-import { fetchChartData } from "../../../lib/studioApi"
+import { useStudioChartPayload } from "../../../lib/studio/payloadHooks"
 import type { NativeRendererProps } from "./RendererRegistry"
 import { registerRenderer } from "./RendererRegistry"
 
@@ -206,7 +205,10 @@ function ColumnOrBarChart({ data, horizontal, stacked, percent }: {
                     fontSize: s.data_labels.font_size ?? 9,
                     fill: s.data_labels.font_color || "#444",
                   }}
-                  formatter={(v: number) => percent ? `${(v * 100).toFixed(0)}%` : String(v)}
+                  formatter={(v: unknown) => {
+                    const n = Number(v)
+                    return percent && Number.isFinite(n) ? `${(n * 100).toFixed(0)}%` : String(v ?? "")
+                  }}
                 />
               )}
             </Bar>
@@ -245,7 +247,7 @@ function LineOrAreaChart({ data, area, stacked }: { data: ChartData; area: boole
                 fillOpacity={0.45}
                 stackId={stacked ? "stack" : undefined}
                 isAnimationActive={false}
-                dot={s.marker.style && s.marker.style !== "none"}
+                dot={!!s.marker.style && s.marker.style !== "none"}
               />
             )
           }
@@ -287,16 +289,7 @@ function dashArray(dash: string | null | undefined): string | undefined {
 function PieOrDonutChart({ data, donut, exploded }: { data: ChartData; donut: boolean; exploded: boolean }) {
   const pieData = buildPieData(data)
   const lp = legendProps(data.legend)
-  const showLabels = data.series[0]?.data_labels.show
-  const labelFormatter = (entry: { name: string; value: number; percent?: number }) => {
-    const dl = data.series[0]?.data_labels
-    if (!dl) return entry.name
-    const parts: string[] = []
-    if (dl.show_cat_name) parts.push(entry.name)
-    if (dl.show_val)      parts.push(String(entry.value))
-    if (dl.show_percent && entry.percent !== undefined) parts.push(`${(entry.percent * 100).toFixed(0)}%`)
-    return parts.join(" ")
-  }
+  const showLabels = !!data.series[0]?.data_labels.show
   return (
     <ResponsiveContainer width="100%" height="100%">
       <PieChart>
@@ -313,7 +306,7 @@ function PieOrDonutChart({ data, donut, exploded }: { data: ChartData; donut: bo
           startAngle={90 - (data.plot_properties.first_slice_ang ?? 0)}
           endAngle={90 - (data.plot_properties.first_slice_ang ?? 0) - 360}
           isAnimationActive={false}
-          label={showLabels ? labelFormatter : undefined}
+          label={showLabels}
           paddingAngle={exploded ? 2 : 0}
         >
           {pieData.map((entry, i) => (
@@ -425,17 +418,7 @@ function ChartByType({ data }: { data: ChartData }) {
 // ── Top-level component ───────────────────────────────────────────────────────
 
 function ChartRendererImpl({ element, docId, slideN, renderKey }: NativeRendererProps) {
-  const [data, setData]   = useState<ChartData | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    setError(null)
-    fetchChartData(docId, slideN, element.id)
-      .then((d) => { if (!cancelled) setData(d) })
-      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)) })
-    return () => { cancelled = true }
-  }, [docId, slideN, element.id, renderKey])
+  const { data, error } = useStudioChartPayload(docId, slideN, element.id, renderKey)
 
   if (error) {
     return (

@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, useRef } from "react"
 import type {
   ChartData, ChartDataUpdate, ChartSeriesData, ChartAxisData,
 } from "../../lib/studioTypes"
-import { fetchChartData, updateChartData } from "../../lib/studioApi"
+import { commitChartData } from "../../lib/studio/commands"
+import { studioStore } from "../../lib/studio/store"
 
 // ── Lightweight UI primitives (match StudioPropertiesPanel style) ─────────────
 
@@ -655,7 +656,7 @@ export default function ChartEditorPanel({ docId, slideN, elementId, onCommit }:
     let cancelled = false
     setError(null)
     setData(null)
-    fetchChartData(docId, slideN, elementId)
+    studioStore.loadChartPayload(docId, slideN, elementId)
       .then((d) => { if (!cancelled) setData(d) })
       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)) })
     return () => { cancelled = true }
@@ -668,7 +669,8 @@ export default function ChartEditorPanel({ docId, slideN, elementId, onCommit }:
     if (!update) return
     setSaving(true)
     try {
-      const fresh = await updateChartData(docId, slideN, elementId, update)
+      const fresh = await commitChartData(elementId, update)
+      if (!fresh) return
       setData(fresh)
       onCommit()
     } catch (e) {
@@ -676,7 +678,7 @@ export default function ChartEditorPanel({ docId, slideN, elementId, onCommit }:
     } finally {
       setSaving(false)
     }
-  }, [docId, slideN, elementId, onCommit])
+  }, [elementId, onCommit])
 
   const patch = useCallback((update: ChartDataUpdate) => {
     // Optimistically merge into local state so the UI feels instant.

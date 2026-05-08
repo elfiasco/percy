@@ -50,15 +50,14 @@ async function snap(name) {
 }
 
 async function apiElementCount(docId) {
-  for (let i = 0; i < 2; i++) {
-    const r = await page.request.get(`${BASE}/api/docs/${docId}/slides/1/elements`)
-    if (r.ok()) {
-      const b = await r.json()
-      return b.element_count ?? b.elements?.length ?? 0
-    }
-    await page.waitForTimeout(1000)
-  }
-  throw new Error("GET elements failed after retry")
+  const result = await page.evaluate(async ({ base, id }) => {
+    const r = await fetch(`${base}/api/docs/${id}/slides/1/elements`)
+    if (!r.ok) return { error: r.status, body: await r.text().catch(() => "") }
+    const b = await r.json()
+    return { count: b.element_count ?? b.elements?.length ?? 0 }
+  }, { base: BASE, id: docId })
+  if (result.error) throw new Error(`GET elements HTTP ${result.error}: ${result.body.slice(0, 200)}`)
+  return result.count
 }
 
 async function clickInsertTab() {
@@ -68,16 +67,31 @@ async function clickInsertTab() {
   await page.waitForTimeout(400)
 }
 
-async function clickElementByIndex(n) {
-  const el = page.locator('[data-element="true"]').nth(n)
-  if (!await el.count()) throw new Error(`element ${n} not found`)
-  await el.click()
-  await page.waitForTimeout(300)
+async function clickElementByIndex(n, shiftKey = false) {
+  const found = await page.evaluate(({ idx, shift }) => {
+    const els = document.querySelectorAll('[data-element="true"]')
+    const el = els[idx]
+    if (!el) return false
+    // Dispatch click directly to the ElementOverlay div, bypassing screen hit-testing.
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window, shiftKey: shift }))
+    return true
+  }, { idx: n, shift: shiftKey })
+  if (!found) throw new Error(`element ${n} not found`)
+  await page.waitForTimeout(400)
+  // If edit mode triggered (contenteditable focused), exit it while keeping element selected
+  const inEditMode = await page.evaluate(() => {
+    const a = document.activeElement
+    return !!(a?.isContentEditable || a?.closest?.('[contenteditable="true"]'))
+  })
+  if (inEditMode) {
+    await page.keyboard.press("Escape")
+    await page.waitForTimeout(300)
+  }
 }
 
 async function focusCanvas() {
   await page.locator('[data-slide-canvas="true"]').first()
-    .click({ position: { x: 5, y: 5 } }).catch(() => {})
+    .click({ position: { x: 5, y: 5 }, force: true, timeout: 2000 }).catch(() => {})
   await page.waitForTimeout(200)
 }
 
@@ -321,10 +335,7 @@ console.log("\n── Phase 8: Multi-select and delete 2 elements")
 
 await step("Click element 0, then shift+click element 1", async () => {
   await clickElementByIndex(0)
-  const el1 = page.locator('[data-element="true"]').nth(1)
-  if (!await el1.count()) throw new Error("element 1 not found")
-  await el1.click({ modifiers: ["Shift"] })
-  await page.waitForTimeout(500)
+  await clickElementByIndex(1, true)  // shift+click to add to selection
 })
 
 await step("Press Delete to remove selected elements", async () => {

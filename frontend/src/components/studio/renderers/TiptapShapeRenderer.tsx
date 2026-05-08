@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react"
 import TextBubbleMenu from "../TextBubbleMenu"
-import { useEditor, EditorContent, generateHTML } from "@tiptap/react"
+import { useEditor, EditorContent } from "@tiptap/react"
 import Collaboration from "@tiptap/extension-collaboration"
-import CollaborationCursor from "@tiptap/extension-collaboration-cursor"
 import type { ParagraphsTextContent } from "../../../lib/studioTypes"
-import { fetchElementText, updateElementText, elementPngUrl } from "../../../lib/studioApi"
+import { updateElementText, elementPngUrl } from "../../../lib/studioApi"
+import { useStudioTextPayload } from "../../../lib/studio/payloadHooks"
+import { studioStore } from "../../../lib/studio/store"
 import { paragraphsToTiptap, tiptapToParagraphs } from "../../../lib/bridge/tiptapAdapter"
 import { bridgeExtensions } from "../../../lib/bridge/extensions"
 import { setActiveTiptapEditor } from "../../../lib/bridge/activeEditor"
@@ -44,16 +45,14 @@ function TiptapShapeRendererImpl({
   const [content, setContent] = useState<ParagraphsTextContent | null>(null)
   const [editing, setEditing] = useState(false)
   const [imgError, setImgError] = useState(false)
+  const payload = useStudioTextPayload(docId, slideN, element.id, renderKey)
 
   // Fetch text content (paragraphs/runs) — used for the overlay's content
   // and for hydrating Yjs in collab mode. We don't need element style here
   // because the PNG already bakes fill/border in.
   useEffect(() => {
-    let cancelled = false
-    fetchElementText(docId, slideN, element.id)
-      .then((c) => { if (!cancelled) setContent(c.kind === "paragraphs" ? c : null) })
-      .catch(() => { if (!cancelled) setContent(null) })
-  }, [docId, slideN, element.id, renderKey])
+    if (payload.text) setContent(payload.text.kind === "paragraphs" ? payload.text : null)
+  }, [payload.text])
 
   // Track whether the element has ever been explicitly selected so we know when
   // a deselect is intentional vs just the initial unselected state on mount.
@@ -221,6 +220,7 @@ function ShapeTextEditor({
     const next = tiptapToParagraphs(json)
     if (isCollabActive) {
       lastSavedJSON.current = jsonStr
+      studioStore.setTextPayload(elementId, next)
       onSaved(next)
       // Also persist to REST API so text is readable by non-collab clients / tests.
       updateElementText(docId, slideN, elementId, next).catch(() => {})
@@ -228,6 +228,7 @@ function ShapeTextEditor({
     }
     try {
       const updated = await updateElementText(docId, slideN, elementId, next)
+      studioStore.setTextPayload(elementId, updated)
       if (updated.kind === "paragraphs") {
         lastSavedJSON.current = JSON.stringify(paragraphsToTiptap(updated))
         onSaved(updated)

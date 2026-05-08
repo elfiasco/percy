@@ -1,6 +1,6 @@
 import * as Y from "yjs"
 import type { YjsRoom } from "./yjsRoom"
-import type { StudioElement } from "../studioTypes"
+import type { ElementStyleData, ElementStyleUpdate, StudioElement } from "../studioTypes"
 
 /**
  * Bridge ↔ Y.Doc adapter.
@@ -167,6 +167,133 @@ export function observeSlideElements(
   // Initial dispatch
   cb([...elements.keys()])
   return () => elements.unobserve(handler)
+}
+
+// ── Chart + Table data in Yjs ─────────────────────────────────────────────────
+//
+// Chart and table payloads are stored as JSON-encoded strings under
+// "chart_data" and "table_data" respectively. This allows local-first edits:
+// the editor writes to Yjs immediately; the REST API is called in the background.
+//
+// Both types are opaque blobs from the Y.Doc perspective — no merge semantics,
+// last-writer-wins. This is acceptable because chart/table editing is single-user
+// in practice (the table renderer exits editing when deselected).
+
+export function setElementChartData(
+  room: YjsRoom,
+  elementId: string,
+  data: unknown,
+): void {
+  const m = elementMap(room, elementId)
+  room.doc.transact(() => {
+    m.set("chart_data", JSON.stringify(data))
+    const cur = (m.get("render_rev") as number | undefined) ?? 0
+    m.set("render_rev", cur + 1)
+  })
+}
+
+export function getElementChartData(
+  room: YjsRoom,
+  elementId: string,
+): unknown | null {
+  const m = room.doc.getMap<Y.Map<unknown>>("elements").get(elementId)
+  if (!m) return null
+  const s = m.get("chart_data") as string | undefined
+  if (!s) return null
+  try { return JSON.parse(s) }
+  catch { return null }
+}
+
+export function setElementTableData(
+  room: YjsRoom,
+  elementId: string,
+  data: unknown,
+): void {
+  const m = elementMap(room, elementId)
+  room.doc.transact(() => {
+    m.set("table_data", JSON.stringify(data))
+    const cur = (m.get("render_rev") as number | undefined) ?? 0
+    m.set("render_rev", cur + 1)
+  })
+}
+
+export function getElementTableData(
+  room: YjsRoom,
+  elementId: string,
+): unknown | null {
+  const m = room.doc.getMap<Y.Map<unknown>>("elements").get(elementId)
+  if (!m) return null
+  const s = m.get("table_data") as string | undefined
+  if (!s) return null
+  try { return JSON.parse(s) }
+  catch { return null }
+}
+
+// ── Style data in Yjs ─────────────────────────────────────────────────────────
+//
+// Style is stored as a JSON-encoded string under the key "style_data" in the
+// element's Y.Map. This keeps the Y.Doc schema simple (one string per element
+// instead of many individual keys) and avoids conflicts with scalar geometry.
+
+const STYLE_DATA_KEY = "style_data"
+
+/** Write the full style payload into the Y.Doc (optimistic, no REST call). */
+export function setElementStyleData(
+  room: YjsRoom,
+  elementId: string,
+  style: ElementStyleData,
+): void {
+  const m = elementMap(room, elementId)
+  room.doc.transact(() => {
+    m.set(STYLE_DATA_KEY, JSON.stringify(style))
+    // Also bump rev so non-style-aware peers know to re-fetch.
+    const cur = (m.get("style_rev") as number | undefined) ?? 0
+    m.set("style_rev", cur + 1)
+  })
+}
+
+/** Apply a partial style update to an existing style in the Y.Doc. */
+export function patchElementStyleData(
+  room: YjsRoom,
+  elementId: string,
+  update: ElementStyleUpdate,
+): void {
+  const m = elementMap(room, elementId)
+  const existing: ElementStyleData = (() => {
+    try {
+      const s = m.get(STYLE_DATA_KEY) as string | undefined
+      return s ? (JSON.parse(s) as ElementStyleData) : {} as ElementStyleData
+    } catch { return {} as ElementStyleData }
+  })()
+  setElementStyleData(room, elementId, { ...existing, ...update } as ElementStyleData)
+}
+
+/** Read the style payload from the Y.Doc, or null if not yet hydrated. */
+export function getElementStyleData(
+  room: YjsRoom,
+  elementId: string,
+): ElementStyleData | null {
+  const m = room.doc.getMap<Y.Map<unknown>>("elements").get(elementId)
+  if (!m) return null
+  const s = m.get(STYLE_DATA_KEY) as string | undefined
+  if (!s) return null
+  try { return JSON.parse(s) as ElementStyleData }
+  catch { return null }
+}
+
+/** Subscribe to style changes on a single element. */
+export function observeElementStyle(
+  room: YjsRoom,
+  elementId: string,
+  cb: (style: ElementStyleData) => void,
+): () => void {
+  const m = elementMap(room, elementId)
+  const handler = () => {
+    const style = getElementStyleData(room, elementId)
+    if (style) cb(style)
+  }
+  m.observe(handler)
+  return () => m.unobserve(handler)
 }
 
 /** Remove an element from the Y.Doc + clean its text fragment. */

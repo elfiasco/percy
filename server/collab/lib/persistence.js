@@ -101,17 +101,36 @@ export class PostgresStore {
 }
 
 export async function pickStore() {
-  const url = process.env.DATABASE_URL
+  const url = databaseUrlFromEnv()
   if (url) {
     const { default: pg } = await import("pg")
-    const pool = new pg.Pool({ connectionString: url })
+    const pool = new pg.Pool({
+      connectionString: url,
+      connectionTimeoutMillis: parseInt(process.env.DB_CONNECT_TIMEOUT_MS || "3000", 10),
+    })
     const store = new PostgresStore(pool)
-    await store.ensureSchema()
-    console.log("persistence:", store.describe())
-    return store
+    try {
+      await store.ensureSchema()
+      console.log("persistence:", store.describe())
+      return store
+    } catch (e) {
+      await pool.end().catch(() => {})
+      console.warn("persistence: Postgres unavailable, falling back to filesystem snapshots:", e.message)
+    }
   }
   const dir = process.env.SNAPSHOT_DIR || "./snapshots"
   const store = new FileStore(dir)
   console.log("persistence:", store.describe(), "(set DATABASE_URL for Postgres)")
   return store
+}
+
+function databaseUrlFromEnv() {
+  if (process.env.DATABASE_URL) return process.env.DATABASE_URL
+  const host = process.env.DB_HOST
+  const port = process.env.DB_PORT || "5432"
+  const name = process.env.DB_NAME
+  const user = process.env.DB_USER
+  const password = process.env.DB_PASSWORD
+  if (!host || !name || !user || !password) return ""
+  return `postgres://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${encodeURIComponent(name)}`
 }

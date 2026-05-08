@@ -1,17 +1,19 @@
-import { useEffect, useRef, useState, useCallback } from "react"
+import { useEffect, useRef, useState, useCallback, useMemo } from "react"
 import type { StudioElement } from "../../lib/studioTypes"
-import { fetchSlideElements, updateElementPosition, createImageElement, elementPngUrl, broadcastElement, rewriteElementText, generateTalkingPoints } from "../../lib/studioApi"
+import { createImageElement, elementPngUrl, broadcastElement, rewriteElementText, generateTalkingPoints } from "../../lib/studioApi"
 import { CanvasContext } from "./CanvasContext"
 import ElementOverlay from "./ElementOverlay"
 import InlineTextEditor from "./InlineTextEditor"
 import AnnotationOverlay from "./AnnotationOverlay"
 import { getCollabContext } from "../../lib/collab/collabContext"
-import { hydrateSlide, observeElement, observeSlideElements, readElementScalar, updateElementFields } from "../../lib/collab/bridgeYjsAdapter"
+import { hydrateSlide, observeElement, observeSlideElements, updateElementFields } from "../../lib/collab/bridgeYjsAdapter"
 import type { YjsRoom } from "../../lib/collab/yjsRoom"
 import * as Y from "yjs"
 import { setLocalSelection, setLocalPointer } from "../../lib/collab/awareness"
 import RemotePresenceLayer from "./RemotePresenceLayer"
 import LiveCursorLayer from "./LiveCursorLayer"
+import { commitElementGeometry } from "../../lib/studio/commands"
+import { studioStore, useStudioStore } from "../../lib/studio/store"
 
 interface Props {
   docId: string
@@ -41,12 +43,13 @@ interface Props {
 
 export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightIn, refreshKey, onSelectElement, onMultiSelect, onElementRotated, onDeleteElement, onDuplicateElement, onToggleLockElement, onToggleHiddenElement, onZIndexChange, onGroupElements, onUngroupElement, focusMode, onToggleFocusMode, onSlideContextMenu, onBroadcastElement, onSplitElement, onEditConnect, connectIds, colorBlindMode }: Props) {
   const containerRef               = useRef<HTMLDivElement>(null)
-  const [elements, setElements]     = useState<StudioElement[]>([])
-  const [bgColor, setBgColor]       = useState<string | null>(null)
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [loading, setLoading]       = useState(false)
-  const [error, setError]           = useState<string | null>(null)
-  const [renderKeys, setRenderKeys] = useState<Record<string, number>>({})
+  const studio                      = useStudioStore()
+  const elements                    = studio.elements
+  const bgColor                     = studio.backgroundColor
+  const selectedIds                 = useMemo(() => new Set(studio.selectedIds), [studio.selectedIds])
+  const loading                     = studio.loading
+  const error                       = studio.error
+  const renderKeys                  = studio.renderKeys
   const elementsRef                 = useRef<StudioElement[]>([])
   const selectedIdsRef              = useRef<Set<string>>(new Set())
   const [zoom, setZoom]             = useState(1.0)
@@ -66,7 +69,8 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
   const [annotating, setAnnotating]     = useState(false)
   const GRID_IN                     = 0.25
 
-  // Keep selectedIdsRef in sync for use in keyboard handler
+  // Keep refs in sync for hot keyboard/drag handlers.
+  useEffect(() => { elementsRef.current = elements }, [elements])
   useEffect(() => { selectedIdsRef.current = selectedIds }, [selectedIds])
 
   // ── Phase B: subscribe to Y.Doc for live element updates ─────────────────
@@ -79,37 +83,19 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
   // ── fetch elements when slide changes or parent refreshes ─────────────────
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    setError(null)
-    fetchSlideElements(docId, slideN)
+    studioStore.loadSlide(docId, slideN)
       .then((res) => {
         if (!cancelled) {
-          setElements(res.elements)
-          elementsRef.current = res.elements
-          setBgColor(res.background_color)
-          setLoading(false)
           // Hydrate Y.Doc with the freshly-fetched element fields. Idempotent
           // (won't clobber live remote edits already in the room).
           if (room) {
             try { hydrateSlide(room, res.elements, res.background_color) }
             catch (e) { console.warn("[Percy] Y.Doc hydrate failed:", e) }
           }
-          // bump all render keys so every element PNG reloads
-          setRenderKeys((prev) => {
-            const next: Record<string, number> = {}
-            for (const el of res.elements) {
-              next[el.id] = (prev[el.id] ?? 0) + 1
-            }
-            return next
-          })
+          studioStore.bumpRenderKeys(res.elements.map((el) => el.id))
         }
       })
-      .catch((e) => {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : String(e))
-          setLoading(false)
-        }
-      })
+      .catch(() => {})
     return () => { cancelled = true }
   }, [docId, slideN, refreshKey])
 
@@ -124,19 +110,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
     // the per-element observers list.
     const wireElement = (id: string) => {
       const off = observeElement(room, id, (snap) => {
-        setElements((prev) => {
-          const idx = prev.findIndex((e) => e.id === id)
-          if (idx < 0) return prev
-          const merged = { ...prev[idx], ...snap }
-          merged.left_pct   = (merged.left_in   / slideWidthIn)  * 100
-          merged.top_pct    = (merged.top_in    / slideHeightIn) * 100
-          merged.width_pct  = (merged.width_in  / slideWidthIn)  * 100
-          merged.height_pct = (merged.height_in / slideHeightIn) * 100
-          const next = prev.slice()
-          next[idx] = merged
-          elementsRef.current = next
-          return next
-        })
+        studioStore.updateElement(id, snap)
       })
       unsubs.push(off)
       // Phase C — watch revision counters; when a peer bumps style/text/
@@ -149,7 +123,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
           ev.changes.keys.forEach((_, key) => {
             if (key === "style_rev" || key === "text_rev" || key === "render_rev") bump = true
           })
-          if (bump) setRenderKeys((prev) => ({ ...prev, [id]: (prev[id] ?? 0) + 1 }))
+          if (bump) studioStore.bumpRenderKeys([id])
         }
         elMap.observe(onRev)
         unsubs.push(() => elMap.unobserve(onRev))
@@ -171,7 +145,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
       if (["INPUT", "TEXTAREA", "SELECT"].includes(tgt.tagName)) return
       // contenteditable (Tiptap, ProseMirror) — let the editor handle the key
       if (tgt.isContentEditable || tgt.closest('[contenteditable="true"]')) return
-      if (e.key === "Escape") { setSelectedIds(new Set()); onSelectElement(null); onMultiSelect?.(new Set()) }
+      if (e.key === "Escape") { studioStore.clearSelection(); onSelectElement(null); onMultiSelect?.(new Set()) }
       if (e.key === "g" || e.key === "G") { if (!e.ctrlKey && !e.metaKey) setGridOn((v) => !v) }
       if (e.key === "s" || e.key === "S") { if (!e.ctrlKey && !e.metaKey) setSnapOn((v) => !v) }
       if (e.key === "r" || e.key === "R") { if (!e.ctrlKey && !e.metaKey) setRulerOn((v) => !v) }
@@ -194,7 +168,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
         const all = new Set(elementsRef.current.map((el) => el.id))
         onSelectElement(null)
         onMultiSelect?.(all)
-        setSelectedIds(all)
+        studioStore.setSelectedIds(all)
       }
       // Ctrl+[ send backward, Ctrl+] bring forward
       if ((e.key === "[" || e.key === "]") && (e.ctrlKey || e.metaKey)) {
@@ -220,10 +194,9 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
               try { updateElementFields(room, el.id, { z_index: newZ }) }
               catch { /* no-op */ }
             }
-            updateElementPosition(docId, slideN, el.id, { z_index: newZ })
+            commitElementGeometry(el.id, { z_index: newZ })
               .then((updated) => {
-                setElements((prev) => prev.map((e) => e.id === el.id ? updated : e))
-                onSelectElement(updated)
+                if (updated) onSelectElement(updated)
                 onZIndexChange?.(el.id)
               })
               .catch(() => {})
@@ -235,17 +208,16 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
         e.preventDefault()
         const sorted = [...elementsRef.current].sort((a, b) => a.z_index - b.z_index)
         if (!sorted.length) return
-        setSelectedIds((prev) => {
-          const prevId = prev.size === 1 ? [...prev][0] : null
-          const idx = prevId ? sorted.findIndex((el) => el.id === prevId) : -1
-          const next = e.shiftKey
-            ? sorted[(idx - 1 + sorted.length) % sorted.length]
-            : sorted[(idx + 1) % sorted.length]
-          const next_set = new Set([next.id])
-          onSelectElement(next)
-          onMultiSelect?.(next_set)
-          return next_set
-        })
+        const prev = selectedIdsRef.current
+        const prevId = prev.size === 1 ? [...prev][0] : null
+        const idx = prevId ? sorted.findIndex((el) => el.id === prevId) : -1
+        const next = e.shiftKey
+          ? sorted[(idx - 1 + sorted.length) % sorted.length]
+          : sorted[(idx + 1) % sorted.length]
+        const nextSet = new Set([next.id])
+        studioStore.setSelectedIds(nextSet)
+        onSelectElement(next)
+        onMultiSelect?.(nextSet)
       }
     }
     window.addEventListener("keydown", handler)
@@ -253,33 +225,30 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
   }, [onSelectElement])
 
   const handleSelect = useCallback((id: string, shiftKey = false) => {
-    setSelectedIds((prev) => {
-      const next = shiftKey ? new Set(prev) : new Set<string>()
-      if (shiftKey && prev.has(id)) {
-        next.delete(id)
-      } else {
-        next.add(id)
+    const prev = selectedIdsRef.current
+    const next = shiftKey ? new Set(prev) : new Set<string>()
+    if (shiftKey && prev.has(id)) {
+      next.delete(id)
+    } else {
+      next.add(id)
+    }
+    studioStore.setSelectedIds(next)
+    if (next.size === 1) {
+      const el = elementsRef.current.find((e) => e.id === [...next][0]) ?? null
+      onSelectElement(el)
+      if (room && el) {
+        try { setLocalSelection(room, { elementId: el.id, elementName: el.name }) }
+        catch { /* no-op */ }
       }
-      // notify parent
-      if (next.size === 1) {
-        const el = elements.find((e) => e.id === [...next][0]) ?? null
-        onSelectElement(el)
-        // Phase E: broadcast selection so peers see a colored ring + name tag
-        if (room && el) {
-          try { setLocalSelection(room, { elementId: el.id, elementName: el.name }) }
-          catch { /* no-op */ }
-        }
-      } else {
-        onSelectElement(null)
-        if (room) { try { setLocalSelection(room, null) } catch { /* no-op */ } }
-      }
-      onMultiSelect?.(next)
-      return next
-    })
-  }, [elements, onSelectElement, onMultiSelect, room])
+    } else {
+      onSelectElement(null)
+      if (room) { try { setLocalSelection(room, null) } catch { /* no-op */ } }
+    }
+    onMultiSelect?.(next)
+  }, [onSelectElement, onMultiSelect, room])
 
   const handleDeselect = useCallback(() => {
-    setSelectedIds(new Set())
+    studioStore.clearSelection()
     onSelectElement(null)
     onMultiSelect?.(new Set())
     if (room) { try { setLocalSelection(room, null) } catch { /* no-op */ } }
@@ -306,16 +275,16 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
     // will take this over in Phase D. Treat the API response as a no-op
     // (Y.Doc subscription already updated React state).
     try {
-      const updated = await updateElementPosition(docId, slideN, id, fields)
-      if (selectedIds.size <= 1) onSelectElement(updated)
-      setRenderKeys((prev) => ({ ...prev, [id]: (prev[id] ?? 0) + 1 }))
+      const updated = await commitElementGeometry(id, fields)
+      if (updated && selectedIdsRef.current.size <= 1) onSelectElement(updated)
+      studioStore.bumpRenderKeys([id])
     } catch (e) {
       console.error("element update (persistence) failed:", e)
     }
   }, [room, docId, slideN, onSelectElement, snap, selectedIds])
 
   const handleMultiMove = useCallback(async (deltaLeftIn: number, deltaTopIn: number) => {
-    const ids = [...selectedIds]
+    const ids = [...selectedIdsRef.current]
     const currentElements = elementsRef.current
     // Phase B: batch the Y.Doc writes in one transaction so peers see one
     // event for the whole multi-move, not N.
@@ -338,18 +307,14 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
         ids.map((id) => {
           const el = currentElements.find((e) => e.id === id)
           if (!el) return Promise.resolve(null)
-          return updateElementPosition(docId, slideN, id, {
+          return commitElementGeometry(id, {
             left_in: snap(el.left_in + deltaLeftIn),
             top_in:  snap(el.top_in  + deltaTopIn),
           })
         })
       )
       const valid = updates.filter((u): u is NonNullable<typeof u> => u !== null)
-      setRenderKeys((prev) => {
-        const next = { ...prev }
-        for (const u of valid) next[u.id] = (prev[u.id] ?? 0) + 1
-        return next
-      })
+      studioStore.bumpRenderKeys(valid.map((u) => u.id))
     } catch (e) {
       console.error("multi-move (persistence) failed:", e)
     }
@@ -362,11 +327,11 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
       catch (e) { console.warn("[Percy] Y.Doc rotation write failed:", e) }
     }
     try {
-      const updated = await updateElementPosition(docId, slideN, id, { rotation })
-      setElements((prev) => prev.map((el) => el.id === id ? updated : el))
+      const updated = await commitElementGeometry(id, { rotation })
+      if (!updated) return
       onSelectElement(updated)
       onElementRotated?.(updated)
-      setRenderKeys((prev) => ({ ...prev, [id]: (prev[id] ?? 0) + 1 }))
+      studioStore.bumpRenderKeys([id])
     } catch (e) {
       console.error("rotation update failed:", e)
     }
@@ -435,7 +400,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
       handleDeselect()
     } else {
       const ids = new Set(inside.map((el) => el.id))
-      setSelectedIds(ids)
+      studioStore.setSelectedIds(ids)
       if (inside.length === 1) {
         onSelectElement(inside[0])
       } else {
@@ -472,7 +437,8 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
     setUploading(true)
     try {
       const el = await createImageElement(docId, slideN, file)
-      setElements((prev) => [...prev, el])
+      studioStore.upsertElement(el)
+      studioStore.selectOne(el.id)
       onSelectElement(el)
     } catch (err) {
       console.error("image drop upload failed:", err)
@@ -764,7 +730,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
                   slideN={slideN}
                   onCommit={() => {
                     setInlineEditId(null)
-                    setRenderKeys((prev) => ({ ...prev, [inlineEditId]: (prev[inlineEditId] ?? 0) + 1 }))
+                    studioStore.bumpRenderKeys([inlineEditId])
                   }}
                   onCancel={() => setInlineEditId(null)}
                 />
@@ -807,9 +773,8 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
 
           const changeZ = async (newZ: number) => {
             try {
-              const updated = await updateElementPosition(docId, slideN, el.id, { z_index: newZ })
-              setElements((prev) => prev.map((e) => e.id === el.id ? updated : e))
-              if (selectedIds.size <= 1) onSelectElement(updated)
+              const updated = await commitElementGeometry(el.id, { z_index: newZ })
+              if (updated && selectedIdsRef.current.size <= 1) onSelectElement(updated)
               onZIndexChange?.(el.id)
             } catch (e) { console.error("z-index change failed:", e) }
             setCtxMenu(null)
@@ -841,7 +806,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
               action: () => {
                 const sameType = elements.filter((e) => e.type === el.type)
                 const ids = new Set(sameType.map((e) => e.id))
-                setSelectedIds(ids)
+                studioStore.setSelectedIds(ids)
                 onMultiSelect?.(ids)
                 onSelectElement(sameType.length === 1 ? sameType[0] : null)
                 setCtxMenu(null)
@@ -911,7 +876,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
                           setRewriteInput((r) => r ? { ...r, busy: true } : r)
                           rewriteElementText(docId, slideN, el.id, rewriteInput.instruction)
                             .then(() => {
-                              setRenderKeys((prev) => ({ ...prev, [el.id]: (prev[el.id] ?? 0) + 1 }))
+                              studioStore.bumpRenderKeys([el.id])
                               onZIndexChange?.(el.id)
                               setCtxMenu(null)
                               setRewriteInput(null)
@@ -930,7 +895,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
                         setRewriteInput((r) => r ? { ...r, busy: true } : r)
                         rewriteElementText(docId, slideN, el.id, rewriteInput.instruction)
                           .then(() => {
-                            setRenderKeys((prev) => ({ ...prev, [el.id]: (prev[el.id] ?? 0) + 1 }))
+                            studioStore.bumpRenderKeys([el.id])
                             onZIndexChange?.(el.id)
                             setCtxMenu(null)
                             setRewriteInput(null)

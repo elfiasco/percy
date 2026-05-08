@@ -1,6 +1,5 @@
-import { useEffect, useState } from "react"
-import type { TableData, TableCellEditor, CellBorderSide } from "../../../lib/studioTypes"
-import { fetchTableData } from "../../../lib/studioApi"
+import type { TableCellEditor, CellBorderSide } from "../../../lib/studioTypes"
+import { useStudioTablePayload } from "../../../lib/studio/payloadHooks"
 import type { NativeRendererProps } from "./RendererRegistry"
 import { registerRenderer } from "./RendererRegistry"
 
@@ -63,17 +62,7 @@ function CellTd({ cell, fontSize }: { cell: TableCellEditor; fontSize: number | 
 }
 
 function TableRendererImpl({ element, docId, slideN, renderKey }: NativeRendererProps) {
-  const [data, setData]   = useState<TableData | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    setError(null)
-    fetchTableData(docId, slideN, element.id)
-      .then((d) => { if (!cancelled) setData(d) })
-      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)) })
-    return () => { cancelled = true }
-  }, [docId, slideN, element.id, renderKey])
+  const { data, error } = useStudioTablePayload(docId, slideN, element.id, renderKey)
 
   if (error) {
     return (

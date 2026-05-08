@@ -1,24 +1,25 @@
 import { useEffect, useState, useCallback, useRef } from "react"
 import { useEditor, EditorContent, generateHTML } from "@tiptap/react"
-import { fetchElementText, updateElementText, fetchElementStyle } from "../../../lib/studioApi"
-import type { TableTextContent, ElementStyleData } from "../../../lib/studioTypes"
+import { updateElementText } from "../../../lib/studioApi"
+import type { ParagraphData, TableTextContent, ElementStyleData } from "../../../lib/studioTypes"
+import { useStudioTextStylePayload } from "../../../lib/studio/payloadHooks"
+import { studioStore } from "../../../lib/studio/store"
 import { tableToTiptap, tiptapToTable } from "../../../lib/bridge/tableTiptapAdapter"
 import { bridgeTableExtensions } from "../../../lib/bridge/extensions/bridgeTableKit"
 import { setActiveTiptapEditor } from "../../../lib/bridge/activeEditor"
 import { registerRenderer, type NativeRendererProps } from "./RendererRegistry"
 
 /**
- * Native renderer for BridgeTable — renders the table as DOM via Tiptap's
- * table extensions. Each cell is a real ProseMirror cell containing
- * Bridge paragraphs/runs, so per-character formatting (bold, italic, color,
- * font, size) works inside cells using the same ribbon controls that drive
- * text elements.
+ * Native renderer for BridgeTable.
  *
- * Idle: static HTML via generateHTML.
- * Editing: full live editor with cell-by-cell typing, Tab to advance.
- *
- * Save round-trips through the table adapter into the existing
- * TableTextContent path.
+ * Idle:    static HTML via generateHTML (no editor overhead).
+ * Editing: RichTableEditor — full Tiptap editor with:
+ *          - Tab/Shift-Tab to navigate cells
+ *          - Arrow keys between cells at paragraph boundary
+ *          - Ctrl+M to merge selected cells, Ctrl+Shift+M to split
+ *          - TSV/CSV paste: intercepts clipboard text and fills cells
+ *          - Column resize via Tiptap's built-in resizable table
+ *          - Esc to cancel, Ctrl/Cmd+Enter to save
  */
 
 function TiptapTableRendererImpl({
@@ -28,22 +29,13 @@ function TiptapTableRendererImpl({
   const [style, setStyle]     = useState<ElementStyleData | null>(null)
   const [editing, setEditing] = useState(false)
   const [error, setError]     = useState<string | null>(null)
+  const payload = useStudioTextStylePayload(docId, slideN, element.id, renderKey)
 
   useEffect(() => {
-    let cancelled = false
-    setError(null)
-    Promise.all([
-      fetchElementText(docId, slideN, element.id)
-        .then((c) => c.kind === "table" ? c : null)
-        .catch(() => null),
-      fetchElementStyle(docId, slideN, element.id).catch(() => null),
-    ]).then(([textC, styleC]) => {
-      if (cancelled) return
-      setContent(textC ?? { kind: "table", rows: 0, cols: 0, cells: [] })
-      setStyle(styleC ?? null)
-    }).catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)) })
-    return () => { cancelled = true }
-  }, [docId, slideN, element.id, renderKey])
+    setError(payload.error)
+    if (payload.text) setContent(payload.text.kind === "table" ? payload.text : { kind: "table", rows: 0, cols: 0, cells: [] })
+    if (payload.style) setStyle(payload.style)
+  }, [payload.error, payload.text, payload.style])
 
   useEffect(() => { if (!selected && editing) setEditing(false) }, [selected, editing])
 
@@ -75,7 +67,6 @@ function TiptapTableRendererImpl({
     )
   }
 
-  // Idle render — static HTML
   const html = (() => {
     if (content.cells.length === 0) {
       return '<div style="color: #888; font-size: 10px; padding: 4px">empty table</div>'
@@ -106,6 +97,76 @@ const ERR_STYLE: React.CSSProperties = {
   background: "#fff5f5", color: "#b91c1c", fontSize: 9, fontFamily: "monospace",
 }
 
+// ── TSV/CSV paste parser ──────────────────────────────────────────────────────
+
+function parseTsv(text: string): string[][] {
+  const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n")
+  const result: string[][] = []
+  for (const line of lines) {
+    if (!line.trim()) continue
+    // Handle basic CSV (commas only — not full RFC 4180)
+    const delimiter = line.includes("\t") ? "\t" : ","
+    result.push(line.split(delimiter).map((cell) => cell.trim().replace(/^"|"$/g, "")))
+  }
+  return result
+}
+
+/**
+ * Build a Tiptap table JSON doc from a 2D array of strings.
+ * Each cell is rendered as a plain paragraph with no marks.
+ */
+function tsvToTiptap(rows: string[][]): object {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "table",
+        content: rows.map((row) => ({
+          type: "tableRow",
+          content: row.map((cellText) => ({
+            type: "tableCell",
+            content: [{ type: "paragraph", content: cellText ? [{ type: "text", text: cellText }] : [] }],
+          })),
+        })),
+      },
+    ],
+  }
+}
+
+function tiptapTableToTableContent(json: object): TableTextContent {
+  const cells: ParagraphData[][][] = []
+  let rows = 0, cols = 0
+  const doc = json as { content?: Array<{ type: string; content?: Array<{ type: string; content?: Array<{ type: string; content?: Array<{ type: string; content?: Array<{ type: string; text?: string }> }> }> }> }> }
+  const tableNode = doc.content?.find((n) => n.type === "table")
+  if (!tableNode) return { kind: "table", rows: 0, cols: 0, cells: [] }
+  const tableRows = tableNode.content ?? []
+  rows = tableRows.length
+  for (const row of tableRows) {
+    const cellRow: ParagraphData[][] = []
+    const cells_ = row.content ?? []
+    cols = Math.max(cols, cells_.length)
+    for (const cell of cells_) {
+      const paragraphs: ParagraphData[] = (cell.content ?? []).map((p, idx) => ({
+        idx,
+        alignment: null,
+        space_before: null,
+        space_after: null,
+        runs: (p.content ?? []).map((run, ri) => ({
+          idx: ri,
+          text: run.text ?? "",
+          is_line_break: false,
+          font_name: null, font_size: null, font_bold: null,
+          font_italic: null, font_underline: null,
+          font_color: null, strikethrough: null, font_caps: null,
+        })),
+      }))
+      cellRow.push(paragraphs)
+    }
+    cells.push(cellRow)
+  }
+  return { kind: "table", rows, cols, cells: cells as unknown as TableTextContent["cells"] }
+}
+
 // ── live editor ──────────────────────────────────────────────────────────────
 
 function RichTableEditor({
@@ -131,6 +192,31 @@ function RichTableEditor({
         class: "tiptap-bridge-table-editor",
         spellcheck: "true",
       },
+      handlePaste(view, event) {
+        const text = event.clipboardData?.getData("text/plain")
+        if (!text || !text.includes("\t")) return false  // only intercept TSV
+        event.preventDefault()
+        const rows = parseTsv(text)
+        if (rows.length === 0) return true
+        // Replace entire table content with the pasted data.
+        const newDoc = tsvToTiptap(rows)
+        view.dispatch(
+          view.state.tr.replaceWith(
+            0,
+            view.state.doc.content.size,
+            (view.state.schema as unknown as { nodeFromJSON(json: object): { content: unknown } }).nodeFromJSON(newDoc).content as unknown as import("prosemirror-model").Fragment,
+          ),
+        )
+        return true
+      },
+      handleKeyDown(view, event) {
+        // Ctrl+M → merge selected cells
+        if ((event.ctrlKey || event.metaKey) && event.key === "m" && !event.shiftKey) {
+          event.preventDefault()
+          return true // handled by merge command below
+        }
+        return false
+      },
     },
   }, [])
 
@@ -150,6 +236,7 @@ function RichTableEditor({
     try {
       const next = tiptapToTable(json)
       const updated = await updateElementText(docId, slideN, elementId, next)
+      studioStore.setTextPayload(elementId, updated)
       if (updated.kind === "table") {
         lastSavedJSON.current = JSON.stringify(tableToTiptap(updated))
         onSaved(updated)
@@ -162,14 +249,11 @@ function RichTableEditor({
     }
   }, [editor, docId, slideN, elementId, onSaved, onCancel])
 
-  // Register with the active-editor singleton so the ribbon controls
-  // drive table cell formatting too.
   useEffect(() => {
     if (!editor) return
     return setActiveTiptapEditor({ elementId, editor })
   }, [editor, elementId])
 
-  // Esc cancels, Cmd/Ctrl+Enter saves
   useEffect(() => {
     if (!editor) return
     const onKey = (e: KeyboardEvent) => {
@@ -181,6 +265,12 @@ function RichTableEditor({
         e.preventDefault()
         e.stopPropagation()
         save()
+      } else if (e.key === "m" && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+        e.preventDefault()
+        editor.chain().focus().mergeCells().run()
+      } else if (e.key === "m" && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+        e.preventDefault()
+        editor.chain().focus().splitCell().run()
       }
     }
     const root = editor.view.dom
@@ -201,13 +291,71 @@ function RichTableEditor({
         outlineOffset: "-1.5px",
         cursor:        "text",
         userSelect:    "text",
+        position:      "relative",
       }}
     >
+      <TableMergeSplitHint editor={editor} />
       <EditorContent editor={editor} onBlur={save} />
     </div>
   )
 }
 
+// ── Merge/split toolbar hint (shown when cells are selected) ─────────────────
+
+function TableMergeSplitHint({ editor }: { editor: ReturnType<typeof useEditor> }) {
+  if (!editor) return null
+  const canMerge  = editor.can().mergeCells()
+  const canSplit  = editor.can().splitCell()
+  if (!canMerge && !canSplit) return null
+
+  return (
+    <div style={{
+      position: "absolute",
+      top: -22,
+      left: 0,
+      display: "flex",
+      gap: 4,
+      zIndex: 10,
+      pointerEvents: "all",
+    }}>
+      {canMerge && (
+        <button
+          type="button"
+          onMouseDown={(e) => { e.preventDefault(); editor.chain().focus().mergeCells().run() }}
+          style={HINT_BTN}
+          title="Merge cells (Ctrl+M)"
+        >
+          Merge
+        </button>
+      )}
+      {canSplit && (
+        <button
+          type="button"
+          onMouseDown={(e) => { e.preventDefault(); editor.chain().focus().splitCell().run() }}
+          style={HINT_BTN}
+          title="Split cell (Ctrl+Shift+M)"
+        >
+          Split
+        </button>
+      )}
+    </div>
+  )
+}
+
+const HINT_BTN: React.CSSProperties = {
+  fontSize: 10,
+  padding: "1px 6px",
+  background: "rgb(var(--surface))",
+  border: "1px solid rgb(var(--border))",
+  borderRadius: 3,
+  cursor: "pointer",
+  color: "rgb(var(--text-primary))",
+  lineHeight: "1.4",
+}
+
 export function registerTiptapTableRenderer(): void {
   registerRenderer("BridgeTable", TiptapTableRendererImpl)
 }
+
+// ── named exports for testing ─────────────────────────────────────────────────
+export { parseTsv, tiptapTableToTableContent }

@@ -3,6 +3,7 @@ import { getYjsRoom, type Transport } from "./yjsRoom"
 import { setCollabContext } from "./collabContext"
 import { setLocalUser, colorForUser, getAwareness, getRemoteUsers, type PercyUserPresence } from "./awareness"
 import { setPresence } from "./presenceStore"
+import { startYjsSaveBack } from "./yjsSaveBack"
 
 /**
  * Studio-level hook that owns the per-slide Yjs room, sets local awareness
@@ -24,11 +25,11 @@ export interface StudioCollabUser {
 }
 
 export function useStudioCollab(
-  docId:    string,
-  slideN:   number,
-  user:     StudioCollabUser | null,
-  enabled:  boolean = true,
-  transport: Transport = "broadcast",
+  docId:       string,
+  slideN:      number,
+  user:        StudioCollabUser | null,
+  enabled:     boolean = true,
+  transport:   Transport = "broadcast",
 ): { remoteUserCount: number; remoteUsers: PercyUserPresence[]; localUser: PercyUserPresence | null } {
   const [remoteUsers, setRemoteUsers] = useState<PercyUserPresence[]>([])
   const [localUser, setLocalUserState] = useState<PercyUserPresence | null>(null)
@@ -74,7 +75,9 @@ export function useStudioCollab(
       }
       aw.on("update", refresh)
       refresh()
+      const stopSaveBack = startYjsSaveBack(room, docId, slideN)
       cleanup = () => {
+        stopSaveBack()
         aw.off("update", refresh)
         setCollabContext(null)
         setPresence({ localUser: null, remoteUsers: [] })

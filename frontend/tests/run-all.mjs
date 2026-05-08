@@ -16,13 +16,24 @@
  *   8.  element-gallery          — all 12 shape types + image upload, style/text/position
  *   9.  auth-flow                — full auth lifecycle (signup/login/settings/logout)
  *   10. studio-ui-flow           — UI-driven deck creation, shape inserts, text edit, delete
+ *   11. studio-undo-redo         — QAT buttons + Ctrl+Z/Y keyboard undo chain with API verify
+ *   12. studio-text-editing      — 3 text boxes typed from UI, API /text verification, reload persist
+ *   13. studio-keyboard-shortcuts— Delete, Ctrl+Z/Y chain, Escape deselect, complex key sequences
+ *   14. studio-slide-management-ui — New Slide, strip navigation, per-slide element isolation
+ *   15. studio-element-marathon  — 7-phase: build 5 → delete → undo → redo → multi-select delete
+ *   16. studio-shape-format-inputs — Click element → ShapeFormat X/Y/W inputs → API verify position
+ *   17. studio-multiselect       — 5 elements, shift-click 4, bulk Delete, undo
+ *   18. studio-context-tab       — Auto-switch to ShapeFormat, return on deselect, View tab
+ *   19. studio-insert-all-shapes — 6 shapes, 6× Ctrl+Z = 0, 6× Ctrl+Y = 6
+ *   20. studio-type-and-verify-text — Two text boxes, full /text API verify, reload, delete
  * Suites run (optional):
- *   11. export-test              — PPTX download + re-upload round-trip
- *   12. collab-yjs               — Yjs real-time collab (2 browser sessions)
- *   13. performance-smoke        — Response time measurements (no hard fail)
- *   14. agent-mode               — AI agent panel UI + API checks (needs API key)
- *   15. adversarial-users        — LM Studio generates edge cases
- *   16. vision-critique          — Gemma 4 vision reviews every major page
+ *   21. studio-view-and-zoom     — View tab, status bar Normal/Sorter/Focus, sorter modal
+ *   22. export-test              — PPTX download + re-upload round-trip
+ *   23. collab-yjs               — Yjs real-time collab (2 browser sessions)
+ *   24. performance-smoke        — Response time measurements (no hard fail)
+ *   25. agent-mode               — AI agent panel UI + API checks (needs API key)
+ *   26. adversarial-users        — LM Studio generates edge cases
+ *   27. vision-critique          — Gemma 4 vision reviews every major page
  *
  * Each suite writes its own timestamped JSON to tests/results/.
  * This file appends a summary row to test-log.json after every run.
@@ -51,7 +62,19 @@ const SUITES = [
   { name: "element-operations",       file: "tests/element-operations.mjs",       args: [BASE],           critical: true  },
   { name: "element-gallery",          file: "tests/element-gallery.mjs",          args: [BASE],           critical: true  },
   { name: "auth-flow",                file: "tests/auth-flow.mjs",                args: [BASE],           critical: true  },
-  { name: "studio-ui-flow",           file: "tests/studio-ui-flow.mjs",           args: [BASE],           critical: true  },
+  { name: "studio-ui-flow",             file: "tests/studio-ui-flow.mjs",             args: [BASE], critical: true  },
+  { name: "studio-undo-redo",           file: "tests/studio-undo-redo.mjs",           args: [BASE], critical: true  },
+  { name: "studio-text-editing",        file: "tests/studio-text-editing.mjs",        args: [BASE], critical: true  },
+  { name: "studio-keyboard-shortcuts",  file: "tests/studio-keyboard-shortcuts.mjs",  args: [BASE], critical: true  },
+  { name: "studio-slide-management-ui", file: "tests/studio-slide-management-ui.mjs", args: [BASE], critical: true  },
+  { name: "studio-element-marathon",    file: "tests/studio-element-marathon.mjs",    args: [BASE], critical: true  },
+  { name: "studio-shape-format-inputs", file: "tests/studio-shape-format-inputs.mjs", args: [BASE], critical: true  },
+  { name: "studio-multiselect",         file: "tests/studio-multiselect.mjs",         args: [BASE], critical: true  },
+  { name: "studio-context-tab",         file: "tests/studio-context-tab.mjs",         args: [BASE], critical: true  },
+  { name: "studio-insert-all-shapes",   file: "tests/studio-insert-all-shapes.mjs",   args: [BASE], critical: true  },
+  { name: "studio-type-and-verify-text",file: "tests/studio-type-and-verify-text.mjs",args: [BASE], critical: true  },
+  { name: "studio-editing-visual",       file: "tests/studio-editing-visual.mjs",       args: [BASE], critical: false },
+  { name: "studio-view-and-zoom",       file: "tests/studio-view-and-zoom.mjs",       args: [BASE], critical: false },
   { name: "export-test",              file: "tests/export-test.mjs",              args: [BASE],           critical: false },
   { name: "collab-yjs",               file: "tests/collab-yjs.mjs",               args: [BASE],           critical: false },
   { name: "performance-smoke",        file: "tests/performance-smoke.mjs",        args: [BASE],           critical: false },

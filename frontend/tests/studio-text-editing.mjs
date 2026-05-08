@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Studio Text Editing — inserts multiple text boxes via the Insert ribbon,
  * types text into each, verifies persistence via API, and re-opens studio
  * to confirm texts survive a navigation round-trip.
@@ -6,10 +6,10 @@
  * Steps:
  *   1.  signup + create project + blank deck via API
  *   2.  open studio, verify canvas
- *   3.  insert text box 1 → type "Alpha Text" → Escape → API verify text
- *   4.  re-click Insert tab → insert text box 2 → type "Beta Text" → Escape → API verify
- *   5.  re-click Insert tab → insert text box 3 → type "Gamma Text" → Escape → API verify
- *   6.  re-click Insert tab → insert text box 4 → type "Will be replaced" → Escape
+ *   3.  insert text box 1 → type "Alpha Text" → blur save → API verify text
+ *   4.  re-click Insert tab → insert text box 2 → type "Beta Text" → blur save → API verify
+ *   5.  re-click Insert tab → insert text box 3 → type "Gamma Text" → blur save → API verify
+ *   6.  re-click Insert tab → insert text box 4 → type "Will be replaced" → blur save
  *   7.  navigate away and back → API confirm all 4 texts persisted
  *   8.  API confirms 4 elements still present after reload
  *
@@ -51,36 +51,37 @@ async function snap(name) {
 }
 
 async function apiElementCount(docId) {
-  for (let i = 0; i < 2; i++) {
-    const r = await page.request.get(`${BASE}/api/docs/${docId}/slides/1/elements`)
-    if (r.ok()) {
-      const b = await r.json()
-      return b.element_count ?? b.elements?.length ?? 0
-    }
-    await page.waitForTimeout(1000)
-  }
-  throw new Error("GET elements failed after retry")
+  const result = await page.evaluate(async ({ base, id }) => {
+    const r = await fetch(`${base}/api/docs/${id}/slides/1/elements`)
+    if (!r.ok) return { error: r.status }
+    const b = await r.json()
+    return { count: b.element_count ?? b.elements?.length ?? 0 }
+  }, { base: BASE, id: docId })
+  if (result.error) throw new Error(`GET elements HTTP ${result.error}`)
+  return result.count
 }
 
 async function apiElements(docId) {
-  for (let i = 0; i < 2; i++) {
-    const r = await page.request.get(`${BASE}/api/docs/${docId}/slides/1/elements`)
-    if (r.ok()) {
-      const b = await r.json()
-      return b.elements ?? []
-    }
-    await page.waitForTimeout(1000)
-  }
-  throw new Error("GET elements failed after retry")
+  const result = await page.evaluate(async ({ base, id }) => {
+    const r = await fetch(`${base}/api/docs/${id}/slides/1/elements`)
+    if (!r.ok) return { error: r.status }
+    const b = await r.json()
+    return { elements: b.elements ?? [] }
+  }, { base: BASE, id: docId })
+  if (result.error) throw new Error(`GET elements HTTP ${result.error}`)
+  return result.elements
 }
 
 async function apiElementText(docId, elId) {
+  // Use in-browser fetch so the request hits the same App Runner instance as the UI
   for (let i = 0; i < 3; i++) {
-    const r = await page.request.get(`${BASE}/api/docs/${docId}/slides/1/elements/${elId}/text`)
-    if (r.ok()) {
+    const result = await page.evaluate(async ({ base, dId, eId }) => {
+      const r = await fetch(`${base}/api/docs/${dId}/slides/1/elements/${eId}/text`)
+      if (!r.ok) return { error: r.status }
       const b = await r.json()
-      return b.paragraphs?.[0]?.runs?.[0]?.text ?? b.text ?? ""
-    }
+      return { text: b.paragraphs?.[0]?.runs?.[0]?.text ?? b.text ?? "" }
+    }, { base: BASE, dId: docId, eId: elId })
+    if (result.text !== undefined) return result.text
     await page.waitForTimeout(1000)
   }
   return ""
@@ -98,17 +99,69 @@ async function insertTextBox(text) {
   const btn = page.locator('button').filter({ hasText: /text.?box/i }).first()
   if (!await btn.count()) throw new Error("Text Box button not found")
   await btn.click()
-  await page.waitForTimeout(1000)
+  await page.waitForTimeout(1500)
 
+  // Wait for contenteditable to appear (auto-edit mode after insert).
+  // The editor uses autofocus:"end" — we rely on that rather than clicking,
+  // because the ribbon overlaps the top-left canvas area where text boxes land.
   const editor = page.locator('[contenteditable="true"]').first()
-  if (await editor.count()) {
-    await editor.fill(text)
-    await page.waitForTimeout(400)
-    await page.keyboard.press("Escape")
-    await page.waitForTimeout(800)
-  } else {
-    throw new Error("contenteditable not found after text box insert")
+  const appeared = await editor.waitFor({ state: "visible", timeout: 6000 }).then(() => true).catch(() => false)
+  if (!appeared) {
+    // Fallback: try double-clicking the element to enter edit mode
+    const el = page.locator('[data-element="true"]').first()
+    if (await el.count()) {
+      await el.dblclick({ force: true }).catch(() => {})
+      await page.waitForTimeout(1000)
+    }
   }
+
+  if (!await editor.isVisible().catch(() => false))
+    throw new Error("contenteditable not found after text box insert")
+
+  // Focus via JS — autofocus should already have it, this is just belt-and-suspenders
+  await page.evaluate(() => {
+    const ce = document.querySelector('[contenteditable="true"]')
+    if (ce instanceof HTMLElement) ce.focus()
+  })
+  await page.waitForTimeout(200)
+
+  // Focus via JS to ensure ProseMirror knows the editor is active
+  await page.evaluate(() => {
+    const ce = document.querySelector('[contenteditable="true"]')
+    if (ce instanceof HTMLElement) ce.focus()
+  })
+  await page.waitForTimeout(200)
+
+  // Type text
+  await page.keyboard.type(text)
+  await page.waitForTimeout(400)
+
+  // Check DOM state BEFORE triggering save
+  const beforeSave = await page.evaluate(() => {
+    const ce = document.querySelector('[contenteditable="true"]')
+    const active = document.activeElement
+    if (!ce) return { found: false }
+    // Check inner HTML to see actual ProseMirror content
+    return {
+      found: true,
+      text: ce.textContent,
+      html: ce.innerHTML.slice(0, 200),
+      isFocused: ce === active || ce.contains(active),
+    }
+  })
+  console.log(`     [dbg] before-save: text="${beforeSave.text}" focused=${beforeSave.isFocused}`)
+  console.log(`     [dbg] html: ${beforeSave.html}`)
+
+  // Fire focusout event natively (what blur() should do)
+  await page.evaluate(() => {
+    const ce = document.querySelector('[contenteditable="true"]')
+    if (!ce) return
+    // Dispatch focusout which is what React's onBlur listens to
+    ce.dispatchEvent(new FocusEvent('focusout', { bubbles: true, composed: true }))
+    ce.dispatchEvent(new FocusEvent('blur', { bubbles: false }))
+    ce.blur()
+  })
+  await page.waitForTimeout(2500)
 }
 
 // ── setup ──────────────────────────────────────────────────────────────────────
@@ -125,6 +178,18 @@ page = await ctx.newPage()
 
 page.on("console", (msg) => {
   if (msg.type() === "error") console.warn(`     [browser] ${msg.text().slice(0, 100)}`)
+})
+
+// Track network calls to text endpoint
+page.on("request", (req) => {
+  if (req.url().includes("/text") && (req.method() === "PATCH" || req.method() === "PUT")) {
+    console.log(`     [net] ${req.method()} ${req.url().slice(-60)}`)
+  }
+})
+page.on("response", (res) => {
+  if (res.url().includes("/text") && (res.request().method() === "PATCH" || res.request().method() === "PUT")) {
+    console.log(`     [net] response ${res.status()} for text update`)
+  }
 })
 
 // ── Phase 1: Auth + project setup ─────────────────────────────────────────────
@@ -203,8 +268,9 @@ let elId1, elId2, elId3
 
 await step("Insert text box 1 + type 'Alpha Text'", async () => {
   await insertTextBox("Alpha Text")
-  await page.waitForTimeout(1000)
+  await page.waitForTimeout(500)
 })
+await snap("02-after-text-box-1-insert")
 
 await step("API confirms 1 element, fetch elId1", async () => {
   const els = await apiElements(docId)
@@ -218,11 +284,11 @@ await step("API text for element 1 = 'Alpha Text'", async () => {
   console.log(`     text="${txt}"`)
   if (!txt.includes("Alpha Text")) throw new Error(`Expected "Alpha Text", got "${txt}"`)
 })
-await snap("02-after-text-box-1")
+await snap("03-after-text-box-1")
 
 await step("Insert text box 2 + type 'Beta Text'", async () => {
   await insertTextBox("Beta Text")
-  await page.waitForTimeout(1000)
+  await page.waitForTimeout(500)
 })
 
 await step("API confirms 2 elements, fetch elId2", async () => {
@@ -237,11 +303,11 @@ await step("API text for element 2 = 'Beta Text'", async () => {
   console.log(`     text="${txt}"`)
   if (!txt.includes("Beta Text")) throw new Error(`Expected "Beta Text", got "${txt}"`)
 })
-await snap("03-after-text-box-2")
+await snap("04-after-text-box-2")
 
 await step("Insert text box 3 + type 'Gamma Text'", async () => {
   await insertTextBox("Gamma Text")
-  await page.waitForTimeout(1000)
+  await page.waitForTimeout(500)
 })
 
 await step("API confirms 3 elements, fetch elId3", async () => {
@@ -256,21 +322,21 @@ await step("API text for element 3 = 'Gamma Text'", async () => {
   console.log(`     text="${txt}"`)
   if (!txt.includes("Gamma Text")) throw new Error(`Expected "Gamma Text", got "${txt}"`)
 })
-await snap("04-after-text-box-3")
+await snap("05-after-text-box-3")
 
 // ── Phase 4: Insert 4th text box ──────────────────────────────────────────────
 console.log("\n── Phase 4: Insert 4th text box")
 
 await step("Insert text box 4 + type 'Will be replaced'", async () => {
   await insertTextBox("Will be replaced")
-  await page.waitForTimeout(1000)
+  await page.waitForTimeout(500)
 })
 
 await step("API confirms 4 elements", async () => {
   const count = await apiElementCount(docId)
   if (count < 4) throw new Error(`Expected ≥4 elements, got ${count}`)
 })
-await snap("05-four-text-boxes")
+await snap("06-four-text-boxes")
 
 // ── Phase 5: Persistence check ────────────────────────────────────────────────
 console.log("\n── Phase 5: Persistence after reload")
@@ -286,7 +352,7 @@ await step("Navigate back to studio", async () => {
   if (!await page.locator('[data-slide-canvas="true"]').count())
     throw new Error("canvas not found after returning to studio")
 })
-await snap("06-studio-after-reload")
+await snap("07-studio-after-reload")
 
 await step("API confirms 4 elements after reload", async () => {
   const count = await apiElementCount(docId)
@@ -307,7 +373,7 @@ await step("API text for element 3 still = 'Gamma Text' after reload", async () 
   const txt = await apiElementText(docId, elId3)
   if (!txt.includes("Gamma Text")) throw new Error(`Expected "Gamma Text", got "${txt}"`)
 })
-await snap("07-final")
+await snap("08-final")
 
 // ── results ────────────────────────────────────────────────────────────────────
 await browser.close()

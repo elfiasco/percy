@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import type { StudioElement, ElementStyleData } from "../../lib/studioTypes"
-import { fetchElementStyle, updateElementStyle, updateElementPosition, updateElementFlags, setSlideBackground, setAllSlidesBackground, setGradientBackground, replaceImage, fetchThemeColors, fetchDocStats, setSlideBackgroundImage, bulkUpdateStyle, setSlideTransition, fetchSlideTransitions, setElementAnimation, generateAltText, elementPngUrl } from "../../lib/studioApi"
-import { getCollabContext } from "../../lib/collab/collabContext"
-import { bumpRev } from "../../lib/collab/bridgeYjsAdapter"
+import { fetchElementStyle, setSlideBackground, setAllSlidesBackground, setGradientBackground, replaceImage, fetchThemeColors, fetchDocStats, setSlideBackgroundImage, bulkUpdateStyle, setSlideTransition, fetchSlideTransitions, setElementAnimation, generateAltText, elementPngUrl } from "../../lib/studioApi"
+import { commitElementFlags, commitElementGeometry, commitElementStyle } from "../../lib/studio/commands"
 import type { DocStats } from "../../lib/studioApi"
 import StudioTextPanel from "./StudioTextPanel"
 import ChartEditorPanel from "./ChartEditorPanel"
@@ -152,9 +151,10 @@ function PositionTab({ element, docId, slideN, onCommit }: PositionTabProps) {
     const lx = parseFloat(x), ly = parseFloat(y)
     const lw = parseFloat(w), lh = parseFloat(h)
     if ([lx, ly, lw, lh].some(isNaN)) return
-    const updated = await updateElementPosition(docId, slideN, element.id, {
+    const updated = await commitElementGeometry(element.id, {
       left_in: lx, top_in: ly, width_in: lw, height_in: lh,
     })
+    if (!updated) return
     setX(updated.left_in.toFixed(3))
     setY(updated.top_in.toFixed(3))
     setW(updated.width_in.toFixed(3))
@@ -165,7 +165,8 @@ function PositionTab({ element, docId, slideN, onCommit }: PositionTabProps) {
   const commitRot = useCallback(async () => {
     const r = parseFloat(rot)
     if (isNaN(r)) return
-    const updated = await updateElementPosition(docId, slideN, element.id, { rotation: r })
+    const updated = await commitElementGeometry(element.id, { rotation: r })
+    if (!updated) return
     setRot(updated.rotation.toFixed(1))
     onCommit()
   }, [rot, docId, slideN, element.id, onCommit])
@@ -174,7 +175,7 @@ function PositionTab({ element, docId, slideN, onCommit }: PositionTabProps) {
     const n = editName.trim()
     if (!n || n === element.name) return
     try {
-      await updateElementPosition(docId, slideN, element.id, { name: n })
+      await commitElementGeometry(element.id, { name: n })
       onCommit()
     } catch (e) { console.error("rename failed:", e) }
   }, [editName, element.name, element.id, docId, slideN, onCommit])
@@ -200,7 +201,7 @@ function PositionTab({ element, docId, slideN, onCommit }: PositionTabProps) {
         <div className="flex items-center gap-1">
           <NumInput value={rot} step={1} onChange={setRot} onCommit={commitRot} suffix="°" />
           <button
-            onClick={() => { setRot("0"); updateElementPosition(docId, slideN, element.id, { rotation: 0 }).then(onCommit) }}
+            onClick={() => { setRot("0"); commitElementGeometry(element.id, { rotation: 0 }).then(onCommit) }}
             title="Reset rotation to 0°"
             className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-muted hover:bg-white/10 hover:text-slate-200 border border-edge shrink-0"
           >
@@ -211,7 +212,7 @@ function PositionTab({ element, docId, slideN, onCommit }: PositionTabProps) {
       <FieldRow label="Flip">
         <div className="flex gap-1">
           <button
-            onClick={() => updateElementPosition(docId, slideN, element.id, { flip_h: !element.flip_h }).then(onCommit)}
+            onClick={() => commitElementGeometry(element.id, { flip_h: !element.flip_h }).then(onCommit)}
             title="Flip horizontally"
             className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
               element.flip_h
@@ -222,7 +223,7 @@ function PositionTab({ element, docId, slideN, onCommit }: PositionTabProps) {
             ↔ H
           </button>
           <button
-            onClick={() => updateElementPosition(docId, slideN, element.id, { flip_v: !element.flip_v }).then(onCommit)}
+            onClick={() => commitElementGeometry(element.id, { flip_v: !element.flip_v }).then(onCommit)}
             title="Flip vertically"
             className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
               element.flip_v
@@ -248,7 +249,7 @@ function PositionTab({ element, docId, slideN, onCommit }: PositionTabProps) {
             title={title}
             onClick={async () => {
               const newZ = delta > 999 ? 9999 : delta < -999 ? 0 : Math.max(0, element.z_index + delta)
-              try { await updateElementPosition(docId, slideN, element.id, { z_index: newZ }); onCommit() }
+              try { await commitElementGeometry(element.id, { z_index: newZ }); onCommit() }
               catch (e) { console.error("z-order failed:", e) }
             }}
             className="flex-1 text-xs py-1 rounded bg-white/5 border border-edge hover:bg-white/10 text-slate-300"
@@ -268,7 +269,7 @@ function PositionTab({ element, docId, slideN, onCommit }: PositionTabProps) {
           on={element.locked}
           onChange={async (v) => {
             try {
-              const updated = await updateElementFlags(docId, slideN, element.id, { locked: v })
+              const updated = await commitElementFlags(element.id, { locked: v })
               onCommit()
               // propagate updated element — parent will re-set via setSelectedElement
               void updated
@@ -281,7 +282,7 @@ function PositionTab({ element, docId, slideN, onCommit }: PositionTabProps) {
           on={element.hidden}
           onChange={async (v) => {
             try {
-              const updated = await updateElementFlags(docId, slideN, element.id, { hidden: v })
+              const updated = await commitElementFlags(element.id, { hidden: v })
               onCommit()
               void updated
             } catch (e) { console.error("hidden toggle failed:", e) }
@@ -408,16 +409,7 @@ function StyleTab({ element, docId, slideN, onCommit }: StyleTabProps) {
     const optimistic = { ...style, ...update }
     setStyle(optimistic)
     try {
-      const updated = await updateElementStyle(docId, slideN, element.id, update)
-      setStyle(updated)
-      // Phase C: notify peers a style change happened. They observe this
-      // counter on the Y.Map and re-fetch via fetchElementStyle.
-      try {
-        const collab = getCollabContext()
-        if (collab?.enabled && collab.room) {
-          bumpRev(collab.room, element.id, "style_rev")
-        }
-      } catch { /* no-op */ }
+      await commitElementStyle(element.id, update)
       onCommit()
     } catch (e) {
       console.error("style update failed:", e)
@@ -605,7 +597,7 @@ function StyleTab({ element, docId, slideN, onCommit }: StyleTabProps) {
             <Toggle
               on={!!element.flip_h}
               onChange={async (v) => {
-                try { await updateElementPosition(docId, slideN, element.id, { flip_h: v }); onCommit() }
+                try { await commitElementGeometry(element.id, { flip_h: v }); onCommit() }
                 catch (e) { console.error("flip_h failed:", e) }
               }}
             />
@@ -614,7 +606,7 @@ function StyleTab({ element, docId, slideN, onCommit }: StyleTabProps) {
             <Toggle
               on={!!element.flip_v}
               onChange={async (v) => {
-                try { await updateElementPosition(docId, slideN, element.id, { flip_v: v }); onCommit() }
+                try { await commitElementGeometry(element.id, { flip_v: v }); onCommit() }
                 catch (e) { console.error("flip_v failed:", e) }
               }}
             />
@@ -720,7 +712,7 @@ function AltTextButton({ docId, slideN, elementId, onGenerated }: {
 
 // ── Slide properties (no element selected) ────────────────────────────────────
 
-const TYPE_ICON_MAP: Record<string, string> = {
+export const TYPE_ICON_MAP: Record<string, string> = {
   BridgeText:      "T",
   BridgeShape:     "■",
   BridgeImage:     "🖼",
@@ -1115,7 +1107,7 @@ export default function StudioPropertiesPanel({
   const commitRename = useCallback(async (el: StudioElement) => {
     const trimmed = renameVal.trim()
     if (trimmed && trimmed !== el.name) {
-      try { await updateElementPosition(docId, slideN, el.id, { name: trimmed }) }
+      try { await commitElementGeometry(el.id, { name: trimmed }) }
       catch (e) { console.error("rename failed:", e) }
     }
     setRenamingId(null)

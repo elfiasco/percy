@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from "react"
+import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from "react"
+import { undoHistory } from "../../lib/studio/undoHistory"
 import type { DocInfo } from "../../lib/types"
 import type { StudioElement } from "../../lib/studioTypes"
-import { fetchSlideElements, updateElementPosition, renderSingleSlide, deleteElement, bulkDeleteElements, duplicateElement as duplicateElementApi, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, updateElementFlags, applyLayoutPreset, groupElements, ungroupElement, generateSlideContent, rerenderAllSlides, importSlides, bulkUpdateStyle, generateNotesBulk, addSlide, duplicateSlide, fetchSlidePins, pinSlide, bulkDeleteElementsByName, optimizeSlideLayout, splitElementToSlides, insertSummarySlide, autoDetectSections, fitTextToElements, optimizeImages, expandSlide, mergeElements, generateAltTextBulk, statsExportCsvUrl, statsExportJsonUrl, polishSlideText, insertToc, outlineExportUrl, notesExportUrl, generateConclusionSlide, thumbnailsZipUrl, textExportUrl, fixNumberedLists, cloneSlideTo, duplicateDeck, bulkFontReplace, clearNotes } from "../../lib/studioApi"
+import { fetchSlideElements, renderSingleSlide, deleteElement, bulkDeleteElements, duplicateElement as duplicateElementApi, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, applyLayoutPreset, groupElements, ungroupElement, generateSlideContent, rerenderAllSlides, importSlides, bulkUpdateStyle, generateNotesBulk, addSlide, duplicateSlide, fetchSlidePins, pinSlide, bulkDeleteElementsByName, optimizeSlideLayout, splitElementToSlides, insertSummarySlide, autoDetectSections, fitTextToElements, optimizeImages, expandSlide, mergeElements, generateAltTextBulk, statsExportCsvUrl, statsExportJsonUrl, polishSlideText, insertToc, outlineExportUrl, notesExportUrl, generateConclusionSlide, thumbnailsZipUrl, textExportUrl, fixNumberedLists, cloneSlideTo, duplicateDeck, bulkFontReplace, clearNotes } from "../../lib/studioApi"
 import type { ElementStyleData } from "../../lib/studioTypes"
 import * as api from "../../lib/api"
 import StudioSlideStrip from "./StudioSlideStrip"
@@ -347,6 +348,8 @@ import { getCollabContext } from "../../lib/collab/collabContext"
 import { hydrateElement as ydocHydrateElement, deleteElement as ydocDeleteElement } from "../../lib/collab/bridgeYjsAdapter"
 import { useAuth } from "../../auth/AuthContext"
 import { setPendingAutoEdit } from "../../lib/pendingAutoEdit"
+import { commitElementFlags, commitElementGeometry } from "../../lib/studio/commands"
+import { studioStore, useStudioStore } from "../../lib/studio/store"
 
 setupNativeRenderers()
 
@@ -359,6 +362,7 @@ interface Props {
 export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const toast = useToast()
   const { user: authUser } = useAuth()
+  const studio = useStudioStore()
   const [selectedSlide, setSelectedSlide]     = useState(1)
   const [selectedElement, setSelectedElement] = useState<StudioElement | null>(null)
   const [slideWidthIn, setSlideWidthIn]       = useState(13.333)
@@ -756,7 +760,8 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
 
   // fetch slide dimensions + element list when slide changes or refreshKey bumps
   useEffect(() => {
-    fetchSlideElements(doc.doc_id, selectedSlide)
+    undoHistory.clear()
+    studioStore.loadSlide(doc.doc_id, selectedSlide)
       .then((res) => {
         setSlideWidthIn(res.slide_width_in)
         setSlideHeightIn(res.slide_height_in)
@@ -764,6 +769,15 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       })
       .catch(() => {})
   }, [doc.doc_id, selectedSlide, refreshKey])
+
+  // Studio 2.0 store is now the shared element/selection source. Keep the
+  // legacy local mirrors alive while older panels migrate to store selectors.
+  useEffect(() => {
+    if (studio.docId !== doc.doc_id || studio.slideN !== selectedSlide) return
+    setSlideWidthIn(studio.slideWidthIn)
+    setSlideHeightIn(studio.slideHeightIn)
+    setSlideElements(studio.elements)
+  }, [studio.version, studio.docId, studio.slideN, studio.slideWidthIn, studio.slideHeightIn, studio.elements, doc.doc_id, selectedSlide])
 
   // fetch deck-wide list of bound elements so the canvas + AI panel can show them
   useEffect(() => {
@@ -799,30 +813,28 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
     const el = selectedElementRef.current
     if (!el) return
     try {
-      const updated = await updateElementPosition(doc.doc_id, selectedSlideRef.current, el.id, {
+      const updated = await commitElementGeometry(el.id, {
         left_in: leftIn, top_in: topIn, width_in: widthIn, height_in: heightIn,
       })
-      setSelectedElement(updated)
+      if (updated) setSelectedElement(updated)
       markDirty(selectedSlideRef.current)
-      await rerender()
     } catch (e) {
       console.error("position commit failed:", e)
     }
-  }, [doc.doc_id, rerender])
+  }, [markDirty])
 
   // ── commit a z-index change from arrange buttons ───────────────────────────
   const handleCommitZIndex = useCallback(async (zIndex: number) => {
     const el = selectedElementRef.current
     if (!el) return
     try {
-      const updated = await updateElementPosition(doc.doc_id, selectedSlideRef.current, el.id, { z_index: zIndex })
-      setSelectedElement(updated)
+      const updated = await commitElementGeometry(el.id, { z_index: zIndex })
+      if (updated) setSelectedElement(updated)
       markDirty(selectedSlideRef.current)
-      await rerender()
     } catch (e) {
       console.error("z-index commit failed:", e)
     }
-  }, [doc.doc_id, rerender])
+  }, [markDirty])
 
   const multiSelectIdsRef = useRef<Set<string>>(new Set())
   multiSelectIdsRef.current = multiSelectIds
@@ -848,6 +860,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       } else {
         await deleteElement(doc.doc_id, selectedSlideRef.current, toDelete[0])
       }
+      studioStore.removeElements(toDelete)
       setSelectedElement(null)
       setMultiSelectIds(new Set())
       markDirty(selectedSlideRef.current)
@@ -866,6 +879,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
     }
     try {
       await deleteElement(doc.doc_id, selectedSlideRef.current, id)
+      studioStore.removeElements([id])
       setSelectedElement((prev) => prev?.id === id ? null : prev)
       setMultiSelectIds((prev) => { const next = new Set(prev); next.delete(id); return next })
       markDirty(selectedSlideRef.current)
@@ -875,11 +889,10 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
 
   const handleToggleFlags = useCallback(async (id: string, flags: { locked?: boolean; hidden?: boolean }) => {
     try {
-      const updated = await updateElementFlags(doc.doc_id, selectedSlideRef.current, id, flags)
-      setSlideElements((prev) => prev.map((el) => el.id === id ? updated : el))
-      if (selectedElementRef.current?.id === id) setSelectedElement(updated)
+      const updated = await commitElementFlags(id, flags)
+      if (updated && selectedElementRef.current?.id === id) setSelectedElement(updated)
     } catch (e) { console.error("flag update failed:", e) }
-  }, [doc.doc_id])
+  }, [])
 
   // ── duplicate selected element(s) ─────────────────────────────────────────
   const handleDuplicate = useCallback(async () => {
@@ -891,6 +904,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       let lastDup: StudioElement | null = null
       for (const id of toDup) {
         lastDup = await duplicateElementApi(doc.doc_id, selectedSlideRef.current, id)
+        studioStore.upsertElement(lastDup)
       }
       if (lastDup) setSelectedElement(lastDup)
       setMultiSelectIds(new Set())
@@ -1020,6 +1034,8 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         label: shapeType.charAt(0).toUpperCase() + shapeType.slice(1),
       })
       if (shapeType === "text_box") setPendingAutoEdit(el.id)
+      studioStore.upsertElement(el)
+      studioStore.selectOne(el.id)
       setSelectedElement(el)
       // Phase D: write the new element to Y.Doc so peers see it instantly.
       const collab = getCollabContext()
@@ -1075,6 +1091,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           e.preventDefault()
           copyElementToSlide(doc.doc_id, clip.slideN, clip.elementId, selectedSlideRef.current, 0, 0)
             .then((el) => {
+              studioStore.upsertElement(el)
               markDirty(selectedSlideRef.current)
               setRefreshKey((k) => k + 1)
               setSelectedElement(el)
@@ -1091,6 +1108,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           e.preventDefault()
           copyElementToSlide(doc.doc_id, clip.slideN, clip.elementId, selectedSlideRef.current)
             .then((el) => {
+              studioStore.upsertElement(el)
               markDirty(selectedSlideRef.current)
               setRefreshKey((k) => k + 1)
               setSelectedElement(el)
@@ -1110,6 +1128,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
                   const file = new File([blob], `clipboard.${ext}`, { type: imgType })
                   try {
                     const el = await createImageElement(doc.doc_id, selectedSlideRef.current, file)
+                    studioStore.upsertElement(el)
                     markDirty(selectedSlideRef.current)
                     setRefreshKey((k) => k + 1)
                     setSelectedElement(el)
@@ -1170,25 +1189,34 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       }
 
       // Ctrl+Z → undo, Ctrl+Y or Ctrl+Shift+Z → redo
+      // Client-side history takes precedence; falls back to server-side undo.
       if ((e.key === "z" || e.key === "Z") && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
         e.preventDefault()
-        undoDoc(doc.doc_id).then((r) => {
-          setSelectedElement(null)
-          setUndoDepth(r.undo_depth)
-          setRedoDepth(r.redo_depth)
-          setRefreshKey((k) => k + 1)
-        }).catch(() => {})
+        if (undoHistory.canUndo()) {
+          undoHistory.undo().catch(() => {})
+        } else {
+          undoDoc(doc.doc_id).then((r) => {
+            setSelectedElement(null)
+            setUndoDepth(r.undo_depth)
+            setRedoDepth(r.redo_depth)
+            setRefreshKey((k) => k + 1)
+          }).catch(() => {})
+        }
         return
       }
       if (((e.key === "y" || e.key === "Y") && (e.ctrlKey || e.metaKey)) ||
           ((e.key === "z" || e.key === "Z") && (e.ctrlKey || e.metaKey) && e.shiftKey)) {
         e.preventDefault()
-        redoDoc(doc.doc_id).then((r) => {
-          setSelectedElement(null)
-          setUndoDepth(r.undo_depth)
-          setRedoDepth(r.redo_depth)
-          setRefreshKey((k) => k + 1)
-        }).catch(() => {})
+        if (undoHistory.canRedo()) {
+          undoHistory.redo().catch(() => {})
+        } else {
+          redoDoc(doc.doc_id).then((r) => {
+            setSelectedElement(null)
+            setUndoDepth(r.undo_depth)
+            setRedoDepth(r.redo_depth)
+            setRefreshKey((k) => k + 1)
+          }).catch(() => {})
+        }
         return
       }
 
@@ -1282,11 +1310,14 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
     setSelectedSlide(n)
     setSelectedElement(null)
     setMultiSelectIds(new Set())
+    studioStore.clearSelection()
   }, [])
 
   const handleInsertImage = useCallback(async (file: File) => {
     try {
       const el = await createImageElement(doc.doc_id, selectedSlideRef.current, file)
+      studioStore.upsertElement(el)
+      studioStore.selectOne(el.id)
       setSelectedElement(el)
       markDirty(selectedSlideRef.current)
       setRefreshKey((k) => k + 1)
@@ -1433,14 +1464,14 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         onShowCheck={() => setCheckOpen(true)}
         commentsOpen={commentsOpen}
         onToggleComments={() => setCommentsOpen((o) => !o)}
-        onImportSlides={async (file) => {
+        onImportSlides={async (file: File) => {
           try {
             const r = await importSlides(doc.doc_id, file)
             handleSlideCountChange(r.slide_count, r.slide_count)
             setRefreshKey((k) => k + 1)
           } catch (e) { console.error("import slides failed:", e) }
         }}
-        onBulkFillColor={multiSelectIds.size > 1 ? async (color) => {
+        onBulkFillColor={multiSelectIds.size > 1 ? async (color: string) => {
           try {
             await bulkUpdateStyle(doc.doc_id, selectedSlideRef.current, [...multiSelectIds], { fill_color: color, fill_type: "solid" })
             markDirty(selectedSlideRef.current)
@@ -1454,7 +1485,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
             toast.success(`Generated notes for ${r.generated} slide${r.generated !== 1 ? "s" : ""}${r.skipped > 0 ? ` · ${r.skipped} skipped` : ""}`)
           } catch (e) { console.error("bulk notes failed:", e) }
         }}
-        onJumpToSlide={(n) => { setSelectedSlide(n); setSelectedElement(null) }}
+        onJumpToSlide={(n: number) => { setSelectedSlide(n); setSelectedElement(null) }}
         onTextFormatCommit={rerender}
       />
 

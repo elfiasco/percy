@@ -20,6 +20,8 @@ export interface StudioElement {
   locked: boolean
   hidden: boolean
   animation: string
+  geometry_preset: string | null
+  children?: StudioElement[] | null
 }
 
 export interface SlideElementsResponse {

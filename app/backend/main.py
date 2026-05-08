@@ -297,6 +297,8 @@ _LARGE_PDF_PAGES = 40
 _docs: dict[str, dict[str, Any]] = {}
 _history_lock = threading.Lock()
 _vision_lock = threading.Lock()
+_cloud_autosave_lock = threading.Lock()
+_cloud_autosave_timers: dict[str, threading.Timer] = {}
 
 # ── models ────────────────────────────────────────────────────────────────────
 class OnboardRequest(BaseModel):
@@ -2770,8 +2772,72 @@ def save_to_cloud(doc_id: str):
         raise HTTPException(500, f"Failed to upload bundle to S3: {exc}")
 
     log.info("save-to-cloud: saved %d bytes → %s", len(pkl_bytes), bundle_uri)
+    d["cloud_saved_at"] = time.time()
+    d["cloud_dirty"] = False
     return {"ok": True, "bundle_uri": bundle_uri, "bytes": len(pkl_bytes),
             "version_archived": version_key}
+
+
+def _autosave_doc_to_cloud(doc_id: str) -> dict[str, Any]:
+    """Overwrite a cloud-loaded document bundle without creating an S3 version copy."""
+    import pickle as _pickle
+
+    d = _require(doc_id)
+    bundle_uri = d.get("cloud_bundle_uri")
+    if not bundle_uri:
+        raise HTTPException(400, "Document was not loaded from a cloud bundle")
+    if not bundle_uri.startswith("s3://"):
+        raise HTTPException(400, "Invalid cloud_bundle_uri format")
+
+    parts = bundle_uri.removeprefix("s3://").split("/", 1)
+    if len(parts) != 2:
+        raise HTTPException(400, "Invalid S3 URI in cloud_bundle_uri")
+    bucket, key = parts[0], parts[1]
+
+    try:
+        pkl_bytes = _pickle.dumps(d["doc"])
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to pickle document: {exc}")
+
+    try:
+        import boto3 as _boto3
+        s3 = _boto3.client("s3")
+        s3.put_object(Bucket=bucket, Key=key, Body=pkl_bytes, ContentType="application/octet-stream")
+    except Exception as exc:
+        log.exception("cloud autosave: S3 upload failed")
+        raise HTTPException(500, f"Failed to upload bundle to S3: {exc}")
+
+    d["cloud_saved_at"] = time.time()
+    d["cloud_dirty"] = False
+    log.info("cloud autosave: saved doc_id=%s bytes=%d uri=%s", doc_id, len(pkl_bytes), bundle_uri)
+    return {"ok": True, "bundle_uri": bundle_uri, "bytes": len(pkl_bytes), "reason": "autosave"}
+
+
+def _schedule_cloud_autosave(doc_id: str) -> None:
+    d = _docs.get(doc_id)
+    if not d or not d.get("cloud_bundle_uri"):
+        return
+    delay = max(0.5, float(os.environ.get("PERCY_STUDIO_CLOUD_AUTOSAVE_MS", "4000")) / 1000.0)
+    d["cloud_dirty"] = True
+
+    def _run() -> None:
+        with _cloud_autosave_lock:
+            _cloud_autosave_timers.pop(doc_id, None)
+        try:
+            _autosave_doc_to_cloud(doc_id)
+        except HTTPException as exc:
+            log.warning("cloud autosave failed for %s: %s", doc_id, exc.detail)
+        except Exception as exc:
+            log.exception("cloud autosave failed for %s: %s", doc_id, exc)
+
+    with _cloud_autosave_lock:
+        prev = _cloud_autosave_timers.pop(doc_id, None)
+        if prev:
+            prev.cancel()
+        timer = threading.Timer(delay, _run)
+        timer.daemon = True
+        _cloud_autosave_timers[doc_id] = timer
+        timer.start()
 
 
 @app.post("/api/docs/{doc_id}/slides/{n}/render")
@@ -3449,6 +3515,11 @@ def _serialize_element(el: Any, index: int, slide_w: float, slide_h: float) -> d
     z_index  = int(getattr(st, "z_index", 1) or 1)
     el_type  = el.element_type
 
+    # geometry_preset — used by the native SVG shape renderer to pick the right
+    # SVG path without an extra round-trip. Only meaningful for BridgeShape.
+    shape_id_obj = getattr(el, "shape_identification", None)
+    geometry_preset: str | None = getattr(shape_id_obj, "geometry_preset", None) if shape_id_obj else None
+
     left_pct  = (pos.left   / slide_w * 100) if slide_w else 0.0
     top_pct   = (pos.top    / slide_h * 100) if slide_h else 0.0
     width_pct = (pos.width  / slide_w * 100) if slide_w else 0.0
@@ -3461,6 +3532,17 @@ def _serialize_element(el: Any, index: int, slide_w: float, slide_h: float) -> d
         text_preview: str | None = (raw_text[:80] + "…") if len(raw_text) > 80 else (raw_text or None)
     except Exception:
         text_preview = None
+    # For BridgeGroup: serialize children relative to the group's own dimensions
+    children_data = None
+    if el_type == "BridgeGroup" and pos.width and pos.height:
+        raw_children = getattr(el, "children", []) or []
+        children_data = []
+        for j, child in enumerate(raw_children):
+            try:
+                children_data.append(_serialize_element(child, j, pos.width, pos.height))
+            except Exception:
+                pass
+
     return {
         "id":           el_id,
         "index":        index,
@@ -3480,9 +3562,11 @@ def _serialize_element(el: Any, index: int, slide_w: float, slide_h: float) -> d
         "flip_h":       flip_h,
         "flip_v":       flip_v,
         "z_index":      z_index,
-        "locked":       bool(custom.get("studio_locked", False)),
-        "hidden":       bool(custom.get("studio_hidden", False)),
-        "animation":    custom.get("studio_animation", "none"),
+        "locked":           bool(custom.get("studio_locked", False)),
+        "hidden":           bool(custom.get("studio_hidden", False)),
+        "animation":        custom.get("studio_animation", "none"),
+        "geometry_preset":  geometry_preset,
+        "children":         children_data,
     }
 
 
@@ -5997,6 +6081,7 @@ def _snapshot_doc(doc_id: str) -> None:
         stack.pop(0)
     d["_redo_stack"] = []
     d["modified_at"] = time.time()
+    _schedule_cloud_autosave(doc_id)
 
 
 @app.get("/api/docs/{doc_id}/undo-state")
@@ -6023,6 +6108,8 @@ def undo(doc_id: str):
     except Exception:
         pass
     d["doc"] = _pickle.loads(stack.pop())
+    d["modified_at"] = time.time()
+    _schedule_cloud_autosave(doc_id)
     log.info("undo: %s — %d undo / %d redo remain", doc_id, len(stack), len(redo_stack))
     return {"ok": True, "undo_depth": len(stack), "redo_depth": len(redo_stack)}
 
@@ -6041,6 +6128,8 @@ def redo_action(doc_id: str):
     except Exception:
         pass
     d["doc"] = _pickle.loads(redo_stack.pop())
+    d["modified_at"] = time.time()
+    _schedule_cloud_autosave(doc_id)
     log.info("redo: %s — %d undo / %d redo remain", doc_id, len(stack), len(redo_stack))
     return {"ok": True, "undo_depth": len(stack), "redo_depth": len(redo_stack)}
 
@@ -7592,10 +7681,49 @@ def _find_element(doc_id: str, n: int, element_id: str):
     slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
     if slide is None:
         raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
-    for i, e in enumerate(slide.elements):
-        if _element_id(e, i) == element_id:
-            return e
-    raise HTTPException(404, f"Element {element_id!r} not found on slide {n}")
+
+    def _search(elements, start_index=0):
+        for i, e in enumerate(elements, start_index):
+            if _element_id(e, i) == element_id:
+                return e
+            for child in getattr(e, "children", []) or []:
+                if _element_id(child, 0) == element_id:
+                    return child
+        return None
+
+    found = _search(slide.elements)
+    if found is None:
+        raise HTTPException(404, f"Element {element_id!r} not found on slide {n}")
+    return found
+
+
+@app.get("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/freeform-data")
+def get_freeform_data(doc_id: str, n: int, element_id: str):
+    """Return SVG-ready path data for a BridgeFreeform element."""
+    el = _find_element(doc_id, n, element_id)
+    if el.element_type != "BridgeFreeform":
+        raise HTTPException(400, "Element is not a BridgeFreeform")
+    paths_out = []
+    for p in (el.paths or []):
+        cmds = []
+        for c in (p.commands or []):
+            cmds.append({"command": c.command, "points": list(c.points or [])})
+        paths_out.append({
+            "width":     p.width or 1,
+            "height":    p.height or 1,
+            "stroke":    bool(p.stroke),
+            "fill_mode": p.fill_mode,
+            "commands":  cmds,
+        })
+    return {
+        "paths":       paths_out,
+        "fill_type":   getattr(el.fill, "fill_type", None),
+        "fill_color":  _color_to_str(getattr(el.fill, "fill_color", None)),
+        "line_visible": bool(getattr(el.line, "line_visible", False)),
+        "line_color":  _color_to_str(getattr(el.line, "line_color", None)),
+        "line_width":  getattr(el.line, "line_width", None),
+        "opacity":     max(0.0, 1.0 - float(getattr(el.fill, "transparency", 0) or 0)),
+    }
 
 
 @app.get("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/text")
@@ -9251,6 +9379,53 @@ def render_element_png(doc_id: str, n: int, element_id: str, v: int = 0):
         content=buf.read(),
         media_type="image/png",
         headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/raw-image")
+def serve_raw_image(doc_id: str, n: int, element_id: str, v: int = 0):
+    """Serve the raw image bytes for a BridgeImage element (no re-rendering).
+
+    Used by the native image renderer to display BridgeImage elements without
+    going through the matplotlib pipeline. Falls back to 404 for non-image elements.
+    """
+    d   = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    el = None
+    for i, e in enumerate(slide.elements):
+        if _element_id(e, i) == element_id:
+            el = e
+            break
+    if el is None:
+        raise HTTPException(404, f"Element {element_id!r} not found on slide {n}")
+
+    if getattr(el, "element_type", "") != "BridgeImage":
+        raise HTTPException(400, "element is not a BridgeImage")
+
+    img_data = getattr(el, "image_data", None)
+    raw: bytes | None = getattr(img_data, "image_bytes", None) if img_data else None
+    if not raw:
+        raise HTTPException(404, "image bytes not available")
+
+    fmt: str = (getattr(img_data, "image_format", None) or "png").lower()
+    mime = {
+        "png": "image/png",
+        "jpg": "image/jpeg", "jpeg": "image/jpeg",
+        "gif": "image/gif",
+        "webp": "image/webp",
+        "svg": "image/svg+xml",
+        "tif": "image/tiff", "tiff": "image/tiff",
+        "emf": "image/x-emf", "wmf": "image/x-wmf",
+    }.get(fmt, "application/octet-stream")
+
+    return Response(
+        content=raw,
+        media_type=mime,
+        headers={"Cache-Control": "max-age=3600, immutable"},
     )
 
 

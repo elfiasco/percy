@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import type { TableData, TableDataUpdate, TableCellEditor } from "../../lib/studioTypes"
-import { fetchTableData, updateTableData } from "../../lib/studioApi"
+import { commitTableData } from "../../lib/studio/commands"
+import { studioStore } from "../../lib/studio/store"
 
 // ── UI primitives ─────────────────────────────────────────────────────────────
 
@@ -102,6 +103,53 @@ function Selector<T extends string>({ value, onChange, options }: {
 
 type SubTab = "cells" | "layout" | "borders" | "style"
 
+type CellCoord = { row: number; col: number }
+type CellRangeSelection = { anchor: CellCoord; focus: CellCoord; row: number; col: number }
+
+function singleCellSelection(cell: CellCoord): CellRangeSelection {
+  return { anchor: cell, focus: cell, row: cell.row, col: cell.col }
+}
+
+function rangeSelection(anchor: CellCoord, focus: CellCoord): CellRangeSelection {
+  return { anchor, focus, row: focus.row, col: focus.col }
+}
+
+function rangeBounds(sel: CellRangeSelection) {
+  return {
+    row0: Math.min(sel.anchor.row, sel.focus.row),
+    row1: Math.max(sel.anchor.row, sel.focus.row),
+    col0: Math.min(sel.anchor.col, sel.focus.col),
+    col1: Math.max(sel.anchor.col, sel.focus.col),
+  }
+}
+
+function cellsInSelection(sel: CellRangeSelection | null): CellCoord[] {
+  if (!sel) return []
+  const { row0, row1, col0, col1 } = rangeBounds(sel)
+  const cells: CellCoord[] = []
+  for (let row = row0; row <= row1; row++) {
+    for (let col = col0; col <= col1; col++) cells.push({ row, col })
+  }
+  return cells
+}
+
+function primaryCell(sel: CellRangeSelection | null): CellCoord | null {
+  return sel?.focus ?? sel?.anchor ?? null
+}
+
+function selectionLabel(sel: CellRangeSelection | null): string {
+  if (!sel) return ""
+  const { row0, row1, col0, col1 } = rangeBounds(sel)
+  if (row0 === row1 && col0 === col1) return `R${row0 + 1}C${col0 + 1}`
+  return `R${row0 + 1}C${col0 + 1}:R${row1 + 1}C${col1 + 1}`
+}
+
+function isCellSelected(sel: CellRangeSelection | null, cell: CellCoord): boolean {
+  if (!sel) return false
+  const { row0, row1, col0, col1 } = rangeBounds(sel)
+  return cell.row >= row0 && cell.row <= row1 && cell.col >= col0 && cell.col <= col1
+}
+
 const H_ALIGN_OPTS = [
   { label: "Left",    value: "left" },
   { label: "Center",  value: "center" },
@@ -126,16 +174,23 @@ const BORDER_STYLE_OPTS = [
 
 function CellsTab({ data, sel, setSel, patch }: {
   data: TableData
-  sel: { row: number; col: number } | null
-  setSel: (s: { row: number; col: number } | null) => void
+  sel: CellRangeSelection | null
+  setSel: (s: CellRangeSelection | null) => void
   patch: (u: TableDataUpdate) => void
 }) {
   const updateCell = (fields: Partial<TableCellEditor>) => {
     if (!sel) return
-    patch({ cells: [{ ...fields, row: sel.row, col: sel.col }] })
+    patch({ cells: cellsInSelection(sel).map((cell) => ({ ...fields, row: cell.row, col: cell.col })) })
+  }
+  const updatePrimaryCell = (fields: Partial<TableCellEditor>) => {
+    const cell = primaryCell(sel)
+    if (!cell) return
+    patch({ cells: [{ ...fields, row: cell.row, col: cell.col }] })
   }
 
-  const cell = sel ? data.cells[sel.row]?.[sel.col] ?? null : null
+  const selectedCell = primaryCell(sel)
+  const cell = selectedCell ? data.cells[selectedCell.row]?.[selectedCell.col] ?? null : null
+  const label = selectionLabel(sel)
 
   return (
     <div className="space-y-2">
@@ -155,11 +210,13 @@ function CellsTab({ data, sel, setSel, patch }: {
               <tr key={rIdx}>
                 <td className="text-muted/40 px-1 py-0.5 sticky left-0 bg-base/60 z-10 text-[9px]">{rIdx + 1}</td>
                 {row.map((c) => {
-                  const isSel = sel && sel.row === c.row && sel.col === c.col
+                  const isSel = isCellSelected(sel, c)
                   const display = c.text.slice(0, 12)
                   return (
                     <td key={c.col}
-                      onClick={() => setSel({ row: c.row, col: c.col })}
+                      onClick={(e) => setSel(e.shiftKey && sel
+                        ? rangeSelection(sel.anchor, { row: c.row, col: c.col })
+                        : singleCellSelection({ row: c.row, col: c.col }))}
                       className={[
                         "px-1 py-0.5 cursor-pointer truncate max-w-[5rem]",
                         isSel ? "bg-accent/30 text-slate-100 ring-1 ring-accent" : "hover:bg-white/5 text-slate-300",
@@ -186,13 +243,15 @@ function CellsTab({ data, sel, setSel, patch }: {
 
       {cell && (
         <div className="bg-base/40 border border-edge/60 rounded p-2 space-y-1.5">
-          <div className="text-[10px] text-muted">Editing R{sel!.row + 1}C{sel!.col + 1}</div>
+          <div className="text-[10px] text-muted">
+            {cellsInSelection(sel).length > 1 ? `Formatting ${label}` : `Editing ${label}`}
+          </div>
 
           <FieldRow label="Text">
             <textarea
               defaultValue={cell.text}
               rows={2}
-              onBlur={(e) => updateCell({ text: e.target.value })}
+              onBlur={(e) => updatePrimaryCell({ text: e.target.value })}
               onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) (e.target as HTMLTextAreaElement).blur() }}
               className="w-full text-[11px] bg-base border border-edge rounded px-1.5 py-0.5 text-slate-200 focus:outline-none focus:border-accent resize-none"
             />
@@ -239,11 +298,12 @@ function CellsTab({ data, sel, setSel, patch }: {
 
 function LayoutTab({ data, sel, patch }: {
   data: TableData
-  sel: { row: number; col: number } | null
+  sel: CellRangeSelection | null
   patch: (u: TableDataUpdate) => void
 }) {
-  const r = sel?.row ?? 0
-  const c = sel?.col ?? 0
+  const active = primaryCell(sel)
+  const r = active?.row ?? 0
+  const c = active?.col ?? 0
   return (
     <div className="space-y-2">
       <SectionHead title="Rows / Columns" />
@@ -310,36 +370,43 @@ function LayoutTab({ data, sel, patch }: {
 
 function BordersTab({ data, sel, patch }: {
   data: TableData
-  sel: { row: number; col: number } | null
+  sel: CellRangeSelection | null
   patch: (u: TableDataUpdate) => void
 }) {
-  const cell = sel ? data.cells[sel.row]?.[sel.col] ?? null : null
+  const active = primaryCell(sel)
+  const cell = active ? data.cells[active.row]?.[active.col] ?? null : null
   const updateBorder = (side: "top" | "bottom" | "left" | "right", fields: Partial<{ visible: boolean; width: number | null; color: string | null; style: string }>) => {
     if (!sel || !cell) return
-    const existing = cell.borders[side]
-    const merged = {
-      visible: existing?.visible ?? true,
-      width:   existing?.width ?? 1.0,
-      color:   existing?.color ?? "#000000",
-      style:   existing?.style ?? "solid",
-      ...fields,
-    }
-    patch({ cells: [{ row: sel.row, col: sel.col, borders: { ...cell.borders, [side]: merged } } as any] })
-  }
-  const applyAllSides = (fields: Partial<{ visible: boolean; width: number | null; color: string | null; style: string }>) => {
-    if (!sel || !cell) return
-    const next: any = {}
-    for (const side of ["top", "bottom", "left", "right"] as const) {
-      const existing = cell.borders[side]
-      next[side] = {
+    patch({ cells: cellsInSelection(sel).map((coord) => {
+      const target = data.cells[coord.row]?.[coord.col] ?? cell
+      const existing = target.borders[side]
+      const merged = {
         visible: existing?.visible ?? true,
         width:   existing?.width ?? 1.0,
         color:   existing?.color ?? "#000000",
         style:   existing?.style ?? "solid",
         ...fields,
       }
-    }
-    patch({ cells: [{ row: sel.row, col: sel.col, borders: next } as any] })
+      return { row: coord.row, col: coord.col, borders: { ...target.borders, [side]: merged } } as any
+    }) })
+  }
+  const applyAllSides = (fields: Partial<{ visible: boolean; width: number | null; color: string | null; style: string }>) => {
+    if (!sel || !cell) return
+    patch({ cells: cellsInSelection(sel).map((coord) => {
+      const target = data.cells[coord.row]?.[coord.col] ?? cell
+      const next: any = {}
+      for (const side of ["top", "bottom", "left", "right"] as const) {
+        const existing = target.borders[side]
+        next[side] = {
+          visible: existing?.visible ?? true,
+          width:   existing?.width ?? 1.0,
+          color:   existing?.color ?? "#000000",
+          style:   existing?.style ?? "solid",
+          ...fields,
+        }
+      }
+      return { row: coord.row, col: coord.col, borders: next } as any
+    }) })
   }
   const applyTableBorders = (fields: { color: string | null; width: number | null; style: string }) => {
     // apply to outer perimeter of all cells
@@ -492,7 +559,7 @@ export default function TableEditorPanel({ docId, slideN, elementId, onCommit }:
   const [error, setError]   = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [subTab, setSubTab] = useState<SubTab>("cells")
-  const [sel, setSel]       = useState<{ row: number; col: number } | null>(null)
+  const [sel, setSel]       = useState<CellRangeSelection | null>(null)
 
   const pendingRef = useRef<TableDataUpdate | null>(null)
   const flushTimer = useRef<number | null>(null)
@@ -500,7 +567,7 @@ export default function TableEditorPanel({ docId, slideN, elementId, onCommit }:
   useEffect(() => {
     let cancelled = false
     setError(null); setData(null); setSel(null)
-    fetchTableData(docId, slideN, elementId)
+    studioStore.loadTablePayload(docId, slideN, elementId)
       .then((d) => { if (!cancelled) setData(d) })
       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)) })
     return () => { cancelled = true }
@@ -513,12 +580,17 @@ export default function TableEditorPanel({ docId, slideN, elementId, onCommit }:
     if (!update) return
     setSaving(true)
     try {
-      const fresh = await updateTableData(docId, slideN, elementId, update)
+      const fresh = await commitTableData(elementId, update)
+      if (!fresh) return
       setData(fresh)
       // clamp selection to new dimensions
       setSel((s) => {
         if (!s) return null
-        return { row: Math.min(s.row, fresh.rows - 1), col: Math.min(s.col, fresh.cols - 1) }
+        const clamp = (cell: CellCoord): CellCoord => ({
+          row: Math.max(0, Math.min(cell.row, fresh.rows - 1)),
+          col: Math.max(0, Math.min(cell.col, fresh.cols - 1)),
+        })
+        return rangeSelection(clamp(s.anchor), clamp(s.focus))
       })
       onCommit()
     } catch (e) {
@@ -526,7 +598,7 @@ export default function TableEditorPanel({ docId, slideN, elementId, onCommit }:
     } finally {
       setSaving(false)
     }
-  }, [docId, slideN, elementId, onCommit])
+  }, [elementId, onCommit])
 
   // For structural ops (insert/delete) we flush immediately; for cell edits we debounce
   const patch = useCallback((update: TableDataUpdate) => {

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react"
 import { useEditor, EditorContent, generateHTML } from "@tiptap/react"
 import Collaboration from "@tiptap/extension-collaboration"
-import CollaborationCursor from "@tiptap/extension-collaboration-cursor"
 import type { ParagraphsTextContent } from "../../../lib/studioTypes"
-import { fetchElementText, updateElementText, fetchElementStyle } from "../../../lib/studioApi"
+import { updateElementText } from "../../../lib/studioApi"
+import { useStudioTextStylePayload } from "../../../lib/studio/payloadHooks"
+import { studioStore } from "../../../lib/studio/store"
 import { paragraphsToTiptap, tiptapToParagraphs } from "../../../lib/bridge/tiptapAdapter"
 import { bridgeExtensions } from "../../../lib/bridge/extensions"
 import { setActiveTiptapEditor } from "../../../lib/bridge/activeEditor"
@@ -43,23 +44,14 @@ function TiptapTextRendererImpl({
   const [style, setStyle]     = useState<ElementStyleLite | null>(null)
   const [editing, setEditing] = useState(false)
   const [error, setError]     = useState<string | null>(null)
+  const payload = useStudioTextStylePayload(docId, slideN, element.id, renderKey)
 
-  // Load text + style on mount / refresh
+  // Hydrate local editing state from the store-owned payload cache.
   useEffect(() => {
-    let cancelled = false
-    setError(null)
-    Promise.all([
-      fetchElementText(docId, slideN, element.id)
-        .then((c) => c.kind === "paragraphs" ? c : null)
-        .catch(() => null),
-      fetchElementStyle(docId, slideN, element.id).catch(() => null),
-    ]).then(([textC, styleC]) => {
-      if (cancelled) return
-      setContent(textC ?? emptyParagraphs())
-      setStyle(styleC ?? null)
-    }).catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)) })
-    return () => { cancelled = true }
-  }, [docId, slideN, element.id, renderKey])
+    setError(payload.error)
+    if (payload.text) setContent(payload.text.kind === "paragraphs" ? payload.text : emptyParagraphs())
+    if (payload.style) setStyle(payload.style)
+  }, [payload.error, payload.text, payload.style])
 
   // Only exit edit mode when the element is explicitly deselected after having
   // been selected. The hasBeenSelected guard prevents the initial unselected
@@ -113,7 +105,9 @@ function TiptapTextRendererImpl({
   if (error)    return <div style={ERR_STYLE}>! text load failed</div>
   if (!content) return <div style={{ width: "100%", height: "100%" }} />
 
-  const isEmpty = !content || (content.kind === "paragraphs" && content.paragraphs.every((p) => !p.runs?.length && !p.text))
+  const isEmpty = !content || (content.kind === "paragraphs" && content.paragraphs.every((p) =>
+    !p.runs?.length || p.runs.every((run) => !run.text),
+  ))
   const containerStyle: React.CSSProperties = {
     width:          "100%",
     height:         "100%",
@@ -286,6 +280,7 @@ function RichTextEditor({
     if (isCollabActive) {
       // Y.Doc is the truth — server worker will persist. Just notify parent.
       lastSavedJSON.current = jsonStr
+      studioStore.setTextPayload(elementId, next)
       onSaved(next)
       // Also persist to REST API so text is readable by non-collab clients / tests.
       updateElementText(docId, slideN, elementId, next).catch(() => {})
@@ -293,6 +288,7 @@ function RichTextEditor({
     }
     try {
       const updated = await updateElementText(docId, slideN, elementId, next)
+      studioStore.setTextPayload(elementId, updated)
       if (updated.kind === "paragraphs") {
         lastSavedJSON.current = JSON.stringify(paragraphsToTiptap(updated))
         onSaved(updated)

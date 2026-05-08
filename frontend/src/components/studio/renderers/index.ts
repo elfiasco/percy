@@ -1,8 +1,11 @@
-import { registerChartRenderer }        from "./ChartRenderer"
-import { registerConnectorRenderer }    from "./ConnectorRenderer"
-import { registerTiptapTextRenderer }   from "./TiptapTextRenderer"
-import { registerTiptapTableRenderer }  from "./TiptapTableRenderer"
-import { registerTiptapShapeRenderer }  from "./TiptapShapeRenderer"
+import { registerChartRenderer }          from "./ChartRenderer"
+import { registerConnectorRenderer }      from "./ConnectorRenderer"
+import { registerTiptapTextRenderer }     from "./TiptapTextRenderer"
+import { registerTiptapTableRenderer }    from "./TiptapTableRenderer"
+import { registerBridgeShapeRenderer }    from "./BridgeShapeRenderer"
+import { registerBridgeImageRenderer }    from "./BridgeImageRenderer"
+import { registerBridgeFreeformRenderer } from "./BridgeFreeformRenderer"
+import { registerBridgeGroupRenderer }    from "./BridgeGroupRenderer"
 
 let _setup = false
 
@@ -13,5 +16,8 @@ export function setupNativeRenderers(): void {
   registerConnectorRenderer()
   registerTiptapTextRenderer()
   registerTiptapTableRenderer()
-  registerTiptapShapeRenderer()
+  registerBridgeShapeRenderer()
+  registerBridgeImageRenderer()
+  registerBridgeFreeformRenderer()
+  registerBridgeGroupRenderer()
 }
