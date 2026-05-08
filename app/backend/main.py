@@ -5953,6 +5953,114 @@ def create_element(doc_id: str, n: int, req: NewElementRequest):
     return _serialize_element(el, new_index, w, h)
 
 
+class NewChartRequest(BaseModel):
+    chart_type: str = "bar"
+    left_in:  float = 1.0
+    top_in:   float = 1.0
+    width_in: float = 8.0
+    height_in: float = 5.0
+    label: str = "Chart"
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/elements/chart")
+def create_chart_element(doc_id: str, n: int, req: NewChartRequest):
+    """Insert a blank BridgeChart element with default sample data."""
+    from percy.bridge.elements import (
+        BridgeChart, Position, Transform, Stacking, Identification, Accessibility,
+        ChartCategories, ChartSeries, BridgeAxis, PlotProperties, Legend,
+        ChartDataSource, OverlayFiles, ReconstructionBlobs, ChartTitle, ColorSpec,
+    )
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    existing_ids = {getattr(getattr(e, "identification", None), "shape_id", None) for e in slide.elements}
+    new_id = max((x for x in existing_ids if x is not None), default=0) + 1
+    max_z  = max((getattr(e.stacking, "z_index", 1) for e in slide.elements), default=0)
+
+    cats = ["Q1", "Q2", "Q3", "Q4"]
+    series = [ChartSeries(name="Series 1", values=[12.0, 19.0, 8.0, 15.0])]
+
+    el = BridgeChart(
+        position=Position(left=req.left_in, top=req.top_in, width=req.width_in, height=req.height_in),
+        transforms=Transform(),
+        stacking=Stacking(z_index=max_z + 1),
+        identification=Identification(shape_id=new_id, shape_name=req.label),
+        accessibility=Accessibility(alt_text=req.label),
+        chart_type=req.chart_type,
+        categories=ChartCategories(categories=cats, categories_raw=cats),
+        series=series,
+        title=ChartTitle(text=req.label),
+        category_axis=BridgeAxis(visible=True),
+        value_axis=BridgeAxis(visible=True),
+        plot_properties=PlotProperties(),
+        legend=Legend(position="bottom"),
+        data_source=ChartDataSource(),
+        overlay_files=OverlayFiles(),
+        reconstruction_blobs=ReconstructionBlobs(),
+    )
+    slide.elements.append(el)
+    new_index = len(slide.elements) - 1
+    w, h = _get_slide_dims(doc, slide)
+    log.info("studio: created blank chart on slide %d of %s", n, doc_id)
+    return _serialize_element(el, new_index, w, h)
+
+
+class NewTableRequest(BaseModel):
+    rows: int = 4
+    cols: int = 3
+    left_in:  float = 1.0
+    top_in:   float = 1.0
+    width_in: float = 8.0
+    height_in: float = 3.0
+    label: str = "Table"
+
+
+@app.post("/api/docs/{doc_id}/slides/{n}/elements/table")
+def create_table_element(doc_id: str, n: int, req: NewTableRequest):
+    """Insert a blank BridgeTable element."""
+    from percy.bridge.elements import (
+        BridgeTable, Position, Transform, Stacking, Identification, Accessibility,
+        CellFormat, TableDimensions, TableProperties, TableDefaults,
+    )
+    _snapshot_doc(doc_id)
+    d = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found")
+
+    existing_ids = {getattr(getattr(e, "identification", None), "shape_id", None) for e in slide.elements}
+    new_id = max((x for x in existing_ids if x is not None), default=0) + 1
+    max_z  = max((getattr(e.stacking, "z_index", 1) for e in slide.elements), default=0)
+
+    rows = max(1, req.rows)
+    cols = max(1, req.cols)
+    data = [["" for _ in range(cols)] for _ in range(rows)]
+    cell_formats = [[CellFormat() for _ in range(cols)] for _ in range(rows)]
+
+    el = BridgeTable(
+        position=Position(left=req.left_in, top=req.top_in, width=req.width_in, height=req.height_in),
+        transforms=Transform(),
+        stacking=Stacking(z_index=max_z + 1),
+        identification=Identification(shape_id=new_id, shape_name=req.label),
+        accessibility=Accessibility(alt_text=req.label),
+        data=data,
+        cell_formats=cell_formats,
+        dimensions=TableDimensions(rows=rows, cols=cols),
+        table_properties=TableProperties(),
+        defaults=TableDefaults(),
+    )
+    slide.elements.append(el)
+    new_index = len(slide.elements) - 1
+    w, h = _get_slide_dims(doc, slide)
+    log.info("studio: created blank %dx%d table on slide %d of %s", rows, cols, n, doc_id)
+    return _serialize_element(el, new_index, w, h)
+
+
 # ── Slide layout presets ───────────────────────────────────────────────────────
 
 _LAYOUT_PRESETS: dict[str, list[dict]] = {
@@ -9186,12 +9294,18 @@ def _ser_style(el: Any) -> dict:
             fill_color = _color_to_str(fg)
 
     # line — ShapeLine uses .color/.width/.dash_style; FreeformLine uses .line_color/.line_width/.line_dash
+    line_visible = True
     line = getattr(el, "line", None)
     if line:
         lc = getattr(line, "color", None) or getattr(line, "line_color", None)
         line_color = _color_to_str(lc)
         line_width = getattr(line, "width", None) or getattr(line, "line_width", None)
         line_dash  = getattr(line, "dash_style", None) or getattr(line, "line_dash", None)
+        # ShapeLine uses .visible; FreeformLine uses .line_visible
+        lv = getattr(line, "visible", None)
+        if lv is None:
+            lv = getattr(line, "line_visible", True)
+        line_visible = bool(lv)
 
     # opacity — stored as fill.transparency (0.0 = fully opaque, 1.0 = fully transparent)
     # We expose it as 0.0–1.0 opacity (inverse of transparency)
@@ -9230,6 +9344,7 @@ def _ser_style(el: Any) -> dict:
     return {
         "fill_type":        fill_type,
         "fill_color":       fill_color,
+        "line_visible":     line_visible,
         "line_color":       line_color,
         "line_width":       line_width,
         "line_dash":        line_dash,

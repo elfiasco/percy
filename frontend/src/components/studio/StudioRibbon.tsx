@@ -168,6 +168,8 @@ interface Props {
   onDelete: () => void
   onDuplicate: () => void
   onInsertShape: (shapeType: string) => void
+  onInsertChart?: (chartType?: string) => void
+  onInsertTable?: (rows?: number, cols?: number) => void
   onInsertImage?: (file: File) => void
   onRebuild: () => void
   rebuilding: boolean
@@ -211,7 +213,7 @@ export default function StudioRibbon(props: Props) {
   const {
     doc, slideN, slideWidthIn, slideHeightIn, selectedElement,
     onCommitPosition, onCommitZIndex,
-    onDelete, onDuplicate, onInsertShape, onInsertImage,
+    onDelete, onDuplicate, onInsertShape, onInsertChart, onInsertTable, onInsertImage,
     onRebuild, rebuilding,
     chatOpen, onToggleChat,
     onShowShortcuts, onShowSlideSorter, onPresent,
@@ -450,6 +452,8 @@ export default function StudioRibbon(props: Props) {
             shapesOpen={shapesOpen}
             setShapesOpen={setShapesOpen}
             onInsertShape={onInsertShape}
+            onInsertChart={onInsertChart}
+            onInsertTable={onInsertTable}
             onPickImage={() => fileInputRef.current?.click()}
           />
         )}
@@ -613,18 +617,20 @@ function HomeRibbon({
 // ── INSERT tab ────────────────────────────────────────────────────────────────
 
 function InsertRibbon({
-  shapesOpen, setShapesOpen, onInsertShape, onPickImage,
+  shapesOpen, setShapesOpen, onInsertShape, onInsertChart, onInsertTable, onPickImage,
 }: {
   shapesOpen: boolean
   setShapesOpen: (o: boolean) => void
   onInsertShape: (shape: string) => void
+  onInsertChart?: (chartType?: string) => void
+  onInsertTable?: (rows?: number, cols?: number) => void
   onPickImage: () => void
 }) {
   return (
     <div className="flex h-[88px] items-stretch">
       {/* Tables */}
       <GroupBox title="Tables">
-        <RibbonBtn primary icon="▦" label="Table" disabled title="Coming soon" />
+        <RibbonBtn primary icon="▦" label="Table" onClick={() => onInsertTable?.()} title="Insert blank table" />
       </GroupBox>
 
       <GroupDivider />
@@ -680,7 +686,7 @@ function InsertRibbon({
 
       {/* Charts */}
       <GroupBox title="Illustrations">
-        <RibbonBtn icon="📊" label="Chart"     disabled title="Use right-click → Edit Connect for now" />
+        <RibbonBtn icon="📊" label="Chart" onClick={() => onInsertChart?.()} title="Insert blank bar chart" />
         <RibbonBtn icon="—"  label="Connector" disabled />
       </GroupBox>
     </div>

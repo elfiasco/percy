@@ -129,6 +129,7 @@ export type ElementTextContent =
 export interface ElementStyleData {
   fill_type: string | null     // "solid" | "gradient" | "pattern" | "none" | null
   fill_color: string | null    // hex "#RRGGBB"
+  line_visible: boolean | null
   line_color: string | null
   line_width: number | null    // pt
   line_dash: string | null     // "solid" | "dash" | "dot" | "dash_dot" etc.

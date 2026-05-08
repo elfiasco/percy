@@ -440,6 +440,28 @@ export async function copyElementToSlide(
   )
 }
 
+export async function createChartElement(
+  docId: string,
+  slideN: number,
+  opts: { chart_type?: string; left_in?: number; top_in?: number; width_in?: number; height_in?: number } = {},
+): Promise<StudioElement> {
+  return apiFetch<StudioElement>(
+    `${BASE}/docs/${docId}/slides/${slideN}/elements/chart`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts) },
+  )
+}
+
+export async function createTableElement(
+  docId: string,
+  slideN: number,
+  opts: { rows?: number; cols?: number; left_in?: number; top_in?: number; width_in?: number; height_in?: number } = {},
+): Promise<StudioElement> {
+  return apiFetch<StudioElement>(
+    `${BASE}/docs/${docId}/slides/${slideN}/elements/table`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts) },
+  )
+}
+
 export async function createImageElement(
   docId: string,
   slideN: number,

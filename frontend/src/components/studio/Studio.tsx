@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from "
 import { undoHistory } from "../../lib/studio/undoHistory"
 import type { DocInfo } from "../../lib/types"
 import type { StudioElement } from "../../lib/studioTypes"
-import { fetchSlideElements, renderSingleSlide, deleteElement, bulkDeleteElements, duplicateElement as duplicateElementApi, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, applyLayoutPreset, groupElements, ungroupElement, generateSlideContent, rerenderAllSlides, importSlides, bulkUpdateStyle, generateNotesBulk, addSlide, duplicateSlide, fetchSlidePins, pinSlide, bulkDeleteElementsByName, optimizeSlideLayout, splitElementToSlides, insertSummarySlide, autoDetectSections, fitTextToElements, optimizeImages, expandSlide, mergeElements, generateAltTextBulk, statsExportCsvUrl, statsExportJsonUrl, polishSlideText, insertToc, outlineExportUrl, notesExportUrl, generateConclusionSlide, thumbnailsZipUrl, textExportUrl, fixNumberedLists, cloneSlideTo, duplicateDeck, bulkFontReplace, clearNotes } from "../../lib/studioApi"
+import { fetchSlideElements, renderSingleSlide, deleteElement, bulkDeleteElements, duplicateElement as duplicateElementApi, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, createChartElement, createTableElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, applyLayoutPreset, groupElements, ungroupElement, generateSlideContent, rerenderAllSlides, importSlides, bulkUpdateStyle, generateNotesBulk, addSlide, duplicateSlide, fetchSlidePins, pinSlide, bulkDeleteElementsByName, optimizeSlideLayout, splitElementToSlides, insertSummarySlide, autoDetectSections, fitTextToElements, optimizeImages, expandSlide, mergeElements, generateAltTextBulk, statsExportCsvUrl, statsExportJsonUrl, polishSlideText, insertToc, outlineExportUrl, notesExportUrl, generateConclusionSlide, thumbnailsZipUrl, textExportUrl, fixNumberedLists, cloneSlideTo, duplicateDeck, bulkFontReplace, clearNotes } from "../../lib/studioApi"
 import type { ElementStyleData } from "../../lib/studioTypes"
 import * as api from "../../lib/api"
 import StudioSlideStrip from "./StudioSlideStrip"
@@ -1051,6 +1051,44 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
     }
   }, [doc.doc_id, markDirty, slideElements, slideWidthIn, slideHeightIn])
 
+  const handleInsertChart = useCallback(async (chartType = "bar") => {
+    const SLIDE_W = slideWidthIn || 13.33, SLIDE_H = slideHeightIn || 7.5
+    try {
+      const el = await createChartElement(doc.doc_id, selectedSlideRef.current, {
+        chart_type: chartType,
+        left_in: Math.max(0, (SLIDE_W - 8) / 2),
+        top_in: Math.max(0, (SLIDE_H - 4.5) / 2),
+        width_in: Math.min(8, SLIDE_W - 1),
+        height_in: Math.min(4.5, SLIDE_H - 1),
+      })
+      studioStore.upsertElement(el)
+      studioStore.selectOne(el.id)
+      setSelectedElement(el)
+      markDirty(selectedSlideRef.current)
+      setRefreshKey((k) => k + 1)
+      fetchUndoState(doc.doc_id).then((r) => { setUndoDepth(r.undo_depth); setRedoDepth(r.redo_depth) }).catch(() => {})
+    } catch (e) { console.error("insert chart failed:", e) }
+  }, [doc.doc_id, markDirty, slideWidthIn, slideHeightIn])
+
+  const handleInsertTable = useCallback(async (rows = 4, cols = 3) => {
+    const SLIDE_W = slideWidthIn || 13.33, SLIDE_H = slideHeightIn || 7.5
+    try {
+      const el = await createTableElement(doc.doc_id, selectedSlideRef.current, {
+        rows, cols,
+        left_in: Math.max(0, (SLIDE_W - 8) / 2),
+        top_in: Math.max(0, (SLIDE_H - 3) / 2),
+        width_in: Math.min(8, SLIDE_W - 1),
+        height_in: Math.min(3, SLIDE_H - 1),
+      })
+      studioStore.upsertElement(el)
+      studioStore.selectOne(el.id)
+      setSelectedElement(el)
+      markDirty(selectedSlideRef.current)
+      setRefreshKey((k) => k + 1)
+      fetchUndoState(doc.doc_id).then((r) => { setUndoDepth(r.undo_depth); setRedoDepth(r.redo_depth) }).catch(() => {})
+    } catch (e) { console.error("insert table failed:", e) }
+  }, [doc.doc_id, markDirty, slideWidthIn, slideHeightIn])
+
   // ── arrow key nudge + Delete/Duplicate keyboard shortcuts ─────────────────
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1404,6 +1442,8 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         onDelete={handleDelete}
         onDuplicate={handleDuplicate}
         onInsertShape={handleInsertShape}
+        onInsertChart={handleInsertChart}
+        onInsertTable={handleInsertTable}
         onInsertImage={handleInsertImage}
         onRebuild={() => { setDirtySlides(new Set()); onRebuild() }}
         rebuilding={rebuilding}

@@ -122,8 +122,9 @@ function ShapeSvg({ preset, adj, style, flipH, flipV }: ShapeSvgProps) {
   const fill = style?.fill_type === "none" || style?.fill_type === null
     ? "none"
     : (style?.fill_color ?? "#E2E8F0")
-  const stroke   = style?.line_color ?? "none"
-  const strokeW  = style?.line_width != null
+  const lineVisible = style?.line_visible !== false  // default true unless explicitly false
+  const stroke  = (lineVisible && style?.line_color) ? style.line_color : "none"
+  const strokeW = (lineVisible && style?.line_width != null)
     ? (style.line_width / 72 * 100 / 13.333).toFixed(3) // convert pt → % of 100-unit viewBox
     : "0"
   const opacity  = style?.opacity ?? 1
