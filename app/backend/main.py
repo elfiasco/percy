@@ -114,11 +114,22 @@ _audit_mw.install(app)
 
 
 
+import os as _os
+
+_GIT_SHA   = _os.environ.get("GIT_SHA", "dev")
+_BUILD_TIME = _os.environ.get("BUILD_TIME", "unknown")
+
 @app.get("/api/health", include_in_schema=False)
 def _health():
     """Liveness check used by App Runner. Always returns 200 — the auth middleware
     explicitly allows this path."""
-    return {"ok": True, "service": "percy-studio"}
+    return {"ok": True, "service": "percy-studio", "sha": _GIT_SHA, "build_time": _BUILD_TIME}
+
+
+@app.get("/api/version", include_in_schema=False)
+def _version():
+    """Returns the deployed git SHA so the UI can confirm which build is live."""
+    return {"sha": _GIT_SHA, "build_time": _BUILD_TIME}
 
 
 # ── Agent API manifest ────────────────────────────────────────────────────────

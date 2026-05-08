@@ -1592,6 +1592,11 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
             )}
             <span className="text-gray-400 text-[10px] shrink-0">{slideWidthIn.toFixed(1)}" × {slideHeightIn.toFixed(1)}"</span>
             <span className="text-gray-300">|</span>
+            {import.meta.env.VITE_GIT_SHA && import.meta.env.VITE_GIT_SHA !== "dev" && (
+              <span className="text-gray-300 text-[10px] font-mono shrink-0" title="Deployed build">
+                {import.meta.env.VITE_GIT_SHA}
+              </span>
+            )}
             {/* View mode buttons — Normal | Sorter | Reading (PPT status bar style) */}
             <div className="flex items-center gap-0.5 shrink-0">
               <button

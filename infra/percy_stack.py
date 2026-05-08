@@ -367,6 +367,10 @@ class PercyCloudDemoStack(Stack):
         # the Yjs websocket transport. Without this, multiplayer falls back
         # to BroadcastChannel (same-browser-only) and remote cursors / live
         # collaboration appear broken.
+        import subprocess as _sp, datetime as _dt
+        _git_sha = _sp.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
+        _build_time = _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
         studio_image = ecr_assets.DockerImageAsset(
             self,
             "PercyStudioImage",
@@ -380,6 +384,8 @@ class PercyCloudDemoStack(Stack):
                 # collab service runs there. The App Runner collab service
                 # is left in place but unused (would be removed on cleanup).
                 "VITE_YJS_WS_URL": "wss://percy-collab.16m6vj1w4md2c.us-east-1.cs.amazonlightsail.com",
+                "GIT_SHA":   _git_sha,
+                "BUILD_TIME": _build_time,
             },
         )
 

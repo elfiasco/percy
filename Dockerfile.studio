@@ -9,6 +9,9 @@ COPY frontend/ ./
 #   docker build --build-arg VITE_YJS_WS_URL=wss://collab.percy.app ...
 ARG VITE_YJS_WS_URL=""
 ENV VITE_YJS_WS_URL=${VITE_YJS_WS_URL}
+ARG GIT_SHA="dev"
+ARG BUILD_TIME="unknown"
+ENV VITE_GIT_SHA=${GIT_SHA}
 RUN npm run build
 
 # Stage 2: Python workspace API
@@ -58,6 +61,10 @@ COPY app/cloud       /app/app/cloud
 
 # DB file lives in /tmp on App Runner (instance is ephemeral; in prod we use Postgres)
 ENV PERCY_AUTH_DB=/tmp/percy_app.db
+ARG GIT_SHA="dev"
+ARG BUILD_TIME="unknown"
+ENV GIT_SHA=${GIT_SHA}
+ENV BUILD_TIME=${BUILD_TIME}
 
 # Pre-built frontend from Stage 1
 COPY --from=frontend-build /frontend/dist /app/frontend/dist
