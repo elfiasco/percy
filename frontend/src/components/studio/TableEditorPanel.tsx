@@ -529,7 +529,7 @@ function BordersTab({ data, sel, patch }: {
                   left:   { visible: true, color: "#000000", width: 1.0, style: "solid" },
                   right:  { visible: true, color: "#000000", width: 1.0, style: "solid" },
                 },
-              } as any)
+              } as any))
               patch({ cells })
             }}
             className="flex flex-col items-center gap-0.5 py-1.5 rounded bg-white/5 hover:bg-white/10 text-muted hover:text-slate-200 border border-edge"
