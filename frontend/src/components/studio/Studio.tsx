@@ -2,7 +2,8 @@ import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from "
 import { undoHistory } from "../../lib/studio/undoHistory"
 import type { DocInfo } from "../../lib/types"
 import type { StudioElement } from "../../lib/studioTypes"
-import { fetchSlideElements, renderSingleSlide, deleteElement, bulkDeleteElements, duplicateElement as duplicateElementApi, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, createChartElement, createTableElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, applyLayoutPreset, groupElements, ungroupElement, generateSlideContent, rerenderAllSlides, importSlides, bulkUpdateStyle, generateNotesBulk, addSlide, duplicateSlide, fetchSlidePins, pinSlide, bulkDeleteElementsByName, optimizeSlideLayout, splitElementToSlides, insertSummarySlide, autoDetectSections, fitTextToElements, optimizeImages, expandSlide, mergeElements, generateAltTextBulk, statsExportCsvUrl, statsExportJsonUrl, polishSlideText, insertToc, outlineExportUrl, notesExportUrl, generateConclusionSlide, thumbnailsZipUrl, textExportUrl, fixNumberedLists, cloneSlideTo, duplicateDeck, bulkFontReplace, clearNotes } from "../../lib/studioApi"
+import { fetchSlideElements, renderSingleSlide, deleteElement, bulkDeleteElements, duplicateElement as duplicateElementApi, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, createChartElement, createTableElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, applyLayoutPreset, groupElements, ungroupElement, generateSlideContent, rerenderAllSlides, importSlides, bulkUpdateStyle, generateNotesBulk, addSlide, duplicateSlide, fetchSlidePins, pinSlide, bulkDeleteElementsByName, optimizeSlideLayout, splitElementToSlides, insertSummarySlide, autoDetectSections, fitTextToElements, optimizeImages, expandSlide, mergeElements, generateAltTextBulk, statsExportCsvUrl, statsExportJsonUrl, polishSlideText, insertToc, outlineExportUrl, notesExportUrl, generateConclusionSlide, thumbnailsZipUrl, textExportUrl, fixNumberedLists, cloneSlideTo, duplicateDeck, bulkFontReplace, clearNotes, createFreeformPathElement } from "../../lib/studioApi"
+import type { FreeformPathCmd } from "../../lib/studioApi"
 import type { ElementStyleData } from "../../lib/studioTypes"
 import * as api from "../../lib/api"
 import StudioSlideStrip from "./StudioSlideStrip"
@@ -368,6 +369,8 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const [slideWidthIn, setSlideWidthIn]       = useState(13.333)
   const [slideHeightIn, setSlideHeightIn]     = useState(7.5)
   const [refreshKey, setRefreshKey]           = useState(0)
+  const [placingShapeType, setPlacingShapeType] = useState<string | null>(null)
+  const [drawMode, setDrawMode]               = useState<"pen" | "polygon" | null>(null)
   const [agentCollapsed, setAgentCollapsed] = useState<boolean>(() => loadAgentCollapsed())
   // Properties panel collapse state. Manual override is sticky; otherwise
   // we default to "collapsed when nothing is selected" so the canvas isn't
@@ -1008,28 +1011,11 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       .catch((err) => console.error("format paint apply failed:", err))
   }, [selectedElement, formatPaintMode, doc.doc_id, markDirty])
 
-  const handleInsertShape = useCallback(async (shapeType: string) => {
-    const W = 3.0, H = shapeType === "text_box" ? 1.0 : 2.0
-    // Find a position that doesn't overlap too much with existing elements
-    const existing = slideElements
-    const SLIDE_W = slideWidthIn || 13.33, SLIDE_H = slideHeightIn || 7.5
-    let bestL = 1.0, bestT = 1.0, minOverlap = Infinity
-    for (let tRow = 0; tRow < 4; tRow++) {
-      for (let tCol = 0; tCol < 4; tCol++) {
-        const l = tCol * (SLIDE_W / 4), t = tRow * (SLIDE_H / 4)
-        if (l + W > SLIDE_W || t + H > SLIDE_H) continue
-        const overlap = existing.reduce((sum, e) => {
-          const ox = Math.max(0, Math.min(l + W, e.left_in + e.width_in) - Math.max(l, e.left_in))
-          const oy = Math.max(0, Math.min(t + H, e.top_in + e.height_in) - Math.max(t, e.top_in))
-          return sum + ox * oy
-        }, 0)
-        if (overlap < minOverlap) { minOverlap = overlap; bestL = l + 0.25; bestT = t + 0.25 }
-      }
-    }
+  const _doInsertShape = useCallback(async (shapeType: string, leftIn: number, topIn: number, widthIn: number, heightIn: number) => {
     try {
       const el = await createNewElement(doc.doc_id, selectedSlideRef.current, {
         shape_type: shapeType,
-        left_in: bestL, top_in: bestT, width_in: W, height_in: H,
+        left_in: leftIn, top_in: topIn, width_in: widthIn, height_in: heightIn,
         fill_color: shapeType === "text_box" ? "" : "#4472C4",
         label: shapeType.charAt(0).toUpperCase() + shapeType.slice(1),
       })
@@ -1037,7 +1023,6 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       studioStore.upsertElement(el)
       studioStore.selectOne(el.id)
       setSelectedElement(el)
-      // Phase D: write the new element to Y.Doc so peers see it instantly.
       const collab = getCollabContext()
       if (collab?.enabled && collab.room) {
         try { ydocHydrateElement(collab.room, el) }
@@ -1049,7 +1034,58 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
     } catch (e) {
       console.error("insert failed:", e)
     }
-  }, [doc.doc_id, markDirty, slideElements, slideWidthIn, slideHeightIn])
+  }, [doc.doc_id, markDirty])
+
+  const handleInsertShape = useCallback((shapeType: string) => {
+    // Enter placement mode — user drags on canvas to define bounds
+    setPlacingShapeType(shapeType)
+    setDrawMode(null)
+  }, [])
+
+  const handlePlaceShape = useCallback(async (leftIn: number, topIn: number, widthIn: number, heightIn: number) => {
+    const shapeType = placingShapeType
+    setPlacingShapeType(null)
+    if (!shapeType) return
+    await _doInsertShape(shapeType, leftIn, topIn, widthIn, heightIn)
+  }, [placingShapeType, _doInsertShape])
+
+  const handleCancelPlace = useCallback(() => {
+    setPlacingShapeType(null)
+  }, [])
+
+  const handleStartDraw = useCallback((mode: "pen" | "polygon") => {
+    setDrawMode(mode)
+    setPlacingShapeType(null)
+  }, [])
+
+  const handleFinishFreeform = useCallback(async (commands: FreeformPathCmd[]) => {
+    setDrawMode(null)
+    try {
+      const el = await createFreeformPathElement(doc.doc_id, selectedSlideRef.current, commands, {
+        fill_color: "#4472C4",
+        line_visible: true,
+        line_color: "#2F2F2F",
+        line_width: 1.5,
+      })
+      studioStore.upsertElement(el)
+      studioStore.selectOne(el.id)
+      setSelectedElement(el)
+      const collab = getCollabContext()
+      if (collab?.enabled && collab.room) {
+        try { ydocHydrateElement(collab.room, el) }
+        catch (e) { console.warn("[Percy] Y.Doc add failed:", e) }
+      }
+      markDirty(selectedSlideRef.current)
+      setRefreshKey((k) => k + 1)
+      fetchUndoState(doc.doc_id).then((r) => { setUndoDepth(r.undo_depth); setRedoDepth(r.redo_depth) }).catch(() => {})
+    } catch (e) {
+      console.error("freeform insert failed:", e)
+    }
+  }, [doc.doc_id, markDirty])
+
+  const handleCancelDraw = useCallback(() => {
+    setDrawMode(null)
+  }, [])
 
   const handleInsertChart = useCallback(async (chartType = "bar") => {
     const SLIDE_W = slideWidthIn || 13.33, SLIDE_H = slideHeightIn || 7.5
@@ -1527,6 +1563,11 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         }}
         onJumpToSlide={(n: number) => { setSelectedSlide(n); setSelectedElement(null) }}
         onTextFormatCommit={rerender}
+        onStartDraw={handleStartDraw}
+        placingShapeType={placingShapeType ?? undefined}
+        drawMode={drawMode ?? undefined}
+        onCancelPlace={handleCancelPlace}
+        onCancelDraw={handleCancelDraw}
       />
 
       {/* ── main area: slide strip + canvas + properties ── */}
@@ -1593,6 +1634,12 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
             onSplitElement={handleSplitElement}
             onEditConnect={(id) => setConnectModalElementId(id)}
             connectIds={connectIdsThisSlide}
+            placingShapeType={placingShapeType}
+            onPlaceShape={handlePlaceShape}
+            onCancelPlace={handleCancelPlace}
+            drawMode={drawMode}
+            onFinishFreeform={handleFinishFreeform}
+            onCancelDraw={handleCancelDraw}
           />
           <StudioNotesBar docId={doc.doc_id} slideN={selectedSlide} />
 

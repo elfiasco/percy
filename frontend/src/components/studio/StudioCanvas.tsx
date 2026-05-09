@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react"
 import type { StudioElement } from "../../lib/studioTypes"
 import { createImageElement, elementPngUrl, broadcastElement, rewriteElementText, generateTalkingPoints } from "../../lib/studioApi"
+import type { FreeformPathCmd } from "../../lib/studioApi"
 import { CanvasContext } from "./CanvasContext"
 import ElementOverlay from "./ElementOverlay"
 import InlineTextEditor from "./InlineTextEditor"
 import AnnotationOverlay from "./AnnotationOverlay"
+import PlacementOverlay from "./PlacementOverlay"
+import FreeformDrawOverlay from "./FreeformDrawOverlay"
 import { getCollabContext } from "../../lib/collab/collabContext"
 import { hydrateSlide, observeElement, observeSlideElements, updateElementFields } from "../../lib/collab/bridgeYjsAdapter"
 import type { YjsRoom } from "../../lib/collab/yjsRoom"
@@ -39,9 +42,17 @@ interface Props {
   onEditConnect?: (elementId: string) => void
   connectIds?: Set<string>   // element IDs (on this slide) that have a Python connect attached
   colorBlindMode?: string | null
+  // Placement mode
+  placingShapeType?: string | null
+  onPlaceShape?: (leftIn: number, topIn: number, widthIn: number, heightIn: number) => void
+  onCancelPlace?: () => void
+  // Freeform draw mode
+  drawMode?: "pen" | "polygon" | null
+  onFinishFreeform?: (commands: FreeformPathCmd[]) => void
+  onCancelDraw?: () => void
 }
 
-export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightIn, refreshKey, onSelectElement, onMultiSelect, onElementRotated, onDeleteElement, onDuplicateElement, onToggleLockElement, onToggleHiddenElement, onZIndexChange, onGroupElements, onUngroupElement, focusMode, onToggleFocusMode, onSlideContextMenu, onBroadcastElement, onSplitElement, onEditConnect, connectIds, colorBlindMode }: Props) {
+export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightIn, refreshKey, onSelectElement, onMultiSelect, onElementRotated, onDeleteElement, onDuplicateElement, onToggleLockElement, onToggleHiddenElement, onZIndexChange, onGroupElements, onUngroupElement, focusMode, onToggleFocusMode, onSlideContextMenu, onBroadcastElement, onSplitElement, onEditConnect, connectIds, colorBlindMode, placingShapeType, onPlaceShape, onCancelPlace, drawMode, onFinishFreeform, onCancelDraw }: Props) {
   const containerRef               = useRef<HTMLDivElement>(null)
   const studio                      = useStudioStore()
   const elements                    = studio.elements
@@ -772,6 +783,27 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
             <AnnotationOverlay
               slideN={slideN}
               onClose={() => setAnnotating(false)}
+            />
+          )}
+
+          {/* placement mode overlay — drag to define element bounds */}
+          {placingShapeType && onPlaceShape && (
+            <PlacementOverlay
+              slideWidthIn={slideWidthIn}
+              slideHeightIn={slideHeightIn}
+              onPlace={onPlaceShape}
+              onCancel={onCancelPlace ?? (() => {})}
+            />
+          )}
+
+          {/* freeform draw overlay — pen or polygon */}
+          {drawMode && onFinishFreeform && (
+            <FreeformDrawOverlay
+              mode={drawMode}
+              slideWidthIn={slideWidthIn}
+              slideHeightIn={slideHeightIn}
+              onFinish={onFinishFreeform}
+              onCancel={onCancelDraw ?? (() => {})}
             />
           )}
         </div>

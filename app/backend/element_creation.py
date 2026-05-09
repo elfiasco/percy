@@ -254,6 +254,140 @@ async def create_freeform(doc_id: str, n: int, request: Request):
     return _finalize(doc, slide, doc_id, n, el, warnings)
 
 
+@router.post("/api/docs/{doc_id}/slides/{n}/elements/freeform-path")
+async def create_freeform_path(doc_id: str, n: int, request: Request):
+    """Create a BridgeFreeform from explicit path commands in slide-inch coordinates.
+
+    Body schema::
+
+        {
+          "commands": [
+            {"cmd": "M", "pts": [[x, y]]},
+            {"cmd": "L", "pts": [[x, y]]},
+            {"cmd": "Z", "pts": []}
+          ],
+          "fill_color": "#RRGGBB" | null,
+          "fill_type": "solid" | "none",
+          "line_visible": true,
+          "line_color": "#RRGGBB" | null,
+          "line_width": 1.5
+        }
+
+    All coordinates are in slide-space inches. The backend computes the
+    bounding box, positions the element, and normalises points to shape-local
+    EMU coordinates before building the BridgeFreeform.
+    """
+    body = await _parse_json(request)
+    helpers = _main()
+    helpers["snapshot"](doc_id)
+    doc, slide, _, theme = _resolve_slide(doc_id, n)
+    warnings: list[str] = []
+
+    from percy.bridge.elements import (
+        BridgeFreeform, FreeformFill, FreeformLine, FreeformPath, PathCommand,
+        TransformEmus, Position, Transform, Stacking, Identification, Accessibility,
+    )
+    from percy.bridge.colors import coerce_color
+
+    EMU = 914400  # EMU per inch
+
+    raw_cmds = body.get("commands", [])
+    if not raw_cmds:
+        raise HTTPException(400, "commands must be a non-empty list")
+
+    # Collect all points to derive bounding box.
+    all_pts: list[tuple[float, float]] = []
+    for cmd_obj in raw_cmds:
+        for pt in cmd_obj.get("pts", []):
+            if len(pt) >= 2:
+                all_pts.append((float(pt[0]), float(pt[1])))
+
+    if not all_pts:
+        raise HTTPException(400, "no valid points found in commands")
+
+    min_x = min(p[0] for p in all_pts)
+    min_y = min(p[1] for p in all_pts)
+    max_x = max(p[0] for p in all_pts)
+    max_y = max(p[1] for p in all_pts)
+
+    # Guarantee a minimum 0.1-inch footprint so shape renders.
+    if max_x - min_x < 0.1:
+        max_x = min_x + 0.1
+    if max_y - min_y < 0.1:
+        max_y = min_y + 0.1
+
+    width_in = max_x - min_x
+    height_in = max_y - min_y
+
+    # Build shape-local (normalised) path commands in EMU.
+    path_commands: list[PathCommand] = []
+    for cmd_obj in raw_cmds:
+        c = str(cmd_obj.get("cmd", "L")).upper()
+        if c in ("Z", "CLOSE"):
+            path_commands.append(PathCommand(command="close", points=[]))
+            continue
+        pts_emu = [
+            (round((float(pt[0]) - min_x) * EMU), round((float(pt[1]) - min_y) * EMU))
+            for pt in cmd_obj.get("pts", [])
+            if len(pt) >= 2
+        ]
+        if not pts_emu:
+            continue
+        cmd_name = "moveTo" if c == "M" else "lnTo"
+        path_commands.append(PathCommand(command=cmd_name, points=pts_emu))
+
+    fp = FreeformPath(
+        width=round(width_in * EMU),
+        height=round(height_in * EMU),
+        commands=path_commands,
+        stroke=body.get("line_visible", True),
+    )
+
+    # Fill
+    fill_hex = body.get("fill_color")
+    fill_type = body.get("fill_type", "solid" if fill_hex else "none")
+    fill_color_spec = coerce_color(fill_hex, theme) if fill_hex else None
+    fill = FreeformFill(fill_type=fill_type, fill_color=fill_color_spec)
+
+    # Line
+    line_hex = body.get("line_color")
+    line_width = body.get("line_width")
+    line_visible = body.get("line_visible", bool(line_hex))
+    line_color_spec = coerce_color(line_hex, theme) if line_hex else None
+    line = FreeformLine(
+        line_visible=line_visible,
+        line_color=line_color_spec,
+        line_width=float(line_width) if line_width is not None else None,
+    )
+
+    shape_id = helpers["docs"].get(doc_id) and None  # use builder helper
+    from percy.bridge import builders as _b
+    shape_id = _b._next_shape_id(slide)
+    z_index = _b._next_z(slide)
+    name = body.get("name") or f"Freeform {shape_id}"
+
+    el = BridgeFreeform(
+        position=Position(left=min_x, top=min_y, width=width_in, height=height_in),
+        transforms=Transform(),
+        stacking=Stacking(z_index=z_index),
+        identification=Identification(shape_name=name, shape_id=shape_id),
+        accessibility=Accessibility(alt_text=name),
+        paths=[fp],
+        fill=fill,
+        line=line,
+        transform_emus=TransformEmus(
+            offset_x=round(min_x * EMU),
+            offset_y=round(min_y * EMU),
+            extent_cx=round(width_in * EMU),
+            extent_cy=round(height_in * EMU),
+        ),
+    )
+
+    log.info("create_freeform_path: %d cmds, %.2f×%.2f in on slide %d of %s",
+             len(path_commands), width_in, height_in, n, doc_id)
+    return _finalize(doc, slide, doc_id, n, el, warnings)
+
+
 @router.post("/api/docs/{doc_id}/slides/{n}/elements/image-typed")
 async def create_image_typed(
     doc_id: str,

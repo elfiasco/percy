@@ -104,20 +104,112 @@ function ShapeQuickBtn({ icon, title, onClick }: { icon: string; title: string; 
 
 // ── insert shapes catalog ─────────────────────────────────────────────────────
 
-const INSERT_SHAPES: Array<{ label: string; value: string; icon: string }> = [
-  { label: "Text Box",     value: "text_box",   icon: "T" },
-  { label: "Rectangle",   value: "rect",        icon: "▭" },
-  { label: "Rounded Rect",value: "roundRect",   icon: "▢" },
-  { label: "Ellipse",     value: "ellipse",     icon: "○" },
-  { label: "Triangle",    value: "triangle",    icon: "△" },
-  { label: "Diamond",     value: "diamond",     icon: "◇" },
-  { label: "Pentagon",    value: "pentagon",    icon: "⬠" },
-  { label: "Hexagon",     value: "hexagon",     icon: "⬡" },
-  { label: "Star",        value: "star5",       icon: "★" },
-  { label: "Arrow Right", value: "rightArrow",  icon: "→" },
-  { label: "Arrow Left",  value: "leftArrow",   icon: "←" },
-  { label: "Banner",      value: "ribbon",      icon: "≣" },
+interface ShapeEntry { label: string; value: string; icon: string }
+interface ShapeCategory { category: string; shapes: ShapeEntry[] }
+
+const SHAPE_GALLERY: ShapeCategory[] = [
+  {
+    category: "Basic",
+    shapes: [
+      { label: "Text Box",       value: "text_box",       icon: "T" },
+      { label: "Rectangle",      value: "rect",           icon: "▭" },
+      { label: "Rounded Rect",   value: "roundRect",      icon: "▢" },
+      { label: "Ellipse",        value: "ellipse",        icon: "○" },
+      { label: "Triangle",       value: "triangle",       icon: "△" },
+      { label: "Rt Triangle",    value: "rtTriangle",     icon: "◺" },
+      { label: "Diamond",        value: "diamond",        icon: "◇" },
+      { label: "Parallelogram",  value: "parallelogram",  icon: "▱" },
+      { label: "Trapezoid",      value: "trapezoid",      icon: "⏢" },
+      { label: "Pentagon",       value: "pentagon",       icon: "⬠" },
+      { label: "Hexagon",        value: "hexagon",        icon: "⬡" },
+      { label: "Octagon",        value: "octagon",        icon: "⯃" },
+      { label: "Plus",           value: "mathPlus",       icon: "✚" },
+      { label: "Can",            value: "can",            icon: "⌀" },
+      { label: "Cube",           value: "cube",           icon: "⬜" },
+      { label: "Donut",          value: "donut",          icon: "⊙" },
+      { label: "Frame",          value: "frame",          icon: "⬕" },
+      { label: "Cloud",          value: "cloud",          icon: "☁" },
+      { label: "Heart",          value: "heart",          icon: "♥" },
+      { label: "Lightning",      value: "lightningBolt",  icon: "⚡" },
+    ],
+  },
+  {
+    category: "Arrows",
+    shapes: [
+      { label: "Right Arrow",    value: "rightArrow",      icon: "→" },
+      { label: "Left Arrow",     value: "leftArrow",       icon: "←" },
+      { label: "Up Arrow",       value: "upArrow",         icon: "↑" },
+      { label: "Down Arrow",     value: "downArrow",       icon: "↓" },
+      { label: "Left-Right",     value: "leftRightArrow",  icon: "↔" },
+      { label: "Up-Down",        value: "upDownArrow",     icon: "↕" },
+      { label: "Quad Arrow",     value: "quadArrow",       icon: "✛" },
+      { label: "Bent Arrow",     value: "bentArrow",       icon: "↱" },
+      { label: "U-Turn",         value: "uturnArrow",      icon: "↩" },
+      { label: "Chevron",        value: "chevron",         icon: "›" },
+      { label: "Striped Arrow",  value: "stripedRightArrow", icon: "⇒" },
+      { label: "Notched Arrow",  value: "notchedRightArrow", icon: "⇛" },
+    ],
+  },
+  {
+    category: "Stars & Banners",
+    shapes: [
+      { label: "4-Point Star",   value: "star4",           icon: "✦" },
+      { label: "5-Point Star",   value: "star5",           icon: "★" },
+      { label: "6-Point Star",   value: "star6",           icon: "✡" },
+      { label: "8-Point Star",   value: "star8",           icon: "✴" },
+      { label: "12-Point Star",  value: "star12",          icon: "✹" },
+      { label: "24-Point Star",  value: "star24",          icon: "✺" },
+      { label: "Sun",            value: "sun",             icon: "☀" },
+      { label: "Moon",           value: "moon",            icon: "☽" },
+      { label: "Banner",         value: "ribbon",          icon: "≣" },
+      { label: "Wave",           value: "wave",            icon: "〜" },
+      { label: "Scroll",         value: "verticalScroll",  icon: "📜" },
+      { label: "H Scroll",       value: "horizontalScroll",icon: "⫿" },
+    ],
+  },
+  {
+    category: "Callouts",
+    shapes: [
+      { label: "Rect Callout",   value: "wedgeRectCallout",      icon: "💬" },
+      { label: "Rnd Callout",    value: "wedgeRRectCallout",     icon: "🗨" },
+      { label: "Oval Callout",   value: "wedgeEllipseCallout",   icon: "🗯" },
+      { label: "Cloud Callout",  value: "cloudCallout",          icon: "☁" },
+      { label: "Callout 1",      value: "borderCallout1",        icon: "⬓" },
+      { label: "Callout 2",      value: "borderCallout2",        icon: "⬔" },
+    ],
+  },
+  {
+    category: "Flowchart",
+    shapes: [
+      { label: "Process",        value: "flowChartProcess",           icon: "▭" },
+      { label: "Decision",       value: "flowChartDecision",          icon: "◇" },
+      { label: "Terminator",     value: "flowChartTerminator",        icon: "⬬" },
+      { label: "Data",           value: "flowChartInputOutput",       icon: "▱" },
+      { label: "Document",       value: "flowChartDocument",          icon: "📄" },
+      { label: "Connector",      value: "flowChartConnector",         icon: "⬡" },
+      { label: "Manual Input",   value: "flowChartManualInput",       icon: "⌨" },
+      { label: "Pre-defined",    value: "flowChartPredefinedProcess", icon: "⧈" },
+      { label: "Sort",           value: "flowChartSort",              icon: "◈" },
+      { label: "Extract",        value: "flowChartExtract",           icon: "△" },
+      { label: "Delay",          value: "flowChartDelay",             icon: "▷" },
+      { label: "Magnetic Disk",  value: "flowChartMagneticDisk",      icon: "💿" },
+    ],
+  },
+  {
+    category: "Equations",
+    shapes: [
+      { label: "Plus",           value: "mathPlus",     icon: "+" },
+      { label: "Minus",          value: "mathMinus",    icon: "−" },
+      { label: "Multiply",       value: "mathMultiply", icon: "×" },
+      { label: "Divide",         value: "mathDivide",   icon: "÷" },
+      { label: "Equal",          value: "mathEqual",    icon: "=" },
+      { label: "Not Equal",      value: "mathNotEqual", icon: "≠" },
+    ],
+  },
 ]
+
+// Flat list kept for quick-button grids
+const INSERT_SHAPES: ShapeEntry[] = SHAPE_GALLERY.flatMap((c) => c.shapes)
 
 const ALIGN_BUTTONS = [
   { title: "Align Left",          icon: "⫷",  dx: () => 0, key: "L" },
@@ -171,6 +263,12 @@ interface Props {
   onInsertChart?: (chartType?: string) => void
   onInsertTable?: (rows?: number, cols?: number) => void
   onInsertImage?: (file: File) => void
+  onStartDraw?: (mode: "pen" | "polygon") => void
+  // placement / draw mode status (for active-state indicators)
+  placingShapeType?: string
+  drawMode?: "pen" | "polygon"
+  onCancelPlace?: () => void
+  onCancelDraw?: () => void
   onRebuild: () => void
   rebuilding: boolean
   chatOpen: boolean
@@ -214,6 +312,7 @@ export default function StudioRibbon(props: Props) {
     doc, slideN, slideWidthIn, slideHeightIn, selectedElement,
     onCommitPosition, onCommitZIndex,
     onDelete, onDuplicate, onInsertShape, onInsertChart, onInsertTable, onInsertImage,
+    onStartDraw, placingShapeType, drawMode, onCancelPlace, onCancelDraw,
     onRebuild, rebuilding,
     chatOpen, onToggleChat,
     onShowShortcuts, onShowSlideSorter, onPresent,
@@ -458,7 +557,11 @@ export default function StudioRibbon(props: Props) {
           />
         )}
         {tab === "draw" && (
-          <DrawRibbon />
+          <DrawRibbon
+            onStartDraw={onStartDraw}
+            drawMode={drawMode}
+            onCancelDraw={onCancelDraw}
+          />
         )}
         {tab === "design" && (
           <DesignRibbon
@@ -626,6 +729,7 @@ function InsertRibbon({
   onInsertTable?: (rows?: number, cols?: number) => void
   onPickImage: () => void
 }) {
+  const [galleryTab, setGalleryTab] = useState(0)
   return (
     <div className="flex h-[88px] items-stretch">
       {/* Tables */}
@@ -642,14 +746,14 @@ function InsertRibbon({
 
       <GroupDivider />
 
-      {/* Text & Shapes */}
+      {/* Text */}
       <GroupBox title="Text">
         <RibbonBtn primary icon="T" label="Text Box" onClick={() => onInsertShape("text_box")} />
       </GroupBox>
 
       <GroupDivider />
 
-      {/* Shapes — quick grid always visible for test discoverability */}
+      {/* Shapes — quick grid + categorised gallery */}
       <GroupBox title="Shapes">
         <div className="grid grid-cols-3 gap-0.5">
           <ShapeQuickBtn icon="▭" title="Rectangle"    onClick={() => onInsertShape("rect")} />
@@ -663,19 +767,38 @@ function InsertRibbon({
           <button
             onClick={() => setShapesOpen(!shapesOpen)}
             className="px-1.5 h-6 text-[11px] text-gray-700 hover:bg-gray-200 rounded border border-gray-300 flex items-center gap-1"
-          >More ▾</button>
+          >All ▾</button>
           {shapesOpen && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setShapesOpen(false)} />
-              <div className="absolute z-50 left-0 top-full mt-1 w-52 bg-white border border-gray-300 rounded shadow-xl py-1 grid grid-cols-4 gap-0.5 p-1">
-                {INSERT_SHAPES.map((s) => (
-                  <button key={s.value} title={s.label}
-                    onClick={() => { setShapesOpen(false); onInsertShape(s.value) }}
-                    className="aspect-square flex flex-col items-center justify-center text-gray-700 hover:bg-gray-100 rounded">
-                    <span className="text-lg leading-none">{s.icon}</span>
-                    <span className="text-[8px] text-gray-500 mt-0.5 leading-none">{s.label}</span>
-                  </button>
-                ))}
+              <div className="absolute z-50 left-0 top-full mt-1 bg-white border border-gray-300 rounded shadow-xl overflow-hidden"
+                style={{ width: 340 }}>
+                {/* Category tab strip */}
+                <div className="flex border-b border-gray-200 bg-gray-50">
+                  {SHAPE_GALLERY.map((cat, i) => (
+                    <button key={cat.category}
+                      onClick={() => setGalleryTab(i)}
+                      className={`px-2 py-1 text-[10px] whitespace-nowrap transition-colors ${
+                        galleryTab === i
+                          ? "bg-white text-[#2b579a] border-b-2 border-[#2b579a] font-medium"
+                          : "text-gray-500 hover:text-gray-700"
+                      }`}
+                    >{cat.category}</button>
+                  ))}
+                </div>
+                {/* Shape grid for selected category */}
+                <div className="grid grid-cols-6 gap-0.5 p-1.5 max-h-48 overflow-y-auto">
+                  {SHAPE_GALLERY[galleryTab]?.shapes.map((s) => (
+                    <button key={s.value} title={s.label}
+                      onClick={() => { setShapesOpen(false); onInsertShape(s.value) }}
+                      className="flex flex-col items-center justify-center gap-0.5 p-1 rounded hover:bg-blue-50 text-gray-700 transition-colors"
+                      style={{ minHeight: 44 }}
+                    >
+                      <span className="text-xl leading-none">{s.icon}</span>
+                      <span className="text-[8px] text-gray-500 leading-tight text-center line-clamp-2">{s.label}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             </>
           )}
@@ -695,12 +818,64 @@ function InsertRibbon({
 
 // ── DRAW tab ──────────────────────────────────────────────────────────────────
 
-function DrawRibbon() {
+function DrawRibbon({
+  onStartDraw, drawMode, onCancelDraw,
+}: {
+  onStartDraw?: (mode: "pen" | "polygon") => void
+  drawMode?: "pen" | "polygon"
+  onCancelDraw?: () => void
+}) {
   return (
     <div className="flex h-[88px] items-stretch">
-      <GroupBox title="Draw">
-        <div className="px-4 text-[11px] text-gray-500 italic self-center">
-          Annotation tools — use the canvas status bar to toggle annotate mode
+      {/* Freeform tools */}
+      <GroupBox title="Draw Shapes">
+        <button
+          title="Pen — draw smooth freehand path (released to finish)"
+          onClick={() => onStartDraw?.("pen")}
+          disabled={!onStartDraw}
+          className={[
+            "flex flex-col items-center justify-center gap-0.5 w-14 h-[58px] rounded text-[11px] transition-colors disabled:opacity-30",
+            drawMode === "pen"
+              ? "bg-[#2b579a]/10 text-[#2b579a] border border-[#2b579a]/30"
+              : "text-gray-700 hover:bg-gray-100",
+          ].join(" ")}
+        >
+          <span className="text-[20px] leading-none">✒</span>
+          <span className="leading-tight">Pen</span>
+        </button>
+        <button
+          title="Polygon — click to place anchor points, double-click to close"
+          onClick={() => onStartDraw?.("polygon")}
+          disabled={!onStartDraw}
+          className={[
+            "flex flex-col items-center justify-center gap-0.5 w-14 h-[58px] rounded text-[11px] transition-colors disabled:opacity-30",
+            drawMode === "polygon"
+              ? "bg-[#2b579a]/10 text-[#2b579a] border border-[#2b579a]/30"
+              : "text-gray-700 hover:bg-gray-100",
+          ].join(" ")}
+        >
+          <span className="text-[20px] leading-none">⬡</span>
+          <span className="leading-tight">Polygon</span>
+        </button>
+        {drawMode && (
+          <button
+            title="Cancel current draw mode (Esc)"
+            onClick={onCancelDraw}
+            className="flex flex-col items-center justify-center gap-0.5 w-10 h-[58px] rounded text-[11px] text-red-600 hover:bg-red-50 transition-colors"
+          >
+            <span className="text-[16px] leading-none">✕</span>
+            <span className="leading-tight text-[9px]">Cancel</span>
+          </button>
+        )}
+      </GroupBox>
+
+      <GroupDivider />
+
+      <GroupBox title="Tips">
+        <div className="px-2 text-[10px] text-gray-400 leading-relaxed max-w-[200px]">
+          <div><b>Pen:</b> drag to draw a freehand path</div>
+          <div><b>Polygon:</b> click anchors, dbl-click to close</div>
+          <div className="mt-1 text-gray-300">Esc cancels · Enter closes polygon</div>
         </div>
       </GroupBox>
     </div>

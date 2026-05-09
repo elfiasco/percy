@@ -114,6 +114,30 @@ export async function createNewElement(
   )
 }
 
+export interface FreeformPathCmd {
+  cmd: "M" | "L" | "Z"
+  pts: [number, number][]  // slide-space inches
+}
+
+export async function createFreeformPathElement(
+  docId: string,
+  slideN: number,
+  commands: FreeformPathCmd[],
+  opts: {
+    fill_color?: string | null
+    fill_type?: string
+    line_visible?: boolean
+    line_color?: string | null
+    line_width?: number | null
+    name?: string
+  } = {},
+): Promise<StudioElement> {
+  return apiFetch<StudioElement>(
+    `${BASE}/docs/${docId}/slides/${slideN}/elements/freeform-path`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ commands, ...opts }) },
+  )
+}
+
 // ── Slide elements ────────────────────────────────────────────────────────────
 
 export async function fetchSlideElements(docId: string, slideN: number): Promise<SlideElementsResponse> {
