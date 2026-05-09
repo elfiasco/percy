@@ -10,6 +10,8 @@ import WelcomeModal, { shouldShowWelcome } from "./WelcomeModal"
 import WorkspaceSearchTrigger from "../components/WorkspaceSearchTrigger"
 import PageLoader from "../components/PageLoader"
 import EmailVerificationBanner from "../components/EmailVerificationBanner"
+import TeamNotifications from "../components/TeamNotifications"
+import Timeline24h from "../components/Timeline24h"
 
 /**
  * Dashboard — the new /home.
@@ -100,6 +102,7 @@ export default function Dashboard() {
         onOpenAccount={() => setAccountOpen(true)}
       />
 
+      <TeamNotifications activeOrg={activeOrg} />
       <EmailVerificationBanner />
 
       <div className="flex-1 flex min-h-0">
@@ -180,34 +183,8 @@ export default function Dashboard() {
             )}
           </section>
 
-          {/* ── pipelines / builds (placeholder until task #75-76 land) ── */}
-          <section>
-            <SectionHeader
-              eyebrow="Pipelines"
-              title="Recurring decks and their refresh history"
-            />
-            <div className="border border-edge p-8 text-center">
-              <div className="text-[10px] tracking-[0.22em] uppercase text-muted mb-2">— Coming next —</div>
-              <div className="text-[13px] text-muted leading-[1.7] max-w-md mx-auto">
-                When a project has a refresh schedule, every build appears here as a timeline:
-                start time, status, output files (.percy / .pptx / .pdf), and a diff vs the prior build.
-              </div>
-            </div>
-          </section>
-
-          {/* ── activity feed placeholder ─────────────────────────────── */}
-          <section>
-            <SectionHeader
-              eyebrow="Activity"
-              title="Edits, refreshes, and approvals"
-            />
-            <div className="border border-edge p-8 text-center">
-              <div className="text-[13px] text-muted leading-[1.7] max-w-md mx-auto">
-                Activity from across your workspace will appear here once people start editing,
-                refreshing, and approving decks.
-              </div>
-            </div>
-          </section>
+          {/* ── pipelines · 24h timeline ─────────────────────────────── */}
+          <Timeline24h projects={allProjects} />
 
         </div>
         </div>
