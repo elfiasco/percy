@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>v3 / 02 — Newsroom</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /* Newsroom — Percy as a daily edition.
+     The home screen looks like the front page of a serious paper. The
+     "stories" are projects, refreshes, and changes — the things that
+     actually happened in your reporting today. Not a dashboard. */
+
+  :root[data-mode="light"] {
+    --bg: #F2EBDC;
+    --surface: #F8F2E2;
+    --ink: #0E0A06;
+    --ink-2: #3D352B;
+    --ink-3: #7A6F5F;
+    --line: rgba(14,10,6,0.18);
+    --line-thin: rgba(14,10,6,0.10);
+    --accent: #C82B1F;
+    --accent-soft: #F4DCD8;
+  }
+  :root[data-mode="dark"] {
+    --bg: #161412;
+    --surface: #1F1C18;
+    --ink: #F2EBDC;
+    --ink-2: #A89D89;
+    --ink-3: #6B6353;
+    --line: rgba(242,235,220,0.22);
+    --line-thin: rgba(242,235,220,0.12);
+    --accent: #E55444;
+    --accent-soft: rgba(229,84,68,0.18);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--ink); font-family: 'Source Serif 4', Georgia, serif; -webkit-font-smoothing: antialiased; line-height: 1.5; font-size: 17px; transition: background 200ms, color 200ms; }
+  a { color: inherit; text-decoration: none; }
+  .sans { font-family: 'Inter', system-ui, sans-serif; }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+
+  .modeswitch { position: fixed; top: 16px; right: 16px; z-index: 99; background: var(--surface); border: 1px solid var(--line); padding: 4px; border-radius: 999px; display: flex; gap: 2px; font-family: 'Inter', sans-serif; }
+  .modeswitch button { background: transparent; border: 0; color: var(--ink-2); font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 999px; cursor: pointer; }
+  .modeswitch button.active { background: var(--ink); color: var(--bg); font-weight: 600; }
+
+  /* Masthead — the paper's brand strip */
+  .masthead {
+    border-bottom: 3px double var(--ink);
+    padding: 24px 48px 20px;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 32px;
+    align-items: end;
+    background: var(--bg);
+  }
+  .masthead-left { font-family: 'Inter', sans-serif; font-size: 12px; color: var(--ink-2); letter-spacing: 0.04em; }
+  .masthead-left strong { display: block; color: var(--ink); font-weight: 600; margin-bottom: 2px; }
+  .masthead-center { text-align: center; }
+  .masthead-center .name {
+    font-family: 'Source Serif 4', serif;
+    font-size: 56px;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    line-height: 1;
+    font-variation-settings: 'opsz' 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+  }
+  .masthead-center .name .mark { width: 40px; height: 40px; color: var(--ink); }
+  .masthead-center .tagline {
+    font-family: 'Inter', sans-serif;
+    font-size: 11px;
+    color: var(--ink-2);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    margin-top: 10px;
+    font-style: italic;
+  }
+  .masthead-right { text-align: right; font-family: 'Inter', sans-serif; font-size: 12px; color: var(--ink-2); }
+  .masthead-right strong { display: block; color: var(--ink); font-weight: 600; margin-bottom: 2px; }
+
+  /* The thin secondary nav (sections of the paper) */
+  .section-nav {
+    border-bottom: 1px solid var(--line);
+    padding: 10px 48px;
+    font-family: 'Inter', sans-serif;
+    font-size: 12px;
+    display: flex;
+    justify-content: center;
+    gap: 28px;
+    color: var(--ink-2);
+    letter-spacing: 0.04em;
+  }
+  .section-nav a:hover { color: var(--ink); }
+  .section-nav a.active { color: var(--ink); font-weight: 600; }
+
+  /* Page body */
+  .page { padding: 48px 48px 96px; max-width: 1240px; margin: 0 auto; }
+
+  /* Lead story */
+  .lead { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; padding-bottom: 40px; border-bottom: 1px solid var(--line); margin-bottom: 40px; }
+  .lead-info .kicker {
+    font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 600;
+    color: var(--accent); text-transform: uppercase; letter-spacing: 0.1em;
+    margin-bottom: 16px;
+  }
+  .lead-info h1 {
+    font-size: 56px; font-weight: 600; letter-spacing: -0.03em; line-height: 1.02;
+    margin-bottom: 16px; font-variation-settings: 'opsz' 60;
+  }
+  .lead-info .dek {
+    font-size: 21px; line-height: 1.45; color: var(--ink-2);
+    margin-bottom: 28px; font-style: italic;
+  }
+  .lead-info .byline {
+    font-family: 'Inter', sans-serif; font-size: 12px; color: var(--ink-3);
+    text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 24px;
+  }
+  .lead-info .byline strong { color: var(--ink); font-weight: 600; }
+  .lead-body { font-size: 17px; line-height: 1.65; color: var(--ink); }
+  .lead-body p { margin-bottom: 16px; }
+  .lead-body .dropcap::first-letter {
+    font-size: 64px; font-weight: 700; line-height: 0.9;
+    float: left; margin: 6px 8px 0 0; color: var(--accent);
+    font-variation-settings: 'opsz' 60;
+  }
+  .lead-body a { color: var(--accent); border-bottom: 1px solid var(--accent-soft); }
+
+  .lead-art {
+    background: var(--surface);
+    padding: 36px 40px;
+    border: 1px solid var(--line);
+    aspect-ratio: 4/5;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+  }
+  .lead-art-kicker { font-family: 'Inter', sans-serif; font-size: 10px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: 20px; }
+  .lead-art-title { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.15; margin-bottom: 24px; }
+  .lead-art-stats { margin-top: auto; border-top: 1px solid var(--line); padding-top: 20px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .lead-art-stat { }
+  .lead-art-stat .num { font-family: 'JetBrains Mono', monospace; font-size: 22px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+  .lead-art-stat .lbl { font-family: 'Inter', sans-serif; font-size: 10px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 4px; }
+  .lead-art .live-tag {
+    position: absolute; top: 24px; right: 28px;
+    font-family: 'Inter', sans-serif; font-size: 10px; font-weight: 600;
+    color: var(--accent); text-transform: uppercase; letter-spacing: 0.1em;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .lead-art .live-tag::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+
+  /* Three-column secondary stories */
+  .three { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 32px; padding-bottom: 40px; border-bottom: 1px solid var(--line); margin-bottom: 40px; }
+  .col { padding-right: 32px; border-right: 1px solid var(--line-thin); }
+  .col:last-child { padding-right: 0; border-right: 0; }
+  .col .kicker { font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 12px; }
+  .col h2 { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.15; margin-bottom: 12px; }
+  .col p { font-size: 15px; color: var(--ink-2); line-height: 1.55; margin-bottom: 16px; }
+  .col .byline { font-family: 'Inter', sans-serif; font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.06em; }
+  .col .byline strong { color: var(--ink); font-weight: 600; }
+
+  /* In brief — bulletin column */
+  .brief-row { display: grid; grid-template-columns: 200px 1fr; gap: 32px; padding-bottom: 32px; border-bottom: 1px solid var(--line); margin-bottom: 32px; }
+  .brief-head h3 { font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.1em; }
+  .brief-list { display: flex; flex-direction: column; gap: 16px; }
+  .brief-item { display: grid; grid-template-columns: 80px 1fr; gap: 20px; padding-bottom: 16px; border-bottom: 1px dotted var(--line-thin); }
+  .brief-item:last-child { border-bottom: 0; padding-bottom: 0; }
+  .brief-time { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; padding-top: 1px; }
+  .brief-text { font-size: 15px; line-height: 1.5; color: var(--ink); }
+  .brief-text strong { font-weight: 600; }
+  .brief-text a { color: var(--accent); border-bottom: 1px solid var(--accent-soft); }
+
+  /* Footer — like a paper's mark and printers' colophon */
+  .footer { padding-top: 40px; border-top: 3px double var(--ink); display: flex; justify-content: space-between; align-items: center; font-family: 'Inter', sans-serif; font-size: 11px; color: var(--ink-3); letter-spacing: 0.04em; }
+  .footer .colophon { font-style: italic; }
+</style>
+</head>
+<body data-mode="light">
+
+<div class="modeswitch">
+  <button class="active" data-mode="light">light</button>
+  <button data-mode="dark">dark</button>
+</div>
+
+<header class="masthead">
+  <div class="masthead-left">
+    <strong>Crestwood Capital</strong>
+    Friday, May 9, 2026
+  </div>
+  <div class="masthead-center">
+    <div class="name"><span class="mark" id="brand-mark"></span><span>Percy</span></div>
+    <div class="tagline">— A Daily Reckoning —</div>
+  </div>
+  <div class="masthead-right">
+    <strong>Edition: 14:32 ET</strong>
+    187 refreshes today, 1 flagged
+  </div>
+</header>
+
+<nav class="section-nav">
+  <a class="active">Today</a>
+  <a>Projects</a>
+  <a>Sources</a>
+  <a>Pipelines</a>
+  <a>Audit</a>
+  <a>Members</a>
+</nav>
+
+<div class="page">
+
+  <article class="lead">
+    <div class="lead-info">
+      <div class="kicker">Lead · Q3 Investor Update · live</div>
+      <h1>Q3 closes a measured quarter — and the deck is already telling LPs.</h1>
+      <p class="dek">Auto-refreshed at 14:32 against this morning's Snowflake commit. AUM up 6.3%, net flows the strongest since 2024.</p>
+      <div class="byline">By <strong>Sara Malek</strong> · Updated 2 minutes ago · Bound to <span class="mono">snowflake.fund_metrics</span></div>
+      <div class="lead-body">
+        <p class="dropcap">The Q3 Investor Update refreshed cleanly at 14:32 ET against this morning's warehouse commit, recording an AUM movement from $4.18 B to $4.21 B and a net inflow of $118 M — the largest single-quarter intake since 2024.</p>
+        <p>All three live elements on slide 3 — AUM, flows, YTD return — passed visual QA without intervention. The narrative on slides 4–6 was edited yesterday by Sara Malek and will not refresh automatically; it remains a manual review before publish.</p>
+        <p>The deck is currently <a href="#">open for read</a> by twelve users. Two are LPs.</p>
+      </div>
+    </div>
+    <aside class="lead-art">
+      <div class="lead-art-kicker">Q3 2026 — Letter to investors</div>
+      <div class="live-tag">Live</div>
+      <div class="lead-art-title">A measured quarter, finishing strong.</div>
+      <div class="lead-art-stats">
+        <div class="lead-art-stat"><div class="num">$4.21B</div><div class="lbl">AUM</div></div>
+        <div class="lead-art-stat"><div class="num">+$118M</div><div class="lbl">Net flows</div></div>
+        <div class="lead-art-stat"><div class="num">+14.2%</div><div class="lbl">YTD return</div></div>
+      </div>
+    </aside>
+  </article>
+
+  <section class="three">
+    <div class="col">
+      <div class="kicker">Flagged for review</div>
+      <h2>QA finds chart drift on the Q3 Board Deck.</h2>
+      <p>Slide 4's attribution chart grew 3.2% wider than the project's tolerance allows. The underlying data is correct; the chart's bound series widened unexpectedly. Worth a glance before the meeting.</p>
+      <div class="byline">Caught by <strong>Visual QA</strong> · 11:28 ET</div>
+    </div>
+    <div class="col">
+      <div class="kicker">Workspace</div>
+      <h2>Sara binds the AUM stat to fund_metrics.</h2>
+      <p>What had been a manually-typed number on slide 3 became a live element this morning. The next refresh at 15:00 will pull from Snowflake, with the diff written to the audit log.</p>
+      <div class="byline">By <strong>Sara Malek</strong> · 10:42 ET</div>
+    </div>
+    <div class="col">
+      <div class="kicker">Pipelines</div>
+      <h2>Risk pack scheduled for Sunday's run.</h2>
+      <p>The Risk Committee Pack is queued for its weekly refresh on Sunday at 18:00. Three new tolerance bands were configured by Carla on Thursday.</p>
+      <div class="byline">Last edit by <strong>Carla L.</strong> · Yesterday</div>
+    </div>
+  </section>
+
+  <section class="brief-row">
+    <div class="brief-head">
+      <h3>In brief — today</h3>
+    </div>
+    <div class="brief-list">
+      <div class="brief-item">
+        <span class="brief-time">14:32</span>
+        <span class="brief-text"><strong>Q3 Investor Update</strong> auto-refreshed against this morning's data commit. <a href="#">View diff</a>.</span>
+      </div>
+      <div class="brief-item">
+        <span class="brief-time">14:14</span>
+        <span class="brief-text">Three readers opened the LP Allocation Memo. None were the intended audience.</span>
+      </div>
+      <div class="brief-item">
+        <span class="brief-time">11:28</span>
+        <span class="brief-text">Visual QA flagged <strong>three drift warnings</strong> on the Q3 Board Deck. <a href="#">Review</a>.</span>
+      </div>
+      <div class="brief-item">
+        <span class="brief-time">10:42</span>
+        <span class="brief-text">Sara M. bound the AUM stat to <span class="mono" style="font-size: 13px">snowflake.fund_metrics</span>.</span>
+      </div>
+      <div class="brief-item">
+        <span class="brief-time">09:14</span>
+        <span class="brief-text">Morning auto-refresh swept eleven projects clean.</span>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <span>© Percy · Vol. 1 No. 248 · Compiled 14:32 ET · For the people who tell the story.</span>
+    <span class="colophon">Set in Source Serif 4 and Inter. Printed on cream warm enough to make 9 a.m. survivable.</span>
+  </footer>
+
+</div>
+
+<script src="../_shared.js"></script>
+<script>
+  document.querySelectorAll('#brand-mark').forEach(el => el.innerHTML = window.PERCY_MARK_SVG);
+  document.querySelectorAll('.modeswitch button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.body.dataset.mode = btn.dataset.mode;
+      document.documentElement.dataset.mode = btn.dataset.mode;
+      document.querySelectorAll('.modeswitch button').forEach(b => b.classList.toggle('active', b === btn));
+    });
+  });
+  document.documentElement.dataset.mode = 'light';
+</script>
+</body>
+</html>

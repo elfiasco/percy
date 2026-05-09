@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Percy — v4 grounded redesigns</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #181818; color: #ECEAE0; font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; line-height: 1.5; height: 100vh; overflow: hidden; }
+  a { color: inherit; text-decoration: none; }
+  .strip { height: 64px; background: #0E0E0C; display: flex; align-items: center; padding: 0 18px; gap: 14px; border-bottom: 1px solid rgba(236,234,224,0.08); position: relative; z-index: 10; }
+  .strip-title { font-size: 12px; font-weight: 600; letter-spacing: -0.01em; display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+  .strip-title .label { font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #8A8A85; }
+  .strip-title .story { font-size: 11px; font-weight: 400; color: #A8A8A2; font-style: italic; max-width: 280px; }
+  .group { display: flex; gap: 3px; background: rgba(236,234,224,0.04); padding: 3px; border-radius: 8px; flex-shrink: 0; }
+  .group .glabel { font-size: 9px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6E6A; padding: 0 6px; align-self: center; }
+  .group button { background: transparent; border: none; color: #A8A8A2; font-family: inherit; font-size: 12px; font-weight: 500; padding: 6px 10px; border-radius: 5px; cursor: pointer; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .group button:hover { color: #ECEAE0; }
+  .group button.active { background: #ECEAE0; color: #0E0E0C; font-weight: 600; }
+  .group button .key { font-family: 'JetBrains Mono', monospace; font-size: 9px; color: #6E6E6A; background: rgba(236,234,224,0.06); padding: 0 4px; border-radius: 3px; min-width: 12px; text-align: center; }
+  .group button.active .key { color: rgba(0,0,0,0.5); background: rgba(0,0,0,0.10); }
+  .group button .swatch { width: 10px; height: 10px; border-radius: 2px; border: 1px solid rgba(0,0,0,0.10); }
+  .meta { margin-left: auto; font-size: 11px; color: #8A8A85; font-family: 'JetBrains Mono', monospace; display: flex; gap: 12px; flex-shrink: 0; }
+  .meta a { color: #ECEAE0; opacity: 0.6; }
+  .meta a:hover { opacity: 1; }
+  iframe { border: 0; width: 100%; height: calc(100vh - 64px); background: #FCFBF6; }
+</style>
+</head>
+<body>
+
+<header class="strip">
+  <div class="strip-title">
+    <span class="label">v4</span>
+    <span id="story" class="story">Notebook palette — soft graphite blue, lightened from the original.</span>
+  </div>
+
+  <div class="group" id="screen-picker">
+    <span class="glabel">Screen</span>
+    <button class="active" data-src="dashboard.html"><span class="key">1</span>Dashboard</button>
+    <button data-src="project-detail.html"><span class="key">2</span>Project</button>
+  </div>
+
+  <div class="group" id="palette-picker">
+    <span class="glabel">Palette</span>
+    <button class="active" data-palette="notebook"><span class="key">N</span><span class="swatch" style="background: #6F8AA8;"></span>Notebook</button>
+    <button data-palette="powder"><span class="key">P</span><span class="swatch" style="background: #7DA1CC;"></span>Powder</button>
+    <button data-palette="dawn"><span class="key">D</span><span class="swatch" style="background: #D88B6E;"></span>Dawn</button>
+    <button data-palette="mint"><span class="key">M</span><span class="swatch" style="background: #7AAF98;"></span>Mint</button>
+  </div>
+
+  <div class="group" id="color-picker">
+    <span class="glabel">Color</span>
+    <button class="active" data-color="none"><span class="key">—</span>None</button>
+    <button data-color="live"><span class="key">L</span>Live</button>
+    <button data-color="folders"><span class="key">F</span>Folders</button>
+    <button data-color="workspace"><span class="key">W</span>Workspace</button>
+  </div>
+
+  <div class="meta">
+    <a href="../index.html">← all</a>
+  </div>
+</header>
+
+<iframe id="frame" src="dashboard.html"></iframe>
+
+<script>
+  const frame = document.getElementById('frame');
+  const story = document.getElementById('story');
+  let screen = 'dashboard.html';
+  let palette = 'notebook';
+  let color = 'none';
+
+  const paletteStories = {
+    notebook: 'Notebook — soft graphite blue, lightened from the original. The default.',
+    powder:   'Powder — cool airy. Soft cobalt accent on near-white. Reads light, almost weightless.',
+    dawn:     'Dawn — warm airy. Coral-peach accent on peachy cream. Friendly, romantic, less corporate.',
+    mint:     'Mint — fresh sage. Soft mint accent on slightly green-cream. Spring-like, calm.',
+  };
+  const colorAddOns = {
+    none:      '',
+    live:      ' · with live signals (binding state dots).',
+    folders:   ' · with folder identity colors.',
+    workspace: ' · with workspace accent (verdigris).',
+  };
+
+  function refresh() {
+    frame.src = `${screen}?palette=${palette}&color=${color}`;
+    story.textContent = (paletteStories[palette] || '') + (colorAddOns[color] || '');
+  }
+
+  function setActive(group, key, attr) {
+    document.querySelectorAll(`#${group} button`).forEach(b => b.classList.toggle('active', b.dataset[attr] === key));
+  }
+
+  document.getElementById('screen-picker').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-src]'); if (!btn) return;
+    setActive('screen-picker', btn.dataset.src, 'src');
+    screen = btn.dataset.src; refresh();
+  });
+  document.getElementById('palette-picker').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-palette]'); if (!btn) return;
+    setActive('palette-picker', btn.dataset.palette, 'palette');
+    palette = btn.dataset.palette; refresh();
+  });
+  document.getElementById('color-picker').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-color]'); if (!btn) return;
+    setActive('color-picker', btn.dataset.color, 'color');
+    color = btn.dataset.color; refresh();
+  });
+  document.addEventListener('keydown', (e) => {
+    const k = e.key.toLowerCase();
+    const screenMap = { '1': 'dashboard.html', '2': 'project-detail.html' };
+    const palMap = { 'n': 'notebook', 'p': 'powder', 'd': 'dawn', 'm': 'mint' };
+    const colMap = { 'l': 'live', 'f': 'folders', 'w': 'workspace' };
+    if (screenMap[k]) {
+      const btn = document.querySelector(`#screen-picker button[data-src="${screenMap[k]}"]`); if (btn) btn.click();
+    } else if (palMap[k]) {
+      const btn = document.querySelector(`#palette-picker button[data-palette="${palMap[k]}"]`); if (btn) btn.click();
+    } else if (colMap[k]) {
+      const btn = document.querySelector(`#color-picker button[data-color="${colMap[k]}"]`); if (btn) btn.click();
+    }
+  });
+</script>
+
+</body>
+</html>

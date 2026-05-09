@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>v3 / 05 — Lumen</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /* Lumen — soft atmospheric modern. The screen feels lit from somewhere
+     behind the surface. Generous space, quiet typography, one fresh accent.
+     The opposite of Folio: where Folio is structural, Lumen is atmospheric. */
+
+  :root[data-mode="light"] {
+    --bg: #FAFBFB;
+    --surface: #FFFFFF;
+    --sunk: #F2F4F4;
+    --ink: #0E1A1A;
+    --ink-2: #4D5A5A;
+    --ink-3: #8A9A9A;
+    --line: rgba(14,26,26,0.06);
+    --line-strong: rgba(14,26,26,0.14);
+    --accent: #46A38C;
+    --accent-soft: rgba(70,163,140,0.14);
+    --accent-glow-1: rgba(70,163,140,0.16);
+    --accent-glow-2: rgba(180,140,200,0.10);
+    --shadow-soft: 0 1px 2px rgba(14,26,26,0.04), 0 0 24px rgba(14,26,26,0.04);
+    --shadow-pop: 0 12px 32px rgba(14,26,26,0.08), 0 2px 8px rgba(14,26,26,0.04);
+  }
+  :root[data-mode="dark"] {
+    --bg: #0B0E11;
+    --surface: #131820;
+    --sunk: #080A0D;
+    --ink: #EAF0EF;
+    --ink-2: #A0AEAE;
+    --ink-3: #5C6868;
+    --line: rgba(234,240,239,0.08);
+    --line-strong: rgba(234,240,239,0.16);
+    --accent: #6FD4B8;
+    --accent-soft: rgba(111,212,184,0.16);
+    --accent-glow-1: rgba(111,212,184,0.20);
+    --accent-glow-2: rgba(180,140,255,0.14);
+    --shadow-soft: 0 1px 0 rgba(234,240,239,0.04) inset;
+    --shadow-pop: 0 12px 32px rgba(0,0,0,0.4), 0 0 0 1px var(--line);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--ink); font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; line-height: 1.55; font-size: 15px; transition: background 200ms, color 200ms; min-height: 100vh; position: relative; }
+  /* Ambient glow background */
+  body::before {
+    content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background:
+      radial-gradient(ellipse 60% 40% at 20% 10%, var(--accent-glow-1), transparent 60%),
+      radial-gradient(ellipse 50% 50% at 90% 100%, var(--accent-glow-2), transparent 65%);
+  }
+  body > * { position: relative; z-index: 1; }
+  a { color: inherit; text-decoration: none; }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+
+  .modeswitch { position: fixed; top: 16px; right: 16px; z-index: 99; background: var(--surface); border: 1px solid var(--line); padding: 4px; border-radius: 999px; display: flex; gap: 2px; box-shadow: var(--shadow-soft); }
+  .modeswitch button { background: transparent; border: 0; color: var(--ink-2); font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 999px; cursor: pointer; }
+  .modeswitch button.active { background: var(--ink); color: var(--bg); font-weight: 600; }
+
+  .topbar { height: 72px; display: flex; align-items: center; justify-content: space-between; padding: 0 40px; }
+  .brand { display: flex; align-items: center; gap: 12px; font-size: 16px; font-weight: 600; letter-spacing: -0.012em; }
+  .brand .mark { width: 26px; height: 26px; color: var(--ink); }
+  .topbar-right { display: flex; align-items: center; gap: 12px; }
+  .search { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; font-size: 13px; color: var(--ink-3); min-width: 280px; box-shadow: var(--shadow-soft); }
+  .search .kbd { margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-3); background: var(--sunk); padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); }
+  .av { width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 50%, var(--ink))); color: var(--bg); display: grid; place-items: center; font-size: 12px; font-weight: 600; box-shadow: var(--shadow-soft); }
+
+  /* Hero */
+  .hero { padding: 80px 40px 64px; max-width: 1100px; margin: 0 auto; text-align: center; }
+  .hero .eyebrow { font-size: 12px; font-weight: 500; color: var(--ink-3); letter-spacing: 0.02em; margin-bottom: 24px; display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; box-shadow: var(--shadow-soft); }
+  .hero .eyebrow .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); animation: pulse 2.5s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 4px var(--accent-soft); } 50% { box-shadow: 0 0 0 8px transparent; } }
+  .hero h1 { font-size: clamp(40px, 6vw, 64px); font-weight: 600; letter-spacing: -0.03em; line-height: 1.05; margin-bottom: 20px; }
+  .hero h1 .accent { background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, var(--ink))); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .hero p { font-size: 18px; color: var(--ink-2); max-width: 580px; margin: 0 auto; line-height: 1.55; }
+
+  /* Cards */
+  .container { max-width: 1100px; margin: 0 auto; padding: 0 40px 96px; }
+
+  .section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 24px; }
+  .section-head h2 { font-size: 14px; font-weight: 600; color: var(--ink-2); }
+  .section-head .all { font-size: 13px; color: var(--accent); font-weight: 500; cursor: pointer; }
+
+  .news-strip {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 24px 28px;
+    box-shadow: var(--shadow-soft);
+    margin-bottom: 56px;
+  }
+  .news-row { display: grid; grid-template-columns: 80px 1fr auto; gap: 20px; padding: 14px 0; align-items: baseline; border-bottom: 1px solid var(--line); }
+  .news-row:last-child { border-bottom: none; padding-bottom: 0; }
+  .news-row:first-child { padding-top: 0; }
+  .news-time { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .news-line { font-size: 15px; color: var(--ink); line-height: 1.5; }
+  .news-line strong { font-weight: 600; }
+  .news-line a { color: var(--accent); }
+  .news-tag { font-size: 11px; font-weight: 600; color: var(--accent); padding: 3px 10px; border-radius: 999px; background: var(--accent-soft); }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 24px;
+    box-shadow: var(--shadow-soft);
+    cursor: pointer;
+    transition: transform 200ms, box-shadow 200ms, border-color 200ms;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 180px;
+  }
+  .card:hover { transform: translateY(-2px); box-shadow: var(--shadow-pop); border-color: var(--line-strong); }
+  .card-pip { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-3); }
+  .card-pip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .card-pip.idle .dot { background: var(--ink-3); box-shadow: none; }
+  .card-pip.warn .dot { background: #D9874A; box-shadow: 0 0 0 3px rgba(217,135,74,0.16); }
+  .card h3 { font-size: 17px; font-weight: 600; letter-spacing: -0.015em; line-height: 1.25; }
+  .card p { font-size: 13px; color: var(--ink-2); line-height: 1.5; }
+  .card-meta { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--ink-3); }
+  .card-meta strong { color: var(--ink-2); font-weight: 500; }
+  .card-meta .mid-dot { width: 3px; height: 3px; border-radius: 50%; background: currentColor; }
+</style>
+</head>
+<body data-mode="light">
+
+<div class="modeswitch">
+  <button class="active" data-mode="light">light</button>
+  <button data-mode="dark">dark</button>
+</div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" id="brand-mark"></span>
+    <span>Percy</span>
+  </div>
+  <div class="topbar-right">
+    <div class="search">
+      <span style="opacity: 0.6;">Search projects, data, decks…</span>
+      <span class="kbd">⌘ K</span>
+    </div>
+    <div class="av">BS</div>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="eyebrow"><span class="pulse"></span>Live · 187 refreshes today</div>
+  <h1>A measured quarter,<br/><span class="accent">finishing strong.</span></h1>
+  <p>Three things changed since you were here. Two are good news — your Q3 Investor Update auto-refreshed cleanly, and Sara closed the loop on attribution.</p>
+</section>
+
+<div class="container">
+
+  <div class="section-head">
+    <h2>Today, on your workspace</h2>
+    <span class="all">View all activity →</span>
+  </div>
+
+  <div class="news-strip">
+    <div class="news-row">
+      <span class="news-time">14:32</span>
+      <span class="news-line"><strong>Q3 Investor Update</strong> auto-refreshed cleanly. AUM moved from $4.18B to $4.21B. <a>View diff</a>.</span>
+      <span class="news-tag">live</span>
+    </div>
+    <div class="news-row">
+      <span class="news-time">11:28</span>
+      <span class="news-line">Visual QA flagged <strong>three drift warnings</strong> on the Q3 Board Deck — slide 4. <a>Review</a>.</span>
+      <span class="news-tag" style="background: rgba(217,135,74,0.16); color: #B5722E;">flagged</span>
+    </div>
+    <div class="news-row">
+      <span class="news-time">10:42</span>
+      <span class="news-line"><strong>Sara M.</strong> bound the AUM stat to <span class="mono" style="font-size: 13px;">snowflake.fund_metrics</span>.</span>
+      <span class="news-tag">bound</span>
+    </div>
+  </div>
+
+  <div class="section-head">
+    <h2>Your projects</h2>
+    <span class="all">+ New project</span>
+  </div>
+
+  <div class="grid">
+    <article class="card">
+      <div class="card-pip"><span class="dot"></span>Live · auto · hourly</div>
+      <h3>Q3 Investor Update</h3>
+      <p>Quarterly LP letter. Sections 1–3 auto-refresh from Snowflake; the narrative is manual.</p>
+      <div class="card-meta">
+        <strong>Sara M.</strong>
+        <span class="mid-dot"></span>
+        <span>2 min ago</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="card-pip warn"><span class="dot"></span>Drift · review</div>
+      <h3>Q3 Board Deck</h3>
+      <p>Slide 4 chart drifted past tolerance this morning. Underlying data is correct.</p>
+      <div class="card-meta">
+        <strong>Amir K.</strong>
+        <span class="mid-dot"></span>
+        <span>1h ago</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="card-pip"><span class="dot"></span>Live · manual binding</div>
+      <h3>Portfolio Attribution — March</h3>
+      <p>Monthly attribution by sector, factor, and holding. Bound to two warehouse views.</p>
+      <div class="card-meta">
+        <strong>Ben S.</strong>
+        <span class="mid-dot"></span>
+        <span>14 min ago</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="card-pip idle"><span class="dot"></span>Draft · no bindings</div>
+      <h3>LP Allocation Memo</h3>
+      <p>Internal recommendation for Q4 reallocation, ahead of the IC meeting.</p>
+      <div class="card-meta">
+        <strong>Sara M.</strong>
+        <span class="mid-dot"></span>
+        <span>Yesterday</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="card-pip"><span class="dot"></span>Live · weekly</div>
+      <h3>Risk Committee Pack</h3>
+      <p>Weekly risk review for the firm's risk committee. Stress tests, exposure heatmaps.</p>
+      <div class="card-meta">
+        <strong>Carla L.</strong>
+        <span class="mid-dot"></span>
+        <span>Yesterday</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="card-pip"><span class="dot"></span>Live · monthly · auto</div>
+      <h3>Monthly Performance Report</h3>
+      <p>Standardized monthly performance template, refreshed on the 1st of each month.</p>
+      <div class="card-meta">
+        <strong>Auto-refreshed</strong>
+        <span class="mid-dot"></span>
+        <span>2 days ago</span>
+      </div>
+    </article>
+  </div>
+</div>
+
+<script src="../_shared.js"></script>
+<script>
+  document.querySelectorAll('#brand-mark').forEach(el => el.innerHTML = window.PERCY_MARK_SVG);
+  document.querySelectorAll('.modeswitch button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.body.dataset.mode = btn.dataset.mode;
+      document.documentElement.dataset.mode = btn.dataset.mode;
+      document.querySelectorAll('.modeswitch button').forEach(b => b.classList.toggle('active', b === btn));
+    });
+  });
+  document.documentElement.dataset.mode = 'light';
+</script>
+</body>
+</html>

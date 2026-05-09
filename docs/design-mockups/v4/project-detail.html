@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>v4 — Project detail (real screen)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /* v4 — real Project Detail redesign. Matches frontend/src/pages/ProjectDetailPage.tsx
+     and BuildTimeline.tsx + RefreshJobPanel.tsx exactly: real schedule values,
+     real format options, the actual "phase 2" disclaimer, the actual sample script.
+     Notebook/Blueprint texture. */
+
+  :root[data-mode="light"] {
+    --bg: #FBFAF5;
+    --surface: #FFFFFF;
+    --sunk: #F1EFE6;
+    --ink: #1B1F26;
+    --ink-2: #4D5460;
+    --ink-3: #7E8694;
+    --line: rgba(27,31,38,0.08);
+    --line-strong: rgba(27,31,38,0.18);
+    --accent: #3A5070;
+    --accent-soft: #DBE2EC;
+    --grid: rgba(58,80,112,0.045);
+    --good: #4F8255;
+    --good-soft: rgba(79,130,85,0.10);
+    --warn: #B47F2E;
+    --warn-soft: rgba(180,127,46,0.10);
+    --bad: #97402E;
+    --bad-soft: rgba(151,64,46,0.10);
+    --ink-bg: #1B1F26;
+    --code-fg: #DBE2EC;
+  }
+  :root[data-mode="dark"] {
+    --bg: #161A21;
+    --surface: #1F242E;
+    --sunk: #0F1218;
+    --ink: #E5E7EC;
+    --ink-2: #9298A6;
+    --ink-3: #5C6271;
+    --line: rgba(229,231,236,0.08);
+    --line-strong: rgba(229,231,236,0.20);
+    --accent: #7B95C0;
+    --accent-soft: rgba(123,149,192,0.18);
+    --grid: rgba(229,231,236,0.04);
+    --good: #7AB082;
+    --good-soft: rgba(122,176,130,0.16);
+    --warn: #D9A14A;
+    --warn-soft: rgba(217,161,74,0.16);
+    --bad: #D8755C;
+    --bad-soft: rgba(216,117,92,0.16);
+    --ink-bg: #0A0D12;
+    --code-fg: #C7D1E2;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg);
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 32px 32px;
+    color: var(--ink);
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.55;
+    font-size: 14px;
+    transition: background 200ms, color 200ms;
+  }
+  a { color: inherit; text-decoration: none; }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+
+  .modeswitch { position: fixed; top: 14px; right: 14px; z-index: 99; background: var(--surface); border: 1px solid var(--line); padding: 3px; border-radius: 999px; display: flex; gap: 2px; }
+  .modeswitch button { background: transparent; border: 0; color: var(--ink-2); font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 999px; cursor: pointer; }
+  .modeswitch button.active { background: var(--ink); color: var(--bg); font-weight: 600; }
+
+  /* === Topbar (matches real ProjectDetailPage h-12 / px-5) === */
+  .topbar {
+    height: 48px; padding: 0 20px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px;
+  }
+  .tb-crumb { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--ink-2); }
+  .tb-crumb .back { font-size: 10px; text-transform: uppercase; letter-spacing: 0.16em; cursor: pointer; }
+  .tb-crumb .back:hover { color: var(--ink); }
+  .tb-crumb .sep { color: var(--line-strong); }
+  .tb-crumb .here { color: var(--ink); font-weight: 500; }
+  .brand { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 600; }
+  .brand .mark { width: 18px; height: 18px; color: var(--ink); }
+  .tb-right { display: flex; align-items: center; gap: 8px; }
+  .btn-primary {
+    font-size: 11px; padding: 6px 16px;
+    background: var(--ink); color: var(--bg); border: none;
+    text-transform: uppercase; letter-spacing: 0.16em; font-weight: 500;
+    cursor: pointer;
+  }
+
+  /* === Page === */
+  .page { max-width: 880px; margin: 0 auto; padding: 56px 32px 96px; }
+
+  /* === Header (matches real Project Detail header) === */
+  .ph .eyebrow { font-size: 10px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.22em; margin-bottom: 8px; }
+  .ph h1 { font-size: 32px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.1; margin-bottom: 12px; }
+  .ph .meta { font-size: 12px; color: var(--ink-2); }
+
+  /* === Section block === */
+  .section {
+    margin-top: 48px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    padding: 24px 28px;
+  }
+  .section.bare { border: 0; background: transparent; padding: 0; }
+  .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+  .section-head .left .eyebrow { font-size: 10px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.22em; margin-bottom: 4px; }
+  .section-head .left h2 { font-size: 16px; font-weight: 600; letter-spacing: -0.005em; }
+
+  /* === Schedule selector — matches real SCHEDULE_OPTIONS === */
+  .sched-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .sched-btn {
+    font-size: 11px; padding: 6px 14px;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--ink-2);
+    text-transform: uppercase; letter-spacing: 0.14em; font-weight: 500;
+    cursor: pointer; transition: all 120ms;
+  }
+  .sched-btn:hover { color: var(--ink); background: var(--sunk); }
+  .sched-btn.active { color: var(--ink); border-color: var(--ink); background: var(--ink-bg); color: var(--bg); }
+  /* "On demand" is the active in this mockup */
+  .disclaimer {
+    font-size: 11px; color: var(--ink-3);
+    font-style: italic;
+    margin-top: 14px;
+  }
+
+  /* === Refresh job panel === */
+  .panel-grid { display: grid; grid-template-columns: 200px 1fr; gap: 24px; align-items: start; margin-bottom: 16px; }
+  .panel-grid:last-child { margin-bottom: 0; }
+  .panel-label { font-size: 11px; font-weight: 600; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.12em; padding-top: 6px; }
+  .panel-label .help { display: block; font-size: 11px; font-weight: 400; color: var(--ink-3); text-transform: none; letter-spacing: 0; margin-top: 4px; line-height: 1.5; }
+
+  .input, .select {
+    width: 100%; padding: 8px 10px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    color: var(--ink);
+    font-family: inherit; font-size: 13px;
+  }
+  .select { cursor: pointer; }
+
+  .code-block {
+    background: var(--ink-bg);
+    color: var(--code-fg);
+    padding: 16px 18px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.65;
+    overflow-x: auto;
+    border-radius: 0;
+  }
+  .code-block .com { color: var(--ink-3); }
+  .code-block .kw { color: #DAA46B; }
+  .code-block .str { color: #9DBA9F; }
+
+  .toggle-row { display: flex; align-items: center; gap: 10px; padding: 12px 0; border-top: 1px solid var(--line); margin-top: 14px; }
+  .toggle {
+    width: 32px; height: 18px; border-radius: 999px; background: var(--accent); position: relative; cursor: pointer; flex-shrink: 0;
+  }
+  .toggle.off { background: var(--line-strong); }
+  .toggle::after {
+    content: ''; position: absolute; top: 2px; left: 16px;
+    width: 14px; height: 14px; border-radius: 50%; background: white;
+    transition: left 150ms;
+  }
+  .toggle.off::after { left: 2px; }
+  .toggle-label { font-size: 13px; color: var(--ink); }
+  .toggle-help { font-size: 12px; color: var(--ink-3); margin-left: auto; }
+
+  .panel-actions { display: flex; gap: 8px; padding-top: 16px; margin-top: 16px; border-top: 1px solid var(--line); }
+  .btn-ghost {
+    font-size: 11px; padding: 7px 16px;
+    border: 1px solid var(--line-strong); background: transparent;
+    color: var(--ink); text-transform: uppercase; letter-spacing: 0.14em; font-weight: 500;
+    cursor: pointer;
+  }
+  .btn-ghost:hover { background: var(--sunk); }
+  .btn-accent {
+    font-size: 11px; padding: 7px 16px;
+    background: var(--accent); color: var(--bg); border: none;
+    text-transform: uppercase; letter-spacing: 0.14em; font-weight: 500;
+    cursor: pointer;
+  }
+  .btn-accent:hover { filter: brightness(1.1); }
+
+  /* === Refresh runs (recent run list) === */
+  .runs-table { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 16px; }
+  .runs-head { font-size: 10px; text-transform: uppercase; letter-spacing: 0.18em; color: var(--ink-3); margin-bottom: 8px; font-weight: 600; }
+  .run { display: grid; grid-template-columns: 90px 60px 1fr 80px; gap: 16px; padding: 10px 0; align-items: baseline; border-bottom: 1px dotted var(--line); font-size: 13px; }
+  .run:last-child { border-bottom: 0; }
+  .run-time { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .run-status {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 700;
+    padding: 2px 8px; text-transform: uppercase; letter-spacing: 0.06em;
+    text-align: center; align-self: center;
+  }
+  .run-status.ok { color: var(--good); background: var(--good-soft); }
+  .run-status.fail { color: var(--bad); background: var(--bad-soft); }
+  .run-status.run { color: var(--accent); background: var(--accent-soft); }
+  .run-text { color: var(--ink); }
+  .run-text .hint { color: var(--ink-3); }
+  .run-dur { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-3); text-align: right; }
+
+  /* === Build timeline (matches BuildTimeline.tsx layout w/ spine) === */
+  .build-list { position: relative; padding-left: 20px; }
+  .build-list::before {
+    content: ''; position: absolute; left: 5px; top: 4px; bottom: 4px;
+    width: 1px; background: var(--line-strong);
+  }
+  .build-row { padding: 12px 0; }
+  .build-row .dot {
+    position: absolute; left: 0; width: 11px; height: 11px;
+    border-radius: 50%; background: var(--bg);
+    border: 2px solid var(--line-strong);
+    margin-top: 4px;
+  }
+  .build-row .dot.ok { border-color: var(--good); background: var(--good); }
+  .build-row .dot.fail { border-color: var(--bad); background: var(--bad); }
+  .build-row .dot.run { border-color: var(--accent); animation: pulse 1.5s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 var(--accent-soft); } 50% { box-shadow: 0 0 0 6px transparent; } }
+  .build-meta { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .build-time { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink); font-weight: 500; }
+  .build-status { font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 700; padding: 1px 7px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .build-status.ok { color: var(--good); background: var(--good-soft); }
+  .build-status.fail { color: var(--bad); background: var(--bad-soft); }
+  .build-status.run { color: var(--accent); background: var(--accent-soft); }
+  .build-source { font-size: 11px; color: var(--ink-3); }
+  .build-formats { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .fmt {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 600;
+    padding: 3px 8px; border: 1px solid var(--line-strong); color: var(--ink);
+    cursor: pointer; text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .fmt:hover { background: var(--sunk); }
+  .fmt.miss { color: var(--ink-3); border-style: dashed; cursor: default; }
+
+  /* Format picker (matches FormatPicker in BuildTimeline) */
+  .format-picker { display: flex; flex-wrap: wrap; gap: 4px; }
+  .format-picker .fmt-toggle {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 600;
+    padding: 4px 10px; border: 1px solid var(--line);
+    color: var(--ink-3); cursor: pointer;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    background: transparent;
+  }
+  .format-picker .fmt-toggle.on { color: var(--ink); border-color: var(--ink); background: var(--ink-bg); color: var(--bg); }
+
+  .empty {
+    border: 1px dashed var(--line-strong);
+    padding: 32px 24px;
+    text-align: center;
+    margin-top: 12px;
+  }
+  .empty .eyebrow { font-size: 10px; text-transform: uppercase; letter-spacing: 0.22em; color: var(--ink-3); font-weight: 600; margin-bottom: 8px; }
+  .empty p { font-size: 13px; color: var(--ink-2); line-height: 1.7; max-width: 480px; margin: 0 auto; }
+</style>
+</head>
+<body data-mode="light">
+
+<div class="modeswitch">
+  <button class="active" data-mode="light">light</button>
+  <button data-mode="dark">dark</button>
+</div>
+
+<!-- Topbar — matches real ProjectDetailPage top bar -->
+<div class="topbar">
+  <div class="tb-crumb">
+    <span class="back">← Home</span>
+    <span class="sep">/</span>
+    <div class="brand">
+      <span class="mark" id="brand-mark"></span>
+      <span>Percy</span>
+    </div>
+    <span class="sep">/</span>
+    <span>Projects</span>
+    <span class="sep">/</span>
+    <span class="here">Q3 Investor Update</span>
+  </div>
+  <div class="tb-right">
+    <button class="btn-primary">Open in Studio →</button>
+  </div>
+</div>
+
+<div class="page">
+
+  <!-- Header — matches real component -->
+  <section class="ph">
+    <div class="eyebrow">— Project —</div>
+    <h1>Q3 Investor Update</h1>
+    <div class="meta">Source attached. Last updated May 8, 2026, 4:14 PM.</div>
+  </section>
+
+  <!-- Schedule — matches SCHEDULE_OPTIONS exactly -->
+  <section class="section">
+    <div class="section-head">
+      <div class="left">
+        <div class="eyebrow">— Refresh schedule —</div>
+        <h2>When does this rebuild?</h2>
+      </div>
+    </div>
+    <div class="sched-row">
+      <button class="sched-btn">None</button>
+      <button class="sched-btn active">On demand</button>
+      <button class="sched-btn">Daily</button>
+      <button class="sched-btn">Weekly</button>
+      <button class="sched-btn">Monthly</button>
+    </div>
+    <div class="disclaimer">Cron-driven auto-refresh ships in phase 2. Until then, this is a label.</div>
+  </section>
+
+  <!-- Refresh job panel — Python script + team env -->
+  <section class="section">
+    <div class="section-head">
+      <div class="left">
+        <div class="eyebrow">— Refresh job —</div>
+        <h2>Custom Python that runs on every refresh</h2>
+      </div>
+      <div class="tb-right">
+        <button class="btn-ghost">Run now</button>
+      </div>
+    </div>
+
+    <div class="panel-grid">
+      <div class="panel-label">
+        Schedule
+        <span class="help">Drives when the script runs. <strong>On demand</strong> means triggered only.</span>
+      </div>
+      <div>
+        <select class="select">
+          <option>On demand</option>
+          <option>Hourly</option>
+          <option>Daily</option>
+          <option>Weekly</option>
+          <option>Monthly</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="panel-grid">
+      <div class="panel-label">
+        Team env
+        <span class="help">The Python environment this script runs in. Configure on Workspace · Members.</span>
+      </div>
+      <div>
+        <select class="select">
+          <option>quant-research / py3.11 / pandas, numpy, snowflake-connector</option>
+          <option>finance-default / py3.11 / pandas, openpyxl</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="panel-grid">
+      <div class="panel-label">
+        Script
+        <span class="help">Available env vars: <code class="mono">PERCY_PROJECT_ID</code>, <code class="mono">PERCY_DOC_ID</code>, <code class="mono">PERCY_API_BASE</code>.</span>
+      </div>
+      <div>
+        <pre class="code-block"><span class="com"># Runs in your team-env's Python.</span>
+<span class="com"># Available env vars:  PERCY_PROJECT_ID, PERCY_DOC_ID, PERCY_API_BASE,</span>
+<span class="com"># plus everything you set in the team env + per-job overrides.</span>
+<span class="kw">import</span> os
+<span class="kw">print</span>(<span class="str">"project:"</span>, os.environ.get(<span class="str">"PERCY_PROJECT_ID"</span>))
+<span class="kw">print</span>(<span class="str">"doc:    "</span>, os.environ.get(<span class="str">"PERCY_DOC_ID"</span>))
+<span class="com"># Example: hit your data warehouse, then patch a slide via Percy's API.</span></pre>
+      </div>
+    </div>
+
+    <div class="panel-grid">
+      <div class="panel-label">
+        Extra env vars
+        <span class="help">One per line, <code class="mono">KEY=value</code>. Merged on top of the team env.</span>
+      </div>
+      <div>
+        <textarea class="input" rows="3" style="font-family: 'JetBrains Mono', monospace; font-size: 12px; resize: vertical;">SNOWFLAKE_ROLE=ANALYST
+QUARTER=Q3-2026</textarea>
+      </div>
+    </div>
+
+    <div class="toggle-row">
+      <span class="toggle"></span>
+      <span class="toggle-label">Enabled</span>
+      <span class="toggle-help">Disable to keep the config but stop running on schedule.</span>
+    </div>
+
+    <div class="panel-actions">
+      <button class="btn-ghost">Delete job</button>
+      <span style="margin-left: auto;"></span>
+      <button class="btn-ghost">Discard changes</button>
+      <button class="btn-accent">Save</button>
+    </div>
+
+    <!-- Recent runs -->
+    <div class="runs-table">
+      <div class="runs-head">— Recent runs —</div>
+      <div class="run">
+        <span class="run-time">May 8 16:14</span>
+        <span class="run-status ok">OK</span>
+        <span class="run-text">Bound 3 stats from <span class="mono">snowflake.fund_metrics</span> · <span class="hint">stdout 248 lines</span></span>
+        <span class="run-dur">38.4s</span>
+      </div>
+      <div class="run">
+        <span class="run-time">May 8 09:14</span>
+        <span class="run-status ok">OK</span>
+        <span class="run-text">Bound 3 stats from <span class="mono">snowflake.fund_metrics</span></span>
+        <span class="run-dur">42.1s</span>
+      </div>
+      <div class="run">
+        <span class="run-time">May 7 14:30</span>
+        <span class="run-status fail">FAIL</span>
+        <span class="run-text">Snowflake connection refused — <span class="mono">errno 113</span></span>
+        <span class="run-dur">2.1s</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Build timeline — matches BuildTimeline.tsx exactly -->
+  <section class="section">
+    <div class="section-head">
+      <div class="left">
+        <div class="eyebrow">— Builds —</div>
+        <h2>Refresh history</h2>
+      </div>
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <div class="format-picker">
+          <button class="fmt-toggle on">PPTX</button>
+          <button class="fmt-toggle on">PDF</button>
+          <button class="fmt-toggle">.PERCY</button>
+          <button class="fmt-toggle">HTML</button>
+          <button class="fmt-toggle">MD</button>
+          <button class="fmt-toggle">PNG.ZIP</button>
+        </div>
+        <button class="btn-primary">Build now</button>
+      </div>
+    </div>
+
+    <div class="build-list">
+      <div class="build-row" style="position: relative;">
+        <span class="dot ok"></span>
+        <div class="build-meta">
+          <span class="build-time">May 8, 4:14 PM</span>
+          <span class="build-status ok">SUCCESS</span>
+          <span class="build-source">manual · 38.4s</span>
+        </div>
+        <div class="build-formats">
+          <span class="fmt">PPTX</span>
+          <span class="fmt">PDF</span>
+          <span class="fmt">.PERCY</span>
+        </div>
+      </div>
+      <div class="build-row" style="position: relative;">
+        <span class="dot ok"></span>
+        <div class="build-meta">
+          <span class="build-time">May 7, 9:30 AM</span>
+          <span class="build-status ok">SUCCESS</span>
+          <span class="build-source">refresh job · 42.1s</span>
+        </div>
+        <div class="build-formats">
+          <span class="fmt">PPTX</span>
+          <span class="fmt miss">PDF · n/a</span>
+        </div>
+      </div>
+      <div class="build-row" style="position: relative;">
+        <span class="dot fail"></span>
+        <div class="build-meta">
+          <span class="build-time">May 7, 2:30 PM</span>
+          <span class="build-status fail">FAILED</span>
+          <span class="build-source">refresh job · 2.1s</span>
+        </div>
+        <div class="build-formats">
+          <span class="fmt miss">no outputs</span>
+        </div>
+      </div>
+      <div class="build-row" style="position: relative;">
+        <span class="dot ok"></span>
+        <div class="build-meta">
+          <span class="build-time">May 5, 11:00 AM</span>
+          <span class="build-status ok">SUCCESS</span>
+          <span class="build-source">manual · 36.8s</span>
+        </div>
+        <div class="build-formats">
+          <span class="fmt">PPTX</span>
+          <span class="fmt">PDF</span>
+          <span class="fmt">.PERCY</span>
+          <span class="fmt">MD</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script src="../_shared.js"></script>
+<script>
+  document.querySelectorAll('#brand-mark').forEach(el => el.innerHTML = window.PERCY_MARK_SVG);
+  document.querySelectorAll('.modeswitch button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.body.dataset.mode = btn.dataset.mode;
+      document.documentElement.dataset.mode = btn.dataset.mode;
+      document.querySelectorAll('.modeswitch button').forEach(b => b.classList.toggle('active', b === btn));
+    });
+  });
+  document.documentElement.dataset.mode = 'light';
+</script>
+</body>
+</html>

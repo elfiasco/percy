@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Percy — Design redesign mockups</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg-base: #FAFAF7;
+    --bg-surface: #FFFFFF;
+    --text-primary: #1A1A18;
+    --text-secondary: #5C5C56;
+    --text-tertiary: #8A8A85;
+    --border-subtle: rgba(26,26,24,0.06);
+    --border-default: rgba(26,26,24,0.10);
+    --border-strong: rgba(26,26,24,0.18);
+    --accent-50: #FAF3DC;
+    --accent-500: #C29C45;
+    --accent-700: #8B6822;
+    --shadow-card: 0 1px 3px rgba(26,26,24,0.06), 0 1px 2px rgba(26,26,24,0.04);
+    --shadow-pop: 0 8px 24px rgba(26,26,24,0.10), 0 2px 6px rgba(26,26,24,0.05);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg-base); color: var(--text-primary); font-family: 'Inter', system-ui, sans-serif; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  a { color: inherit; text-decoration: none; }
+
+  .page { max-width: 960px; margin: 0 auto; padding: 80px 32px; }
+  .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent-700); margin-bottom: 16px; display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--accent-50); }
+  h1 { font-size: 56px; font-weight: 600; letter-spacing: -0.03em; line-height: 1.05; margin-bottom: 20px; }
+  .lede { font-size: 18px; color: var(--text-secondary); max-width: 620px; margin-bottom: 16px; line-height: 1.6; }
+  .meta { font-size: 13px; color: var(--text-tertiary); font-family: 'JetBrains Mono', monospace; }
+
+  .grid { margin-top: 48px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .card { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 14px; padding: 28px; box-shadow: var(--shadow-card); transition: transform 200ms ease, box-shadow 200ms ease; cursor: pointer; display: block; }
+  .card:hover { transform: translateY(-2px); box-shadow: var(--shadow-pop); border-color: var(--border-default); }
+  .card-num { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--accent-700); margin-bottom: 12px; }
+  .card-title { font-size: 22px; font-weight: 600; letter-spacing: -0.018em; margin-bottom: 6px; }
+  .card-desc { font-size: 14px; color: var(--text-secondary); line-height: 1.55; margin-bottom: 16px; }
+  .card-arrow { font-size: 13px; font-weight: 500; color: var(--accent-700); display: inline-flex; align-items: center; gap: 6px; }
+
+  .doc-link { margin-top: 48px; padding: 24px; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 12px; box-shadow: var(--shadow-card); }
+  .doc-link strong { display: block; font-size: 15px; margin-bottom: 4px; }
+  .doc-link span { color: var(--text-secondary); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <span class="eyebrow">Design proposal · 2026-05-09</span>
+  <h1>Studio Refined</h1>
+  <p class="lede">A redesign proposal evolving Percy from "Bloomberg-terminal precision" toward studio-grade craft. Same seriousness, more breathing room, friendlier surfaces, modern typography.</p>
+  <p class="meta">5 mockups + design doc · open each in a new tab</p>
+
+  <div class="grid">
+    <a class="card" href="01-landing.html">
+      <div class="card-num">01 / Marketing</div>
+      <div class="card-title">Landing page</div>
+      <div class="card-desc">Hero with the new type scale, bento grid for features, polished CTA card. Replaces the current Splash with its "Established 2026" Roman-numeral framing.</div>
+      <div class="card-arrow">View mockup →</div>
+    </a>
+    <a class="card" href="02-dashboard.html">
+      <div class="card-num">02 / App</div>
+      <div class="card-title">Dashboard</div>
+      <div class="card-desc">Logged-in home: sidebar nav, project cards with thumbnails, stats row, activity feed, pipeline status. Replaces the current 12-pixel-tall dense top bar.</div>
+      <div class="card-arrow">View mockup →</div>
+    </a>
+    <a class="card" href="03-studio.html">
+      <div class="card-num">03 / Editor</div>
+      <div class="card-title">Studio</div>
+      <div class="card-desc">The working surface: 280px element tree on the left, canvas in the middle, 320px inspector on the right. Variable-width inspector tabs, real data binding panel.</div>
+      <div class="card-arrow">View mockup →</div>
+    </a>
+    <a class="card" href="04-components.html">
+      <div class="card-num">04 / System</div>
+      <div class="card-title">Component library</div>
+      <div class="card-desc">Tokens, type scale, buttons, pills, cards, forms, toasts, modal, empty state, spacing scale. The source of truth for migration.</div>
+      <div class="card-arrow">View mockup →</div>
+    </a>
+    <a class="card" href="05-project-detail.html" style="grid-column: span 2;">
+      <div class="card-num">05 / Detail</div>
+      <div class="card-title">Project detail page</div>
+      <div class="card-desc">Project header with thumbnail, tabbed views, slide list with mini-thumbnails and element tags, side rails for data sources / refresh history / collaborators.</div>
+      <div class="card-arrow">View mockup →</div>
+    </a>
+  </div>
+
+  <a class="doc-link" href="variations/index.html" style="background: linear-gradient(135deg, #1A1A18, #2A2A26); color: #FAFAF7; border: none;">
+    <strong style="color: #FAFAF7;">→ Compare 5 design variations</strong>
+    <span style="color: rgba(250,250,247,0.7);">A Champagne Light · B Carbon Dark · C Indigo Trust · D Verdigris · E Editorial Serif — same dashboard view, swap directions with keys 1-5</span>
+  </a>
+
+  <a class="doc-link" href="../percy-design-redesign.md">
+    <strong>📄 Read the full design doc</strong>
+    <span>docs/percy-design-redesign.md — research summary, current-state critique, token system, migration plan</span>
+  </a>
+</div>
+</body>
+</html>

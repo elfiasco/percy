@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Percy — v3 design directions</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #181818; color: #ECEAE0; font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; line-height: 1.5; height: 100vh; overflow: hidden; }
+  a { color: inherit; text-decoration: none; }
+
+  .strip { height: 64px; background: #0E0E0C; display: flex; align-items: center; padding: 0 20px; gap: 16px; border-bottom: 1px solid rgba(236,234,224,0.08); position: relative; z-index: 10; }
+  .strip-title { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+  .strip-title .label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #8A8A85; }
+  .strip-title .story { font-size: 12px; font-weight: 400; color: #A8A8A2; font-style: italic; max-width: 460px; }
+
+  .group { display: flex; gap: 2px; background: rgba(236,234,224,0.04); padding: 3px; border-radius: 8px; flex-wrap: nowrap; overflow-x: auto; }
+  .group::-webkit-scrollbar { display: none; }
+  .group button { background: transparent; border: none; color: #A8A8A2; font-family: inherit; font-size: 12px; font-weight: 500; padding: 6px 10px; border-radius: 5px; cursor: pointer; transition: background 120ms, color 120ms; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .group button:hover { color: #ECEAE0; }
+  .group button.active { background: #ECEAE0; color: #0E0E0C; font-weight: 600; }
+  .group button .key { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #6E6E6A; background: rgba(236,234,224,0.06); padding: 0 4px; border-radius: 3px; min-width: 14px; text-align: center; }
+  .group button.active .key { color: rgba(0,0,0,0.5); background: rgba(0,0,0,0.10); }
+
+  .meta { margin-left: auto; font-size: 11px; color: #8A8A85; font-family: 'JetBrains Mono', monospace; display: flex; gap: 12px; flex-shrink: 0; }
+  .meta a { color: #ECEAE0; opacity: 0.6; }
+  .meta a:hover { opacity: 1; }
+
+  iframe { border: 0; width: 100%; height: calc(100vh - 64px); background: #FAFAF7; }
+</style>
+</head>
+<body>
+
+<header class="strip">
+  <div class="strip-title">
+    <span class="label">v3 / 10</span>
+    <span id="story" class="story">Sodium-vapor accent on warm charcoal/sand — calibration / tolerance UI.</span>
+  </div>
+
+  <div class="group" id="picker">
+    <button class="active" data-src="01-sodium-dial.html"  data-story="Sodium-vapor accent on warm charcoal/sand — calibration / tolerance UI."><span class="key">1</span>Sodium · Dial</button>
+    <button data-src="02-newsroom.html"      data-story="Front page of a daily edition. Source Serif. Dropcaps and bylines."><span class="key">2</span>Newsroom</button>
+    <button data-src="03-marginalia.html"    data-story="Editor's pencil on a typeset proof — hand-drawn ticks, underlines, marginal notes."><span class="key">3</span>Marginalia</button>
+    <button data-src="04-folio.html"         data-story="Swiss modernism — Vignelli grids, one bold orange, structural rules."><span class="key">4</span>Folio</button>
+    <button data-src="05-lumen.html"         data-story="Soft atmospheric mint glow — gentle, modern, lit-from-behind."><span class="key">5</span>Lumen</button>
+    <button data-src="06-risograph.html"     data-story="Two-color riso overprint — pink + teal layered on cream paper."><span class="key">6</span>Risograph</button>
+    <button data-src="07-terminal.html"      data-story="JetBrains Mono · box-drawing characters · amber phosphor in dark mode."><span class="key">7</span>Terminal</button>
+    <button data-src="08-botanical.html"     data-story="Sage + wheat + clay — Cormorant Garamond. Quietly luxurious."><span class="key">8</span>Botanical</button>
+    <button data-src="09-blueprint.html"     data-story="Drafting paper · dimension lines · callouts · classical blueprint cyan-on-blue in dark."><span class="key">9</span>Blueprint</button>
+    <button data-src="10-brutalist.html"     data-story="System fonts · default-CSS aesthetic · zero polish · counter to all the others."><span class="key">0</span>Brutalist</button>
+  </div>
+
+  <div class="meta">
+    <a href="../index.html">← all mockups</a>
+  </div>
+</header>
+
+<iframe id="frame" src="01-sodium-dial.html"></iframe>
+
+<script>
+  const frame = document.getElementById('frame');
+  const story = document.getElementById('story');
+  document.getElementById('picker').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-src]');
+    if (!btn) return;
+    document.querySelectorAll('#picker button').forEach(b => b.classList.toggle('active', b === btn));
+    frame.src = btn.dataset.src;
+    story.textContent = btn.dataset.story;
+  });
+  document.addEventListener('keydown', (e) => {
+    const map = { '1': 0, '2': 1, '3': 2, '4': 3, '5': 4, '6': 5, '7': 6, '8': 7, '9': 8, '0': 9 };
+    const idx = map[e.key];
+    if (idx !== undefined) {
+      const btn = document.querySelectorAll('#picker button')[idx];
+      if (btn) btn.click();
+    }
+  });
+</script>
+
+</body>
+</html>

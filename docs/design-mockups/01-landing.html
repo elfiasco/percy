@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Percy — Design mockup: Landing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    /* Surfaces */
+    --bg-base: #FAFAF7;
+    --bg-surface: #FFFFFF;
+    --bg-sunk: #F4F4EE;
+
+    /* Text */
+    --text-primary: #1A1A18;
+    --text-secondary: #5C5C56;
+    --text-tertiary: #8A8A85;
+
+    /* Borders */
+    --border-subtle: rgba(26,26,24,0.06);
+    --border-default: rgba(26,26,24,0.10);
+    --border-strong: rgba(26,26,24,0.18);
+
+    /* Accent — Champagne */
+    --accent-50: #FAF3DC;
+    --accent-100: #F5E7B7;
+    --accent-500: #C29C45;
+    --accent-600: #A98432;
+    --accent-700: #8B6822;
+
+    /* Data accent — Verdigris */
+    --data-50: #DEF1ED;
+    --data-500: #2E6E66;
+    --data-700: #1F4E48;
+
+    /* Status */
+    --success-50: #E6F0E8;
+    --success-700: #2F5A36;
+    --warning-50: #F4EAD3;
+    --warning-700: #6B4915;
+    --error-50: #F2DCD8;
+    --error-700: #6B2A20;
+
+    /* Shadows */
+    --shadow-card: 0 1px 3px rgba(26,26,24,0.06), 0 1px 2px rgba(26,26,24,0.04);
+    --shadow-pop: 0 8px 24px rgba(26,26,24,0.10), 0 2px 6px rgba(26,26,24,0.05);
+    --shadow-modal: 0 24px 48px rgba(26,26,24,0.16), 0 12px 24px rgba(26,26,24,0.08);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg-base);
+    color: var(--text-primary);
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    line-height: 1.5;
+  }
+  a { color: inherit; text-decoration: none; }
+
+  /* === Top nav === */
+  .nav {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(250,250,247,0.85);
+    backdrop-filter: saturate(180%) blur(16px);
+    -webkit-backdrop-filter: saturate(180%) blur(16px);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .nav-inner {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 32px;
+    height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .nav-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 600;
+    font-size: 15px;
+    letter-spacing: -0.01em;
+  }
+  .nav-links {
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    font-size: 14px;
+    color: var(--text-secondary);
+  }
+  .nav-links a:hover { color: var(--text-primary); }
+  .nav-cta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* === Buttons === */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: -0.005em;
+    border-radius: 8px;
+    padding: 10px 18px;
+    transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
+  }
+  .btn-primary {
+    background: linear-gradient(180deg, var(--accent-500), var(--accent-600));
+    color: var(--text-primary);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.16), 0 1px 2px rgba(0,0,0,0.08);
+  }
+  .btn-primary:hover {
+    background: linear-gradient(180deg, var(--accent-600), var(--accent-700));
+    color: #fff;
+    transform: translateY(-1px);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.16), 0 4px 8px rgba(168,132,50,0.20);
+  }
+  .btn-ghost {
+    background: transparent;
+    color: var(--text-primary);
+    border: 1px solid var(--border-default);
+  }
+  .btn-ghost:hover { background: var(--bg-surface); border-color: var(--border-strong); }
+  .btn-link {
+    background: transparent;
+    color: var(--text-secondary);
+    padding: 6px 12px;
+  }
+  .btn-link:hover { color: var(--text-primary); }
+  .btn-lg { font-size: 15px; padding: 14px 24px; border-radius: 10px; }
+
+  /* === Hero === */
+  .hero {
+    position: relative;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 80px 32px 64px;
+    overflow: hidden;
+  }
+  .hero-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent-700);
+    background: var(--accent-50);
+    padding: 6px 12px;
+    border-radius: 999px;
+    margin-bottom: 24px;
+  }
+  .hero h1 {
+    font-size: clamp(48px, 7vw, 88px);
+    font-weight: 600;
+    letter-spacing: -0.035em;
+    line-height: 1.02;
+    margin-bottom: 28px;
+    max-width: 980px;
+  }
+  .hero h1 .accent { color: var(--text-tertiary); }
+  .hero p.lede {
+    font-size: 19px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+    max-width: 640px;
+    margin-bottom: 40px;
+  }
+  .hero-cta { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .hero-trust {
+    margin-top: 64px;
+    display: flex;
+    gap: 48px;
+    align-items: center;
+    color: var(--text-tertiary);
+    font-size: 13px;
+  }
+  .hero-trust-label {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+  }
+  .hero-trust-logos {
+    display: flex;
+    gap: 32px;
+    align-items: center;
+    color: var(--text-secondary);
+    font-weight: 600;
+    font-size: 14px;
+    letter-spacing: -0.01em;
+  }
+
+  /* Decorative mark behind hero */
+  .hero-mark {
+    position: absolute;
+    right: -120px;
+    top: -40px;
+    width: 600px;
+    height: 600px;
+    opacity: 0.04;
+    pointer-events: none;
+  }
+
+  /* === Bento feature grid === */
+  .features {
+    max-width: 1200px;
+    margin: 64px auto;
+    padding: 0 32px;
+  }
+  .section-eyebrow {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+    margin-bottom: 16px;
+  }
+  .section-title {
+    font-size: clamp(28px, 3.5vw, 40px);
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    line-height: 1.15;
+    max-width: 720px;
+    margin-bottom: 48px;
+  }
+
+  .bento {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    grid-auto-rows: minmax(180px, auto);
+    gap: 16px;
+  }
+  .bento-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: 16px;
+    padding: 28px;
+    box-shadow: var(--shadow-card);
+    transition: transform 200ms ease, box-shadow 200ms ease;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+  .bento-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-pop);
+  }
+  .bento-card h3 {
+    font-size: 19px;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    margin-bottom: 8px;
+  }
+  .bento-card p {
+    font-size: 14px;
+    color: var(--text-secondary);
+    line-height: 1.55;
+  }
+  .bento-card .icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: var(--accent-50);
+    color: var(--accent-700);
+    display: grid;
+    place-items: center;
+    margin-bottom: 16px;
+  }
+  .bento-card.data .icon { background: var(--data-50); color: var(--data-700); }
+  .bento-card.muted .icon { background: var(--bg-sunk); color: var(--text-secondary); }
+
+  /* Bento spans */
+  .span-3 { grid-column: span 3; }
+  .span-4 { grid-column: span 4; }
+  .span-2 { grid-column: span 2; }
+  .span-tall { grid-row: span 2; }
+
+  /* Showcase card with embedded UI preview */
+  .bento-showcase {
+    grid-column: span 4;
+    grid-row: span 2;
+    padding: 0;
+    background: linear-gradient(135deg, #FFFFFF 0%, #F4F4EE 100%);
+  }
+  .bento-showcase .header {
+    padding: 28px 28px 0;
+  }
+  .bento-showcase .preview {
+    padding: 24px 28px 28px;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .preview-card {
+    width: 100%;
+    max-width: 380px;
+    background: var(--bg-surface);
+    border-radius: 12px;
+    box-shadow: var(--shadow-pop);
+    overflow: hidden;
+    border: 1px solid var(--border-subtle);
+  }
+  .preview-card .pc-header {
+    height: 36px;
+    background: var(--bg-sunk);
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    gap: 8px;
+  }
+  .pc-dot { width: 8px; height: 8px; border-radius: 4px; background: var(--border-strong); }
+  .pc-title { font-size: 11px; color: var(--text-tertiary); font-weight: 500; margin-left: 8px; }
+  .preview-card .pc-body { padding: 18px; }
+  .pc-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .pc-row:last-child { border-bottom: none; }
+  .pc-bar {
+    height: 8px;
+    background: var(--bg-sunk);
+    border-radius: 4px;
+    flex: 1;
+    overflow: hidden;
+  }
+  .pc-bar > span {
+    display: block;
+    height: 100%;
+    background: linear-gradient(90deg, var(--data-500), var(--data-700));
+    border-radius: 4px;
+  }
+  .pc-num { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .pc-label { font-size: 12px; color: var(--text-primary); font-weight: 500; min-width: 80px; }
+  .pc-pill {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--success-50);
+    color: var(--success-700);
+  }
+
+  /* === Quote === */
+  .quote {
+    max-width: 1200px;
+    margin: 64px auto;
+    padding: 0 32px;
+  }
+  .quote-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: 20px;
+    padding: 56px;
+    box-shadow: var(--shadow-card);
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 48px;
+    align-items: center;
+  }
+  .quote-card blockquote {
+    font-size: 28px;
+    line-height: 1.4;
+    letter-spacing: -0.02em;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+  .quote-card cite {
+    font-style: normal;
+    display: block;
+    margin-top: 24px;
+    font-size: 14px;
+    color: var(--text-secondary);
+  }
+  .quote-card cite strong { color: var(--text-primary); font-weight: 600; }
+  .quote-mark {
+    font-family: 'Inter', serif;
+    font-size: 120px;
+    line-height: 1;
+    color: var(--accent-500);
+    align-self: start;
+  }
+
+  /* === CTA === */
+  .cta {
+    max-width: 1200px;
+    margin: 96px auto;
+    padding: 0 32px;
+    text-align: center;
+  }
+  .cta-card {
+    background: linear-gradient(135deg, #1A1A18 0%, #2A2A26 100%);
+    border-radius: 24px;
+    padding: 80px 40px;
+    color: #FAFAF7;
+    position: relative;
+    overflow: hidden;
+  }
+  .cta-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at 70% 30%, rgba(194,156,69,0.15), transparent 60%);
+  }
+  .cta h2 {
+    font-size: clamp(36px, 5vw, 56px);
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    line-height: 1.05;
+    margin-bottom: 24px;
+    position: relative;
+  }
+  .cta p {
+    font-size: 17px;
+    color: rgba(250,250,247,0.7);
+    max-width: 540px;
+    margin: 0 auto 40px;
+    position: relative;
+  }
+  .cta .btn-primary { position: relative; }
+
+  /* === Footer === */
+  footer {
+    border-top: 1px solid var(--border-subtle);
+    margin-top: 64px;
+  }
+  .footer-inner {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 48px 32px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    color: var(--text-tertiary);
+    font-size: 13px;
+  }
+  .footer-links { display: flex; gap: 28px; }
+  .footer-links a:hover { color: var(--text-primary); }
+
+  /* === Mark SVG (placeholder) === */
+  .mark {
+    display: inline-block;
+    width: 22px;
+    height: 22px;
+    color: var(--text-primary);
+  }
+  .mark svg { width: 100%; height: 100%; }
+  .icon-svg { width: 16px; height: 16px; stroke-width: 1.75; }
+</style>
+</head>
+<body>
+
+<!-- ===== NAV ===== -->
+<nav class="nav">
+  <div class="nav-inner">
+    <a href="#" class="nav-brand">
+      <span class="mark"><span class="real-mark"></span></span>
+      <span>Percy</span>
+    </a>
+    <div class="nav-links">
+      <a href="#">Product</a>
+      <a href="#">For teams</a>
+      <a href="#">Pricing</a>
+      <a href="#">Docs</a>
+      <a href="#">Customers</a>
+    </div>
+    <div class="nav-cta">
+      <a href="#" class="btn btn-link">Sign in</a>
+      <a href="#" class="btn btn-primary">Get started</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ===== HERO ===== -->
+<section class="hero">
+  <div class="hero-mark">
+    <span class="real-mark"></span>
+  </div>
+  <span class="hero-eyebrow">
+    <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+    New — variable-width brand renderer
+  </span>
+  <h1>
+    Your business has a story.<br />
+    Tell it well — <span class="accent">and keep it current.</span>
+  </h1>
+  <p class="lede">
+    Percy turns the way your team works on presentations into something modern. Bring the decks you already have. We learn your style, keep your numbers honest, and make late-night updates a thing of the past.
+  </p>
+  <div class="hero-cta">
+    <a href="#" class="btn btn-primary btn-lg">
+      Get started
+      <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+    </a>
+    <a href="#" class="btn btn-ghost btn-lg">Watch a 90-second demo</a>
+  </div>
+  <div class="hero-trust">
+    <div>
+      <div class="hero-trust-label">Trusted by teams at</div>
+    </div>
+    <div class="hero-trust-logos">
+      <span>Meridian Capital</span>
+      <span>Crestwood</span>
+      <span>Bay Quant</span>
+      <span>Fischer &amp; Black</span>
+    </div>
+  </div>
+</section>
+
+<!-- ===== BENTO FEATURES ===== -->
+<section class="features">
+  <div class="section-eyebrow">What Percy is</div>
+  <h2 class="section-title">A structured layer underneath every report your organization produces.</h2>
+
+  <div class="bento">
+    <!-- Big showcase card -->
+    <div class="bento-card bento-showcase">
+      <div class="header">
+        <div class="icon">
+          <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 4 5-5"/></svg>
+        </div>
+        <h3>Live data, always</h3>
+        <p>Bind any chart, table, or metric to your warehouse. When data changes, the deck stays current. No screenshots, no stale figures.</p>
+      </div>
+      <div class="preview">
+        <div class="preview-card">
+          <div class="pc-header">
+            <span class="pc-dot"></span>
+            <span class="pc-dot"></span>
+            <span class="pc-dot"></span>
+            <span class="pc-title">Q3 Investor Update — auto-refreshed 2 min ago</span>
+          </div>
+          <div class="pc-body">
+            <div class="pc-row">
+              <span class="pc-label">AUM</span>
+              <span class="pc-bar"><span style="width: 78%"></span></span>
+              <span class="pc-num">$4.21B</span>
+              <span class="pc-pill">live</span>
+            </div>
+            <div class="pc-row">
+              <span class="pc-label">Net flows</span>
+              <span class="pc-bar"><span style="width: 52%"></span></span>
+              <span class="pc-num">+$118M</span>
+              <span class="pc-pill">live</span>
+            </div>
+            <div class="pc-row">
+              <span class="pc-label">YTD return</span>
+              <span class="pc-bar"><span style="width: 64%"></span></span>
+              <span class="pc-num">+14.2%</span>
+              <span class="pc-pill">live</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Onboard -->
+    <div class="bento-card span-2">
+      <div class="icon">
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      </div>
+      <h3>Drop in your decks</h3>
+      <p>Upload existing PowerPoint files. Percy decomposes each one into structured elements your team can re-use.</p>
+    </div>
+
+    <!-- AI -->
+    <div class="bento-card span-2 data">
+      <div class="icon">
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+      </div>
+      <h3>AI on structured elements</h3>
+      <p>The AI sees data bindings, not screenshots. Ask "is this metric stale?" and get a real answer.</p>
+    </div>
+
+    <!-- Audit -->
+    <div class="bento-card span-2 muted">
+      <div class="icon">
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      </div>
+      <h3>Versioned and auditable</h3>
+      <p>Every refresh is a tracked event with diff, source, and approver. Compliance gets a clean trail.</p>
+    </div>
+
+    <!-- Memory -->
+    <div class="bento-card span-3">
+      <div class="icon">
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      </div>
+      <h3>Team agentic memory</h3>
+      <p>Every uploaded document, pipeline, and binding accumulates into a structured corpus. After three months, Percy knows your org's chart conventions, metric definitions, and brand patterns. Net new analysts inherit it on day one.</p>
+    </div>
+
+    <!-- Live outputs -->
+    <div class="bento-card span-3 data">
+      <div class="icon">
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      </div>
+      <h3>Living outputs</h3>
+      <p>Publish a deck as PowerPoint, PDF, or an interactive web view where the data stays alive — viewers see today's numbers, not the snapshot from when you hit export.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===== QUOTE ===== -->
+<section class="quote">
+  <div class="quote-card">
+    <div>
+      <blockquote>"It's the difference between rebuilding the QBR every quarter and rebuilding the QBR exactly once. We have not gone back."</blockquote>
+      <cite><strong>Sara Malek</strong> — Head of Analytics, Crestwood Capital</cite>
+    </div>
+    <div class="quote-mark">"</div>
+  </div>
+</section>
+
+<!-- ===== CTA ===== -->
+<section class="cta">
+  <div class="cta-card">
+    <h2>Ready to make your decks <em style="font-style: italic; color: var(--accent-500);">live</em>?</h2>
+    <p>Spin up a workspace in two minutes. Drop in a deck. We'll show you what your reporting could look like.</p>
+    <a href="#" class="btn btn-primary btn-lg">
+      Get started — free for 14 days
+      <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+    </a>
+  </div>
+</section>
+
+<!-- ===== FOOTER ===== -->
+<footer>
+  <div class="footer-inner">
+    <div>© Percy 2026 — for the people who tell the story.</div>
+    <div class="footer-links">
+      <a href="#">Privacy</a>
+      <a href="#">Terms</a>
+      <a href="#">Security</a>
+      <a href="#">Status</a>
+    </div>
+  </div>
+</footer>
+
+<script src="_shared.js"></script>
+<script>document.querySelectorAll(".real-mark, .mark").forEach(function(el){if(el.querySelector("svg")) return;el.innerHTML = window.PERCY_MARK_SVG;});</script>
+</body>
+</html>

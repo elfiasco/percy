@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>v4 — Dashboard (real screen)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /* v4 — real Dashboard redesign. Notebook texture (subtle graph paper),
+     working-tool aesthetic, real copy lifted from frontend/src/pages/Dashboard.tsx
+     and BuildTimeline.tsx. Three projects, two with sources, one fresh empty.
+     Mostly empty states because that's what the real app actually shows. */
+
+  /* === Shared shape & shadow tokens (apply to all palettes) === */
+  :root {
+    --radius-xs: 4px;
+    --radius-sm: 6px;
+    --radius:    10px;
+    --radius-lg: 14px;
+    --shadow-soft: 0 1px 2px rgba(40,44,52,0.04);
+    --shadow-card: 0 2px 8px rgba(40,44,52,0.05), 0 1px 2px rgba(40,44,52,0.03);
+    --shadow-pop:  0 8px 24px rgba(40,44,52,0.10), 0 2px 6px rgba(40,44,52,0.04);
+  }
+
+  /* === Default palette: Notebook (lightened) === */
+  :root[data-mode="light"] {
+    --bg: #FCFBF6;
+    --surface: #FFFFFF;
+    --sunk: #F4F2EC;
+    --ink: #2C3138;
+    --ink-2: #66707C;
+    --ink-3: #9CA3AE;
+    --line: rgba(44,49,56,0.06);
+    --line-strong: rgba(44,49,56,0.14);
+    --accent: #6F8AA8;
+    --accent-soft: #E5EAF2;
+    --grid: rgba(111,138,168,0.012);
+    --grid-size: 40px 40px;
+    --good: #6FA17A;
+    --warn: #C5994A;
+    --bad: #B8634F;
+  }
+  :root[data-mode="dark"] {
+    --bg: #1A1E26;
+    --surface: #232832;
+    --sunk: #13161D;
+    --ink: #E5E7EC;
+    --ink-2: #9298A6;
+    --ink-3: #5C6271;
+    --line: rgba(229,231,236,0.06);
+    --line-strong: rgba(229,231,236,0.16);
+    --accent: #9BB1D0;
+    --accent-soft: rgba(155,177,208,0.16);
+    --grid: rgba(229,231,236,0.03);
+    --good: #94C99F;
+    --warn: #E5BB6E;
+    --bad: #E08770;
+  }
+
+  /* === Palette: Powder (warmed) — cobalt accent on near-cream === */
+  body.pal-powder[data-mode="light"], :root[data-mode="light"] body.pal-powder {
+    --bg: #F9F8F4;
+    --surface: #FEFDFA;
+    --sunk: #F0EDE6;
+    --ink: #2A2F3A;
+    --ink-2: #6A6F7A;
+    --ink-3: #9DA1AB;
+    --line: rgba(42,47,58,0.05);
+    --line-strong: rgba(42,47,58,0.12);
+    --accent: #7DA1CC;
+    --accent-soft: #E1E9F4;
+    --grid: rgba(125,161,204,0.010);
+    --grid-size: 40px 40px;
+    --good: #6FA17A;
+    --warn: #C5994A;
+    --bad: #B8634F;
+  }
+  body.pal-powder[data-mode="dark"], :root[data-mode="dark"] body.pal-powder {
+    --bg: #1A1B20;
+    --surface: #23252C;
+    --sunk: #131418;
+    --ink: #E5E5EA;
+    --ink-2: #999CA6;
+    --ink-3: #5C5F69;
+    --line: rgba(229,229,234,0.06);
+    --line-strong: rgba(229,229,234,0.16);
+    --accent: #A4BEDC;
+    --accent-soft: rgba(164,190,220,0.16);
+    --grid: rgba(229,229,234,0.025);
+  }
+
+  /* === Palette: Dawn (warm airy, coral-peach) === */
+  body.pal-dawn[data-mode="light"], :root[data-mode="light"] body.pal-dawn {
+    --bg: #FBF7F2;
+    --surface: #FFFEFA;
+    --sunk: #F2ECE3;
+    --ink: #34302A;
+    --ink-2: #6E6358;
+    --ink-3: #A29789;
+    --line: rgba(52,48,42,0.06);
+    --line-strong: rgba(52,48,42,0.14);
+    --accent: #D88B6E;
+    --accent-soft: #F5E2D8;
+    --grid: rgba(216,139,110,0.025);
+    --good: #7AAA80;
+    --warn: #D9A555;
+    --bad: #B85540;
+  }
+  body.pal-dawn[data-mode="dark"], :root[data-mode="dark"] body.pal-dawn {
+    --bg: #1F1B17;
+    --surface: #28231D;
+    --sunk: #15120F;
+    --ink: #ECE5DB;
+    --ink-2: #A39686;
+    --ink-3: #6B6155;
+    --line: rgba(236,229,219,0.06);
+    --line-strong: rgba(236,229,219,0.16);
+    --accent: #E8A88D;
+    --accent-soft: rgba(232,168,141,0.18);
+    --grid: rgba(236,229,219,0.025);
+  }
+
+  /* === Palette: Mint (fresh, sage-mint) === */
+  body.pal-mint[data-mode="light"], :root[data-mode="light"] body.pal-mint {
+    --bg: #F7FAF8;
+    --surface: #FFFFFF;
+    --sunk: #EBF1ED;
+    --ink: #283330;
+    --ink-2: #5F6F69;
+    --ink-3: #95A29D;
+    --line: rgba(40,51,48,0.05);
+    --line-strong: rgba(40,51,48,0.13);
+    --accent: #7AAF98;
+    --accent-soft: #DDEDE4;
+    --grid: rgba(122,175,152,0.025);
+    --good: #6FA17A;
+    --warn: #C5994A;
+    --bad: #B8634F;
+  }
+  body.pal-mint[data-mode="dark"], :root[data-mode="dark"] body.pal-mint {
+    --bg: #181C1A;
+    --surface: #1F2422;
+    --sunk: #11140F;
+    --ink: #E0E8E3;
+    --ink-2: #8E9A93;
+    --ink-3: #5A655F;
+    --line: rgba(224,232,227,0.06);
+    --line-strong: rgba(224,232,227,0.16);
+    --accent: #A1CFB7;
+    --accent-soft: rgba(161,207,183,0.16);
+    --grid: rgba(224,232,227,0.025);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg);
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: var(--grid-size, 40px 40px);
+    color: var(--ink);
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.55;
+    font-size: 14px;
+    transition: background 200ms, color 200ms;
+  }
+  a { color: inherit; text-decoration: none; }
+  .mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+
+  .modeswitch { position: fixed; top: 14px; right: 14px; z-index: 99; background: var(--surface); border: 1px solid var(--line); padding: 3px; border-radius: 999px; display: flex; gap: 2px; }
+  .modeswitch button { background: transparent; border: 0; color: var(--ink-2); font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 999px; cursor: pointer; }
+  .modeswitch button.active { background: var(--ink); color: var(--bg); font-weight: 600; }
+
+  /* === Top bar (matches real app: 48px-ish, hairline border) === */
+  .topbar {
+    height: 52px; padding: 0 22px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px;
+    box-shadow: 0 1px 0 rgba(40,44,52,0.02);
+  }
+  .tb-left { display: flex; align-items: center; gap: 12px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 600; letter-spacing: -0.005em; }
+  .brand .mark { width: 18px; height: 18px; color: var(--ink); }
+  .sep { color: var(--line-strong); }
+  .org-pill {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; padding: 5px 12px;
+    border-radius: 999px;
+    background: var(--sunk);
+    color: var(--ink);
+    transition: background 150ms ease;
+  }
+  .org-pill:hover { background: color-mix(in srgb, var(--sunk) 70%, var(--accent-soft)); }
+  .org-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  .org-pill .kind { font-size: 9px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.08em; }
+  .tb-right { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+  .tb-right .btn-text {
+    color: var(--ink-2); padding: 5px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+    text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; font-weight: 500;
+    cursor: pointer; transition: all 150ms ease;
+  }
+  .tb-right .btn-text:hover { color: var(--ink); border-color: var(--line-strong); }
+  .av {
+    width: 26px; height: 26px; border-radius: 50%;
+    background: var(--accent); color: var(--bg);
+    display: grid; place-items: center;
+    font-size: 11px; font-weight: 600;
+  }
+
+  /* === Layout === */
+  .app { display: grid; grid-template-columns: 240px 1fr; min-height: calc(100vh - 48px); }
+
+  /* === Sidebar (matches real app's DashboardSidebar) === */
+  .sb { border-right: 1px solid var(--line); padding: 20px 12px; }
+  .sb-section { font-size: 10px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.18em; padding: 16px 8px 8px; }
+  .sb-link {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; font-size: 13px; color: var(--ink-2);
+    cursor: pointer; border-radius: var(--radius-sm);
+    transition: background 150ms ease, color 150ms ease;
+  }
+  .sb-link:hover { background: var(--sunk); color: var(--ink); }
+  .sb-link.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .sb-link .count { margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-3); }
+  .sb-link.active .count { color: var(--accent); }
+  .sb-folder {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 8px 5px 24px; font-size: 12px; color: var(--ink-2);
+    cursor: pointer;
+  }
+  .sb-folder:hover { color: var(--ink); }
+
+  /* === Main === */
+  .main { padding: 0; }
+  .body { max-width: 1040px; padding: 36px 48px 56px; }
+
+  /* === Greeting (real component, real copy) — compressed === */
+  .greeting { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 28px; flex-wrap: wrap; }
+  .greeting h1 {
+    font-size: 22px; font-weight: 600; letter-spacing: -0.01em;
+    line-height: 1.3; margin: 0;
+  }
+  .greeting h1 .name { color: var(--ink-2); font-weight: 500; }
+  .greeting h1 .sep { color: var(--ink-3); margin: 0 8px; font-weight: 400; }
+  .greeting h1 .note { font-size: 14px; font-weight: 400; color: var(--ink-2); }
+  .actions { display: flex; gap: 8px; flex-shrink: 0; }
+  .btn-secondary {
+    font-size: 11px; padding: 9px 16px;
+    border: 1px solid var(--line-strong);
+    color: var(--ink-2); background: var(--surface);
+    text-transform: uppercase; letter-spacing: 0.12em; font-weight: 500;
+    cursor: pointer; border-radius: var(--radius-sm);
+    transition: all 150ms ease;
+  }
+  .btn-secondary:hover { color: var(--ink); background: var(--sunk); border-color: var(--accent); }
+  .btn-primary {
+    font-size: 11px; padding: 9px 18px;
+    background: var(--accent); color: white; border: none;
+    text-transform: uppercase; letter-spacing: 0.12em; font-weight: 600;
+    cursor: pointer; border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-soft);
+    transition: all 150ms ease;
+  }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: var(--shadow-card); filter: brightness(1.05); }
+
+  /* === Stats (matches real Dashboard <Stat> component, 4-up grid, tighter) === */
+  .stats {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    border: 1px solid var(--line);
+    background: var(--surface);
+    margin-bottom: 36px;
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: var(--shadow-soft);
+  }
+  .stat-cell { padding: 14px 18px; border-right: 1px solid var(--line); transition: background 150ms ease; }
+  .stat-cell:hover { background: color-mix(in srgb, var(--surface) 70%, var(--accent-soft)); }
+  .stat-cell:last-child { border-right: 0; }
+  .stat-label {
+    font-size: 9px; font-weight: 600; color: var(--ink-3);
+    text-transform: uppercase; letter-spacing: 0.16em;
+    margin-bottom: 4px;
+  }
+  .stat-value {
+    font-size: 20px; font-weight: 600; letter-spacing: -0.01em;
+    color: var(--ink); font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+  .stat-value .hint { font-size: 11px; color: var(--ink-3); margin-left: 6px; font-weight: 400; }
+  .stat-value.small { font-size: 13px; text-transform: capitalize; line-height: 1.2; font-weight: 500; }
+
+  /* === Section header (compact, no eyebrow) === */
+  .section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; }
+  .section-head h2 {
+    font-size: 14px; font-weight: 600; letter-spacing: -0.005em; color: var(--ink-2);
+  }
+  .section-head .right {
+    font-size: 12px; color: var(--ink-3);
+    cursor: pointer; font-weight: 500;
+  }
+  .section-head .right:hover { color: var(--accent); }
+
+  /* === Recent grid (matches real RecentCard) — slightly tighter === */
+  .recent { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 24px; }
+  .deck-card {
+    border: 1px solid var(--line);
+    background: var(--surface);
+    cursor: pointer;
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: var(--shadow-soft);
+    transition: transform 200ms ease, box-shadow 200ms ease, border-color 200ms ease;
+  }
+  .deck-card:hover {
+    border-color: var(--accent-soft);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-card);
+  }
+  .deck-thumb {
+    aspect-ratio: 16/9;
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+    display: grid; place-items: center;
+    color: var(--ink-3);
+    font-size: 28px;
+    font-weight: 200;
+  }
+  .deck-card:hover .deck-thumb { color: var(--ink-2); }
+  .deck-meta { padding: 10px 12px; }
+  .deck-name { font-size: 13px; color: var(--ink); font-weight: 500; margin-bottom: 4px; line-height: 1.3; }
+  .deck-info {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 9px; text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--ink-3);
+  }
+  .deck-info .loaded { color: var(--good); }
+
+  /* === Coming-next footer note (replaces the two giant placeholders) === */
+  .coming-next {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    padding: 14px 18px;
+    border: 1px dashed var(--line-strong);
+    border-radius: var(--radius);
+    background: transparent;
+    margin-top: 16px;
+  }
+  .cn-label {
+    font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.16em;
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+  .cn-text { font-size: 12px; color: var(--ink-3); line-height: 1.6; }
+
+  /* === Notifications strip (team accounts only) === */
+  .notifs {
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+    padding: 8px 22px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .notifs::-webkit-scrollbar { height: 4px; }
+  .notifs::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 2px; }
+  .notif-label {
+    font-size: 10px; font-weight: 600;
+    color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.10em;
+    padding-right: 10px;
+    flex-shrink: 0;
+  }
+  .notif {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 5px 12px 5px 5px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--bg);
+    font-size: 12px;
+    flex-shrink: 0;
+    cursor: pointer;
+    transition: border-color 150ms ease, background 150ms ease;
+  }
+  .notif:hover { border-color: var(--accent); }
+  .notif .notif-av {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--accent); color: white;
+    font-size: 10px; font-weight: 600;
+    display: grid; place-items: center;
+    flex-shrink: 0;
+  }
+  .notif strong { font-weight: 600; }
+  .notif .notif-time { color: var(--ink-3); margin-left: 4px; font-size: 11px; }
+  .notif.warn {
+    border-color: color-mix(in srgb, var(--warn) 35%, var(--line));
+    background: color-mix(in srgb, var(--warn) 8%, var(--surface));
+  }
+  .notif.warn .notif-av { background: var(--warn); }
+  .notif-more {
+    font-size: 11px; color: var(--ink-3); font-weight: 500;
+    cursor: pointer; padding: 0 8px;
+    flex-shrink: 0;
+  }
+  .notif-more:hover { color: var(--accent); }
+
+  /* === Timeline panel (last 24h + next 24h) === */
+  .timeline {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 22px 26px 20px;
+    margin-bottom: 28px;
+    box-shadow: var(--shadow-soft);
+  }
+  .timeline-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 28px;
+  }
+  .timeline-head h2 {
+    font-size: 14px; font-weight: 600; letter-spacing: -0.005em; color: var(--ink-2);
+  }
+  .timeline-key {
+    display: flex; gap: 16px;
+    font-size: 11px; color: var(--ink-3);
+  }
+  .timeline-key .swatch {
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .timeline-key .swatch::before {
+    content: ''; width: 8px; height: 8px; border-radius: 50%;
+  }
+  .timeline-key .swatch.success::before { background: var(--good); }
+  .timeline-key .swatch.fail::before { background: var(--bad); }
+  .timeline-key .swatch.scheduled::before { background: transparent; border: 1.5px solid var(--accent); width: 7px; height: 7px; }
+
+  /* The horizontal strip */
+  .strip {
+    position: relative;
+    height: 36px;
+    margin: 14px 0 32px;
+  }
+  .strip-axis {
+    position: absolute; bottom: 18px; left: 0; right: 0;
+    height: 1px; background: var(--line-strong);
+  }
+  .strip-axis .tick {
+    position: absolute; top: 8px;
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    color: var(--ink-3); transform: translateX(-50%);
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+  .strip-axis .tick::before {
+    content: ''; position: absolute; top: -10px; left: 50%; transform: translateX(-50%);
+    width: 1px; height: 4px; background: var(--line-strong);
+  }
+  .now-line {
+    position: absolute; top: 0; bottom: 12px; left: 50%; width: 2px;
+    background: var(--accent); border-radius: 1px;
+  }
+  .now-line::after {
+    content: 'NOW · 14:32';
+    position: absolute; top: -16px; left: 50%; transform: translateX(-50%);
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    font-weight: 700; color: var(--accent); letter-spacing: 0.08em;
+    background: var(--surface); padding: 0 6px;
+    white-space: nowrap;
+  }
+  .event {
+    position: absolute; bottom: 14px;
+    width: 10px; height: 10px; border-radius: 50%;
+    transform: translateX(-50%);
+    cursor: pointer;
+    transition: transform 150ms ease;
+  }
+  .event:hover { transform: translateX(-50%) scale(1.5); z-index: 2; }
+  .event.success { background: var(--good); }
+  .event.fail { background: var(--bad); }
+  .event.scheduled { background: transparent; border: 1.5px solid var(--accent); width: 8px; height: 8px; }
+  .event.running { background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 25%, transparent); }
+
+  /* Lists below the strip */
+  .timeline-lists {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 32px;
+    border-top: 1px solid var(--line);
+    padding-top: 18px;
+  }
+  .tl-col h3 {
+    font-size: 11px; font-weight: 600; color: var(--ink-3);
+    text-transform: uppercase; letter-spacing: 0.12em;
+    margin-bottom: 12px;
+  }
+  .tl-row {
+    display: grid; grid-template-columns: 70px 14px 1fr auto;
+    gap: 10px; padding: 7px 0;
+    align-items: baseline;
+    font-size: 13px;
+    border-bottom: 1px dotted var(--line);
+  }
+  .tl-row:last-child { border-bottom: none; }
+  .tl-time {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    color: var(--ink-3); font-variant-numeric: tabular-nums;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .tl-pip {
+    width: 8px; height: 8px; border-radius: 50%;
+    align-self: center;
+  }
+  .tl-pip.success { background: var(--good); }
+  .tl-pip.fail { background: var(--bad); }
+  .tl-pip.scheduled { background: transparent; border: 1.5px solid var(--accent); width: 6px; height: 6px; }
+  .tl-text { color: var(--ink); }
+  .tl-text strong { font-weight: 600; }
+  .tl-text .meta { color: var(--ink-3); font-size: 11px; }
+  .tl-status {
+    font-size: 10px; color: var(--ink-3); font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .tl-status.success { color: var(--good); }
+  .tl-status.fail { color: var(--bad); }
+  .tl-status.scheduled { color: var(--accent); font-weight: 600; }
+
+  /* === Empty section card (matches real placeholder copy verbatim) === */
+  .placeholder {
+    border: 1px solid var(--line);
+    background: var(--surface);
+    padding: 44px 32px;
+    text-align: center;
+    margin-bottom: 56px;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-soft);
+  }
+  .placeholder .eyebrow {
+    font-size: 10px; font-weight: 600; color: var(--ink-3);
+    text-transform: uppercase; letter-spacing: 0.22em;
+    margin-bottom: 10px;
+  }
+  .placeholder p {
+    font-size: 13px; color: var(--ink-2);
+    line-height: 1.7; max-width: 480px; margin: 0 auto;
+  }
+  .placeholder p code {
+    font-family: 'JetBrains Mono', monospace; font-size: 12px;
+    background: var(--sunk); padding: 2px 6px; border: 1px solid var(--line);
+    border-radius: var(--radius-xs);
+  }
+
+  /* === Empty-state card with the mark (matches real "no projects yet") === */
+  .empty-recent {
+    border: 1px solid var(--line);
+    background: var(--surface);
+    padding: 56px 28px;
+    text-align: center;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-soft);
+  }
+  .empty-recent .em-mark {
+    width: 36px; height: 36px; opacity: 0.4;
+    color: var(--ink); margin: 0 auto 12px;
+  }
+  .empty-recent p { font-size: 13px; color: var(--ink-2); }
+  .empty-recent .btn-cta {
+    display: inline-block; margin-top: 16px;
+    font-size: 11px; padding: 8px 16px;
+    background: var(--ink); color: var(--bg);
+    text-transform: uppercase; letter-spacing: 0.14em; font-weight: 500;
+  }
+
+  /* === Color-treatment elements (hidden by default, revealed per mode) === */
+
+  .folder-chip {
+    display: none;
+    width: 6px; height: 6px;
+    border-radius: 2px;
+    flex-shrink: 0;
+    background: var(--folder-color, var(--ink-3));
+  }
+  .deck-folder-tag {
+    display: none;
+    align-items: center; gap: 4px;
+    font-size: 9px;
+    color: var(--folder-color, var(--ink-3));
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    margin-right: 6px;
+  }
+  .deck-folder-tag::before {
+    content: '';
+    width: 5px; height: 5px;
+    border-radius: 2px;
+    background: var(--folder-color, var(--ink-3));
+  }
+  .live-dot {
+    display: none;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .live-dot.bound { background: var(--good); box-shadow: 0 0 0 2px color-mix(in srgb, var(--good) 25%, transparent); }
+  .live-dot.attached { background: var(--warn); }
+  .live-dot.empty { background: transparent; border: 1.5px solid var(--line-strong); }
+
+  /* === Color mode A — none (default — nothing extra shown) === */
+
+  /* === Color mode B — live signals (data binding state) === */
+  body.cm-live .live-dot { display: inline-block; }
+  body.cm-live .deck-thumb { position: relative; }
+  body.cm-live .deck-thumb .live-dot {
+    position: absolute; top: 8px; right: 8px;
+    width: 8px; height: 8px;
+  }
+  body.cm-live .stats {
+    background: linear-gradient(180deg, var(--surface), color-mix(in srgb, var(--good-soft, var(--surface)) 40%, var(--surface)));
+  }
+  body.cm-live .stats {
+    --good-soft: rgba(79,130,85,0.10);
+  }
+  :root[data-mode="dark"] body.cm-live .stats { --good-soft: rgba(122,176,130,0.12); }
+
+  /* === Color mode C — folder identity === */
+  body.cm-folders .folder-chip { display: inline-block; }
+  body.cm-folders .deck-folder-tag { display: inline-flex; }
+  body.cm-folders .sb-folder { padding-left: 8px; }
+  body.cm-folders .sb-folder svg { display: none; }
+  body.cm-folders .sb-folder .folder-chip { margin-right: 8px; }
+
+  /* === Color mode D — workspace accent === */
+  body.cm-workspace {
+    --accent: var(--ws-color, #2E6E66);
+    --accent-soft: var(--ws-color-soft, rgba(46,110,102,0.18));
+  }
+  body.cm-workspace .org-pill { background: var(--accent-soft); color: var(--accent); }
+  body.cm-workspace .org-pill .dot { background: var(--accent); }
+  body.cm-workspace .org-pill .kind { color: var(--accent); opacity: 0.7; }
+  body.cm-workspace .brand .mark { color: var(--accent); }
+  body.cm-workspace .btn-primary {
+    background: var(--accent); color: white;
+  }
+  body.cm-workspace .stat-value .hint { color: var(--accent); }
+</style>
+</head>
+<body data-mode="light">
+
+<div class="modeswitch">
+  <button class="active" data-mode="light">light</button>
+  <button data-mode="dark">dark</button>
+</div>
+
+<!-- Top bar — matches DashboardTopBar -->
+<div class="topbar">
+  <div class="tb-left">
+    <div class="brand">
+      <span class="mark" id="brand-mark"></span>
+      <span>Percy</span>
+    </div>
+    <span class="sep">/</span>
+    <div class="org-pill">
+      <span class="dot"></span>
+      <span>Crestwood Capital</span>
+      <span class="kind">team</span>
+      <span style="color: var(--ink-3);">▾</span>
+    </div>
+  </div>
+  <div class="tb-right">
+    <span class="btn-text">⌘ K · Search</span>
+    <span class="btn-text">Members</span>
+    <span class="btn-text">/dev</span>
+    <div class="av">BS</div>
+  </div>
+</div>
+
+<!-- Notifications strip — only shown on team / org accounts (Crestwood Capital here) -->
+<div class="notifs">
+  <span class="notif-label">Team · today</span>
+  <div class="notif warn">
+    <div class="notif-av">AK</div>
+    <span><strong>Amir K.</strong> flagged <strong>Q3 Board Deck</strong> for review</span>
+    <span class="notif-time">1h</span>
+  </div>
+  <div class="notif">
+    <div class="notif-av">SM</div>
+    <span><strong>Sara M.</strong> bound AUM stat in <strong>Q3 Investor Update</strong></span>
+    <span class="notif-time">3h</span>
+  </div>
+  <div class="notif">
+    <div class="notif-av">CL</div>
+    <span><strong>Carla L.</strong> approved <strong>Risk Pack</strong> v4</span>
+    <span class="notif-time">yesterday</span>
+  </div>
+  <div class="notif">
+    <div class="notif-av">JT</div>
+    <span><strong>Jamie T.</strong> uploaded <strong>2024-Q4-Earnings template</strong></span>
+    <span class="notif-time">4d</span>
+  </div>
+  <span class="notif-more">+ 7 more →</span>
+</div>
+
+<div class="app">
+
+  <!-- Sidebar — matches DashboardSidebar -->
+  <aside class="sb">
+    <div class="sb-link active">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      Home
+    </div>
+    <div class="sb-link">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 012-2h4l2 3h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
+      Projects
+      <span class="count">3</span>
+    </div>
+    <div class="sb-link">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
+      Templates
+    </div>
+
+    <div class="sb-section">Folders</div>
+    <div class="sb-folder">
+      <span class="folder-chip" style="--folder-color: #2E6E66;"></span>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+      Investor letters
+    </div>
+    <div class="sb-folder">
+      <span class="folder-chip" style="--folder-color: #B47F2E;"></span>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+      Board materials
+    </div>
+    <div class="sb-folder">
+      <span class="folder-chip" style="--folder-color: #6B5BA0;"></span>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+      Sandbox
+    </div>
+
+    <div class="sb-section">Recent</div>
+    <div class="sb-folder">Q3 Investor Update</div>
+    <div class="sb-folder">2024-Q4-Earnings template</div>
+    <div class="sb-folder" style="color: var(--ink-3);">Untitled (no source)</div>
+  </aside>
+
+  <main class="main">
+    <div class="body">
+
+      <!-- Greeting — single-line, compact -->
+      <div class="greeting">
+        <h1>
+          Good afternoon, <span class="name">Ben.</span>
+          <span class="sep">·</span>
+          <span class="note">1 project waiting on a source file.</span>
+        </h1>
+        <div class="actions">
+          <button class="btn-secondary">Browse all</button>
+          <button class="btn-primary">+ New project</button>
+        </div>
+      </div>
+
+      <!-- Stats — matches the real <Stat> component, 4-up bordered grid -->
+      <section class="stats">
+        <div class="stat-cell">
+          <div class="stat-label">Projects</div>
+          <div class="stat-value">3</div>
+        </div>
+        <div class="stat-cell">
+          <div class="stat-label">With source</div>
+          <div class="stat-value">2 <span class="hint">67%</span></div>
+        </div>
+        <div class="stat-cell">
+          <div class="stat-label">Edited last 7 days</div>
+          <div class="stat-value">2</div>
+        </div>
+        <div class="stat-cell">
+          <div class="stat-label">Workspace role</div>
+          <div class="stat-value small">Owner</div>
+        </div>
+      </section>
+
+      <!-- Timeline — last 24 hours + next 24 hours of pipeline activity -->
+      <section class="timeline">
+        <div class="timeline-head">
+          <h2>Pipelines · 24 hour window</h2>
+          <div class="timeline-key">
+            <span class="swatch success">success</span>
+            <span class="swatch fail">flagged</span>
+            <span class="swatch scheduled">scheduled</span>
+          </div>
+        </div>
+
+        <!-- Horizontal strip: -24h on the left, NOW in the middle, +24h on the right -->
+        <div class="strip">
+          <div class="now-line"></div>
+
+          <!-- Past runs (positions: 0% = 24h ago, 50% = now) -->
+          <div class="event success" style="left: 6%;"   title="yesterday 17:30 — Q3 Investor Update · auto-refresh · clean"></div>
+          <div class="event success" style="left: 10%;"  title="yesterday 18:30 — Q3 Investor Update · auto-refresh · clean"></div>
+          <div class="event success" style="left: 16%;"  title="yesterday 22:00 — Q3 Investor Update · auto-refresh · clean"></div>
+          <div class="event success" style="left: 22%;"  title="today 02:00 — Q3 Investor Update · auto-refresh · clean"></div>
+          <div class="event success" style="left: 32%;"  title="today 06:00 — Q3 Investor Update · auto-refresh · clean"></div>
+          <div class="event success" style="left: 39%;"  title="today 09:14 — Morning sweep · 11 projects refreshed clean"></div>
+          <div class="event success" style="left: 41%;"  title="today 09:30 — Q3 Investor Update · auto-refresh · clean"></div>
+          <div class="event fail"    style="left: 44%;"  title="today 11:28 — Q3 Board Deck · QA flagged drift"></div>
+          <div class="event success" style="left: 48%;"  title="today 13:28 — Q3 Investor Update · auto-refresh · clean"></div>
+
+          <!-- Future scheduled runs (positions: 50% = now, 100% = 24h ahead) -->
+          <div class="event scheduled" style="left: 51%;"  title="today 15:00 — Q3 Investor Update · hourly refresh"></div>
+          <div class="event scheduled" style="left: 53%;"  title="today 16:00 — Q3 Investor Update · hourly refresh"></div>
+          <div class="event scheduled" style="left: 55%;"  title="today 17:00 — Q3 Investor Update · hourly refresh"></div>
+          <div class="event scheduled" style="left: 57%;"  title="today 18:00 — Q3 Investor Update · hourly refresh"></div>
+          <div class="event scheduled" style="left: 71%;"  title="tomorrow 03:00 — Q3 Investor Update · hourly refresh"></div>
+          <div class="event scheduled" style="left: 88%;"  title="tomorrow 09:00 — Morning sweep (daily)"></div>
+          <div class="event scheduled" style="left: 95%;"  title="tomorrow 12:00 — Risk Pack · weekly refresh"></div>
+
+          <div class="strip-axis">
+            <span class="tick" style="left: 0%;">−24h</span>
+            <span class="tick" style="left: 25%;">−12h</span>
+            <span class="tick" style="left: 75%;">+12h</span>
+            <span class="tick" style="left: 100%;">+24h</span>
+          </div>
+        </div>
+
+        <!-- Two columns: past 24h on the left, next 24h on the right -->
+        <div class="timeline-lists">
+          <div class="tl-col">
+            <h3>Last 24 hours · 9 runs</h3>
+
+            <div class="tl-row">
+              <span class="tl-time">13:28</span>
+              <span class="tl-pip success"></span>
+              <span class="tl-text"><strong>Q3 Investor Update</strong> <span class="meta">· auto-refresh</span></span>
+              <span class="tl-status success">clean</span>
+            </div>
+            <div class="tl-row">
+              <span class="tl-time">11:28</span>
+              <span class="tl-pip fail"></span>
+              <span class="tl-text"><strong>Q3 Board Deck</strong> <span class="meta">· visual QA</span></span>
+              <span class="tl-status fail">drift flagged</span>
+            </div>
+            <div class="tl-row">
+              <span class="tl-time">09:30</span>
+              <span class="tl-pip success"></span>
+              <span class="tl-text"><strong>Q3 Investor Update</strong> <span class="meta">· auto-refresh</span></span>
+              <span class="tl-status success">clean</span>
+            </div>
+            <div class="tl-row">
+              <span class="tl-time">09:14</span>
+              <span class="tl-pip success"></span>
+              <span class="tl-text">Morning sweep <span class="meta">· 11 projects</span></span>
+              <span class="tl-status success">clean</span>
+            </div>
+            <div class="tl-row">
+              <span class="tl-time">06:00</span>
+              <span class="tl-pip success"></span>
+              <span class="tl-text"><strong>Q3 Investor Update</strong> <span class="meta">· auto-refresh</span></span>
+              <span class="tl-status success">clean</span>
+            </div>
+            <div class="tl-row">
+              <span class="tl-time">YEST 22:00</span>
+              <span class="tl-pip success"></span>
+              <span class="tl-text"><strong>Q3 Investor Update</strong> <span class="meta">· auto-refresh</span></span>
+              <span class="tl-status success">clean</span>
+            </div>
+          </div>
+
+          <div class="tl-col">
+            <h3>Next 24 hours · 7 scheduled</h3>
+
+            <div class="tl-row">
+              <span class="tl-time">15:00</span>
+              <span class="tl-pip scheduled"></span>
+              <span class="tl-text"><strong>Q3 Investor Update</strong> <span class="meta">· hourly</span></span>
+              <span class="tl-status scheduled">in 28m</span>
+            </div>
+            <div class="tl-row">
+              <span class="tl-time">16:00</span>
+              <span class="tl-pip scheduled"></span>
+              <span class="tl-text"><strong>Q3 Investor Update</strong> <span class="meta">· hourly</span></span>
+              <span class="tl-status scheduled">in 1h 28m</span>
+            </div>
+            <div class="tl-row">
+              <span class="tl-time">17:00</span>
+              <span class="tl-pip scheduled"></span>
+              <span class="tl-text"><strong>Q3 Investor Update</strong> <span class="meta">· hourly</span></span>
+              <span class="tl-status scheduled">in 2h 28m</span>
+            </div>
+            <div class="tl-row">
+              <span class="tl-time">18:00</span>
+              <span class="tl-pip scheduled"></span>
+              <span class="tl-text"><strong>Q3 Investor Update</strong> <span class="meta">· hourly</span></span>
+              <span class="tl-status scheduled">in 3h 28m</span>
+            </div>
+            <div class="tl-row">
+              <span class="tl-time">TOM 09:00</span>
+              <span class="tl-pip scheduled"></span>
+              <span class="tl-text">Morning sweep <span class="meta">· daily</span></span>
+              <span class="tl-status scheduled">tomorrow</span>
+            </div>
+            <div class="tl-row">
+              <span class="tl-time">TOM 12:00</span>
+              <span class="tl-pip scheduled"></span>
+              <span class="tl-text"><strong>Risk Pack</strong> <span class="meta">· weekly</span></span>
+              <span class="tl-status scheduled">tomorrow</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Coming-next footer note — single compact line -->
+      <div class="coming-next">
+        <span class="cn-label">Coming next</span>
+        <span class="cn-text">Drift summaries (which slides changed and why) and an inline diff viewer will appear inside each timeline row once those features land.</span>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<script src="../_shared.js"></script>
+<script>
+  document.querySelectorAll('#brand-mark').forEach(el => el.innerHTML = window.PERCY_MARK_SVG);
+  document.querySelectorAll('.modeswitch button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.body.dataset.mode = btn.dataset.mode;
+      document.documentElement.dataset.mode = btn.dataset.mode;
+      document.querySelectorAll('.modeswitch button').forEach(b => b.classList.toggle('active', b === btn));
+    });
+  });
+  document.documentElement.dataset.mode = 'light';
+
+  // Color treatment + palette from URL or postMessage
+  function applyColorMode(mode) {
+    document.body.classList.remove('cm-none', 'cm-live', 'cm-folders', 'cm-workspace');
+    document.body.classList.add('cm-' + mode);
+    if (mode === 'workspace') {
+      document.body.style.setProperty('--ws-color', '#7AAF98');
+      document.body.style.setProperty('--ws-color-soft', 'rgba(122,175,152,0.20)');
+    } else {
+      document.body.style.removeProperty('--ws-color');
+      document.body.style.removeProperty('--ws-color-soft');
+    }
+  }
+  function applyPalette(name) {
+    document.body.classList.remove('pal-notebook', 'pal-powder', 'pal-dawn', 'pal-mint');
+    if (name && name !== 'notebook') document.body.classList.add('pal-' + name);
+  }
+  const urlParams = new URLSearchParams(location.search);
+  applyColorMode(urlParams.get('color') || 'none');
+  applyPalette(urlParams.get('palette') || 'notebook');
+  window.addEventListener('message', (e) => {
+    if (!e.data) return;
+    if (e.data.type === 'color')   applyColorMode(e.data.mode);
+    if (e.data.type === 'palette') applyPalette(e.data.name);
+    if (e.data.type === 'mode') {
+      document.body.dataset.mode = e.data.mode;
+      document.documentElement.dataset.mode = e.data.mode;
+    }
+  });
+</script>
+</body>
+</html>

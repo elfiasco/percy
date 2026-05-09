@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>v3 / 10 — Brutalist</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  /* Brutalist — system fonts, default-CSS aesthetic, no design polish.
+     Counter to all the others. The content is the only thing that matters.
+     Reference: Craigslist, Berkshire Hathaway, an academic departmental homepage.
+     Risk: very polarizing. Win: instant differentiation, infinite cred with
+     a certain audience. */
+
+  :root[data-mode="light"] {
+    --bg: #FFFFFF;
+    --surface: #F2F2F2;
+    --ink: #000000;
+    --ink-2: #444444;
+    --ink-3: #777777;
+    --line: #000000;
+    --link: #0000EE;
+    --visited: #551A8B;
+    --accent: #B22222;
+  }
+  :root[data-mode="dark"] {
+    --bg: #000000;
+    --surface: #1A1A1A;
+    --ink: #FFFFFF;
+    --ink-2: #BBBBBB;
+    --ink-3: #888888;
+    --line: #FFFFFF;
+    --link: #6FB1FF;
+    --visited: #C68FFC;
+    --accent: #FF6464;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Times New Roman', Times, Georgia, serif;
+    font-size: 16px;
+    line-height: 1.4;
+    transition: background 200ms, color 200ms;
+  }
+  a { color: var(--link); text-decoration: underline; }
+  a:visited { color: var(--visited); }
+  hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
+
+  .modeswitch { position: fixed; top: 8px; right: 8px; z-index: 99; background: var(--bg); border: 2px solid var(--line); padding: 0; display: flex; font-family: 'Times New Roman', Times, serif; }
+  .modeswitch button { background: transparent; border: 0; color: var(--ink-2); font: inherit; font-size: 14px; padding: 4px 12px; cursor: pointer; }
+  .modeswitch button.active { background: var(--ink); color: var(--bg); font-weight: 700; }
+
+  .container { max-width: 920px; margin: 0; padding: 24px; }
+
+  /* Top "masthead" — like an academic page header */
+  .head { padding-bottom: 12px; border-bottom: 4px double var(--line); margin-bottom: 16px; }
+  .head h1 { font-size: 32px; font-weight: 700; letter-spacing: -0.01em; display: inline-block; }
+  .head h1 .mark { display: inline-block; vertical-align: -4px; margin-right: 8px; width: 28px; height: 28px; color: var(--ink); }
+  .head .sub { font-size: 14px; color: var(--ink-2); margin-top: 4px; }
+  .head .right { float: right; font-size: 14px; color: var(--ink-2); text-align: right; padding-top: 6px; }
+
+  /* Nav — text links separated by | */
+  .nav { padding: 8px 0; font-size: 14px; border-bottom: 1px solid var(--line); margin-bottom: 24px; }
+  .nav a { margin: 0 4px; }
+  .nav a.here { color: var(--ink); text-decoration: none; font-weight: 700; }
+
+  /* Body content */
+  h2 { font-size: 22px; font-weight: 700; margin: 24px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 17px; font-weight: 700; margin-top: 4px; }
+  p { margin-bottom: 12px; }
+  ul { margin: 8px 0 16px 24px; }
+  li { margin-bottom: 4px; }
+
+  /* Tables — actually using <table>! */
+  table { border-collapse: collapse; width: 100%; margin: 12px 0 24px; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--surface); font-weight: 700; font-size: 14px; }
+  td { font-size: 15px; }
+  td.num { text-align: right; font-family: 'Courier New', monospace; }
+  td.flag { background: #FFE8E8; }
+  :root[data-mode="dark"] td.flag { background: #3A1A1A; }
+  td.live { font-weight: 700; }
+
+  /* Note — like a yellow legal pad annotation */
+  .note { background: #FFFFCC; border: 1px solid var(--line); padding: 10px 12px; margin: 16px 0; font-size: 14px; }
+  :root[data-mode="dark"] .note { background: #2A2710; border-color: #555; }
+  .note strong { color: var(--accent); }
+
+  .small { font-size: 13px; color: var(--ink-2); }
+
+  /* Footer — colophon style */
+  .footer { padding-top: 12px; margin-top: 32px; border-top: 4px double var(--line); font-size: 12px; color: var(--ink-2); }
+
+  blockquote { border-left: 4px solid var(--line); padding: 4px 16px; margin: 16px 0; color: var(--ink-2); font-style: italic; }
+</style>
+</head>
+<body data-mode="light">
+
+<div class="modeswitch">
+  <button class="active" data-mode="light">light</button>
+  <button data-mode="dark">dark</button>
+</div>
+
+<div class="container">
+
+  <div class="head">
+    <span class="right">
+      <strong>Crestwood Capital</strong><br/>
+      Friday, 9 May 2026 · 14:32 ET<br/>
+      User: <strong>Ben Steel</strong> [<a href="#">log out</a>]
+    </span>
+    <h1><span class="mark" id="brand-mark"></span>Percy</h1>
+    <div class="sub">A working layer between data and the decks you have to ship.</div>
+  </div>
+
+  <div class="nav">
+    <a class="here">Home</a> |
+    <a href="#">Projects</a> |
+    <a href="#">Sources</a> |
+    <a href="#">Pipelines</a> |
+    <a href="#">Audit log</a> |
+    <a href="#">Members</a> |
+    <a href="#">Settings</a> |
+    <a href="#">Help</a>
+  </div>
+
+  <div class="note">
+    <strong>NOTICE.</strong> Visual QA flagged a 3.2% drift on the <strong>Q3 Board Deck</strong>, slide 4, this morning at 11:28. The underlying data is correct; the chart's bound series widened unexpectedly. <a href="#">Click here to review</a>. — Posted 11:28 by automated visual QA.
+  </div>
+
+  <h2>Today, in summary</h2>
+  <p>187 refreshes ran today and all but one passed within tolerance. The exception is noted above. Three live elements were updated since the last refresh; one stat was newly bound by Sara Malek to <code>snowflake.fund_metrics</code> and is now refreshing hourly.</p>
+  <p>The Q3 Investor Update last refreshed <strong>two minutes ago</strong> and is currently open for read by twelve users (two of whom are LPs). It can be sent.</p>
+
+  <h2>Projects (24 active)</h2>
+  <p class="small"><a href="#">Show all</a> | <a href="#">Sort by date</a> | <a href="#">Sort by owner</a> | <a href="#">Sort by status</a> | <a href="#">+ New project</a></p>
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 6%;">No.</th>
+        <th style="width: 35%;">Project</th>
+        <th style="width: 18%;">Owner</th>
+        <th style="width: 14%;">Updated</th>
+        <th style="width: 10%;">Status</th>
+        <th style="width: 17%;">Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="num">001</td>
+        <td><a href="#"><strong>Q3 Investor Update</strong></a><br/><span class="small">Quarterly LP letter — 6 slides — 3 live</span></td>
+        <td>Sara Malek</td>
+        <td>14:32 (2m)</td>
+        <td class="live">live</td>
+        <td class="small">Auto · hourly · Snowflake</td>
+      </tr>
+      <tr>
+        <td class="num">002</td>
+        <td class="flag"><a href="#"><strong>Q3 Board Deck</strong></a><br/><span class="small">Quarterly board deck — slide 4 chart drift +3.2%</span></td>
+        <td>Amir K.</td>
+        <td>13:32 (1h)</td>
+        <td class="flag"><strong>flagged</strong></td>
+        <td class="flag small">QA drift past tolerance</td>
+      </tr>
+      <tr>
+        <td class="num">003</td>
+        <td><a href="#"><strong>Portfolio Attribution — March</strong></a><br/><span class="small">Monthly attribution by sector / factor / holding</span></td>
+        <td>Ben Steel</td>
+        <td>14:18 (14m)</td>
+        <td class="live">live</td>
+        <td class="small">2 warehouse views</td>
+      </tr>
+      <tr>
+        <td class="num">004</td>
+        <td><a href="#"><strong>LP Allocation Memo</strong></a><br/><span class="small">Internal Q4 reallocation memo</span></td>
+        <td>Sara Malek</td>
+        <td>Yesterday</td>
+        <td>draft</td>
+        <td class="small">No live bindings</td>
+      </tr>
+      <tr>
+        <td class="num">005</td>
+        <td><a href="#"><strong>Risk Committee Pack</strong></a><br/><span class="small">Weekly risk review</span></td>
+        <td>Carla L.</td>
+        <td>Yesterday</td>
+        <td class="live">live</td>
+        <td class="small">Weekly · Sunday 18:00</td>
+      </tr>
+      <tr>
+        <td class="num">006</td>
+        <td><a href="#"><strong>Monthly Performance Report</strong></a><br/><span class="small">Standardized monthly performance</span></td>
+        <td>auto</td>
+        <td>2 days ago</td>
+        <td class="live">live</td>
+        <td class="small">Auto · 1st of each month</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Activity log (today)</h2>
+  <ul>
+    <li><strong>14:32</strong> &mdash; Q3 Investor Update auto-refreshed cleanly. AUM moved from $4.18B to $4.21B; net flows +$118M. <a href="#">View diff</a>.</li>
+    <li><strong>14:14</strong> &mdash; Three readers opened the LP Allocation Memo (none were the intended audience).</li>
+    <li><strong>11:28</strong> &mdash; <span class="accent" style="color: var(--accent); font-weight: 700;">Visual QA flagged three drift warnings on the Q3 Board Deck.</span> <a href="#">Review.</a></li>
+    <li><strong>10:42</strong> &mdash; Sara M. bound the AUM stat to <code>snowflake.fund_metrics</code>. Auto-refresh runs hourly.</li>
+    <li><strong>09:14</strong> &mdash; Morning auto-refresh swept eleven projects clean.</li>
+  </ul>
+
+  <h2>For your reference</h2>
+  <ul>
+    <li><a href="#">How auto-refresh works</a></li>
+    <li><a href="#">Configuring tolerance bounds for a project</a></li>
+    <li><a href="#">The audit log: what it tracks, who can see it</a></li>
+    <li><a href="#">Binding an element to a Python pipeline</a></li>
+    <li><a href="#">Manual refresh vs scheduled refresh</a></li>
+  </ul>
+
+  <blockquote>
+    "It's the difference between rebuilding the QBR every quarter and rebuilding the QBR exactly once."<br/>
+    &mdash; <a href="#">Sara Malek, Crestwood Capital</a>
+  </blockquote>
+
+  <div class="footer">
+    Percy &middot; built for the people who tell the story. &middot; Version 0.4.0 (build 2026.05.09)<br/>
+    <a href="#">Privacy</a> &middot; <a href="#">Terms</a> &middot; <a href="#">Status</a> &middot; <a href="#">Contact</a> &middot; <a href="#">Source</a>
+  </div>
+
+</div>
+
+<script src="../_shared.js"></script>
+<script>
+  document.querySelectorAll('#brand-mark').forEach(el => el.innerHTML = window.PERCY_MARK_SVG);
+  document.querySelectorAll('.modeswitch button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.body.dataset.mode = btn.dataset.mode;
+      document.documentElement.dataset.mode = btn.dataset.mode;
+      document.querySelectorAll('.modeswitch button').forEach(b => b.classList.toggle('active', b === btn));
+    });
+  });
+  document.documentElement.dataset.mode = 'light';
+</script>
+</body>
+</html>

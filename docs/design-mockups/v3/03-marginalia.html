@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>v3 / 03 — Marginalia</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Caveat:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /* Marginalia — clean sans body with hand-drawn structural accents.
+     Like an editor's pencil notes on a typeset proof. The product is precise;
+     the designer is human. The hand-drawn moments (underlines, ticks, arrows,
+     dividers) carry the brand voice without the layout being chaotic. */
+
+  :root[data-mode="light"] {
+    --bg: #FBFAF5;
+    --surface: #FFFFFF;
+    --sunk: #F2EFE7;
+    --ink: #161412;
+    --ink-2: #4D4940;
+    --ink-3: #86827A;
+    --line: rgba(22,20,18,0.10);
+    --line-strong: rgba(22,20,18,0.20);
+    --pencil: #2A2622;
+    --pen-blue: #1F3FAA;
+    --pen-red: #B83A2C;
+    --hl: rgba(229,196,49,0.32);
+  }
+  :root[data-mode="dark"] {
+    --bg: #161412;
+    --surface: #1F1C18;
+    --sunk: #0E0C0A;
+    --ink: #F2EBDC;
+    --ink-2: #A89D89;
+    --ink-3: #6B6353;
+    --line: rgba(242,235,220,0.10);
+    --line-strong: rgba(242,235,220,0.20);
+    --pencil: #DAD3C4;
+    --pen-blue: #8AA3F0;
+    --pen-red: #E55444;
+    --hl: rgba(229,196,49,0.20);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--ink); font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; line-height: 1.55; font-size: 15px; transition: background 200ms, color 200ms; }
+  a { color: inherit; text-decoration: none; }
+  .hand { font-family: 'Caveat', cursive; font-weight: 500; }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+
+  .modeswitch { position: fixed; top: 16px; right: 16px; z-index: 99; background: var(--surface); border: 1px solid var(--line); padding: 4px; border-radius: 999px; display: flex; gap: 2px; }
+  .modeswitch button { background: transparent; border: 0; color: var(--ink-2); font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 999px; cursor: pointer; }
+  .modeswitch button.active { background: var(--ink); color: var(--bg); font-weight: 600; }
+
+  /* Top bar — quiet */
+  .topbar { height: 64px; display: flex; align-items: center; justify-content: space-between; padding: 0 32px; border-bottom: 1px solid var(--line); background: var(--bg); }
+  .brand { display: flex; align-items: center; gap: 12px; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+  .brand .mark { width: 24px; height: 24px; color: var(--ink); }
+  .crumb { font-size: 13px; color: var(--ink-2); margin-left: 24px; }
+  .crumb .sep { color: var(--ink-3); margin: 0 8px; }
+  .crumb strong { color: var(--ink); font-weight: 600; }
+  .topbar-right { display: flex; align-items: center; gap: 12px; }
+  .av { width: 32px; height: 32px; border-radius: 50%; background: var(--ink); color: var(--bg); display: grid; place-items: center; font-size: 12px; font-weight: 600; }
+
+  /* Page — narrow column like a manuscript with margins */
+  .page { max-width: 920px; margin: 0 auto; padding: 56px 64px 96px; position: relative; }
+
+  /* Title block */
+  .title-block { margin-bottom: 56px; }
+  .kicker { font-size: 11px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 12px; }
+  .title-block h1 { font-size: 40px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.05; margin-bottom: 16px; position: relative; display: inline-block; }
+  /* Hand-drawn underline under the title */
+  .title-block h1::after {
+    content: '';
+    position: absolute;
+    left: -2px; right: -8px; bottom: -8px;
+    height: 8px;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 8' preserveAspectRatio='none'><path d='M2 5 Q 50 2, 100 4 T 200 5 T 300 3 T 400 4 T 500 5 T 596 4' stroke='%23C29C45' stroke-width='2.2' stroke-linecap='round' fill='none'/></svg>");
+    background-size: 100% 100%;
+    background-repeat: no-repeat;
+    pointer-events: none;
+  }
+  :root[data-mode="dark"] .title-block h1::after {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 8' preserveAspectRatio='none'><path d='M2 5 Q 50 2, 100 4 T 200 5 T 300 3 T 400 4 T 500 5 T 596 4' stroke='%23E8C97A' stroke-width='2.2' stroke-linecap='round' fill='none'/></svg>");
+  }
+  .title-block .lede { font-size: 18px; color: var(--ink-2); line-height: 1.55; max-width: 640px; }
+
+  /* Marginal note — hand lettered in the left margin */
+  .marg {
+    position: absolute;
+    left: -180px;
+    width: 160px;
+    font-family: 'Caveat', cursive;
+    font-size: 18px;
+    color: var(--pen-red);
+    line-height: 1.2;
+    transform: rotate(-1.5deg);
+  }
+  .marg::before {
+    /* hand-drawn arrow pointing right toward the body content */
+    content: '';
+    position: absolute;
+    right: -16px; top: 6px;
+    width: 30px; height: 14px;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 14'><path d='M2 8 Q 8 4, 18 8 L 22 4 M 18 8 L 22 12' stroke='%23B83A2C' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>");
+    background-size: 100% 100%;
+  }
+  :root[data-mode="dark"] .marg { color: var(--pen-red); }
+  :root[data-mode="dark"] .marg::before {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 14'><path d='M2 8 Q 8 4, 18 8 L 22 4 M 18 8 L 22 12' stroke='%23E55444' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>");
+  }
+
+  /* Status block */
+  .status { display: grid; grid-template-columns: repeat(2, 1fr); gap: 32px; padding: 24px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-bottom: 48px; }
+  .status-cell { }
+  .status-label { font-size: 11px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+  .status-value { font-size: 17px; color: var(--ink); display: flex; align-items: center; gap: 10px; }
+
+  /* Hand-drawn tick */
+  .tick { display: inline-block; width: 22px; height: 18px; }
+  .tick svg { width: 100%; height: 100%; }
+  .tick path { stroke: var(--pen-blue); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+
+  /* Hand-drawn cross */
+  .cross { display: inline-block; width: 18px; height: 18px; }
+  .cross path { stroke: var(--pen-red); stroke-width: 2.4; stroke-linecap: round; fill: none; }
+
+  /* Section divider — hand-drawn squiggle */
+  .div-squiggle {
+    height: 18px; margin: 56px 0 32px;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 18' preserveAspectRatio='none'><path d='M2 9 Q 30 3, 60 9 T 120 9 T 180 9 T 240 9 T 300 9 T 360 9 T 420 9 T 480 9 T 540 9 T 600 9 T 660 9 T 720 9 T 798 9' stroke='%231F1A12' stroke-width='1.4' stroke-linecap='round' stroke-opacity='0.32' fill='none'/></svg>");
+    background-size: 100% 100%; background-repeat: no-repeat;
+  }
+  :root[data-mode="dark"] .div-squiggle { filter: invert(1) brightness(2); opacity: 0.7; }
+
+  h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 20px; position: relative; display: inline-block; }
+  h2 .annote {
+    position: absolute; right: -100px; top: 4px;
+    font-family: 'Caveat', cursive; font-size: 16px; color: var(--pen-red);
+    transform: rotate(-2deg);
+  }
+
+  /* Slide list */
+  .slides { display: flex; flex-direction: column; gap: 4px; }
+  .slide { display: grid; grid-template-columns: 32px 1fr auto; gap: 16px; padding: 14px 16px; border-radius: 6px; cursor: pointer; align-items: center; }
+  .slide:hover { background: var(--sunk); }
+  .slide-num { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .slide-info h4 { font-size: 15px; font-weight: 600; margin-bottom: 2px; }
+  .slide-info .meta { font-size: 12px; color: var(--ink-3); }
+  .slide-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); font-weight: 500; }
+  .slide-status.live { color: var(--pen-blue); }
+  .slide-status.flag { color: var(--pen-red); }
+
+  /* Highlighted value (yellow highlighter style) */
+  .hl-val {
+    background-image: linear-gradient(180deg, transparent 50%, var(--hl) 50%, var(--hl) 95%, transparent 95%);
+    padding: 0 3px;
+  }
+
+  /* History entries */
+  .history { display: flex; flex-direction: column; gap: 14px; padding: 8px 0; }
+  .h-row { display: grid; grid-template-columns: 64px 1fr; gap: 16px; font-size: 14px; line-height: 1.5; }
+  .h-time { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink-3); padding-top: 1px; }
+  .h-text { color: var(--ink-2); }
+  .h-text strong { color: var(--ink); font-weight: 600; }
+
+  /* Hand-drawn bracket grouping the latest 3 entries */
+  .bracket-wrap { position: relative; padding-left: 16px; }
+  .bracket-wrap::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 14px;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 100' preserveAspectRatio='none'><path d='M12 2 Q 5 4, 4 14 L 4 86 Q 5 96, 12 98' stroke='%231F3FAA' stroke-width='1.6' stroke-linecap='round' fill='none'/></svg>");
+    background-size: 100% 100%; background-repeat: no-repeat;
+  }
+  :root[data-mode="dark"] .bracket-wrap::before {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 100' preserveAspectRatio='none'><path d='M12 2 Q 5 4, 4 14 L 4 86 Q 5 96, 12 98' stroke='%238AA3F0' stroke-width='1.6' stroke-linecap='round' fill='none'/></svg>");
+  }
+  .bracket-wrap::after {
+    content: 'fresh — last hour';
+    position: absolute; left: -50px; top: 8px;
+    font-family: 'Caveat', cursive; font-size: 16px; color: var(--pen-blue);
+    transform: rotate(-90deg) translateX(-30px); transform-origin: left top;
+    white-space: nowrap;
+  }
+
+  .meta-bar { font-size: 13px; color: var(--ink-3); display: flex; gap: 16px; align-items: center; padding-top: 16px; border-top: 1px solid var(--line); margin-top: 32px; }
+  .meta-bar strong { color: var(--ink); font-weight: 500; }
+  .meta-bar .dot { width: 3px; height: 3px; border-radius: 50%; background: currentColor; }
+</style>
+</head>
+<body data-mode="light">
+
+<div class="modeswitch">
+  <button class="active" data-mode="light">light</button>
+  <button data-mode="dark">dark</button>
+</div>
+
+<div class="topbar">
+  <div style="display: flex; align-items: center;">
+    <div class="brand">
+      <span class="mark" id="brand-mark"></span>
+      <span>Percy</span>
+    </div>
+    <div class="crumb">
+      <span>Crestwood Capital</span><span class="sep">/</span>
+      <span>Investor Updates</span><span class="sep">/</span>
+      <strong>Q3 Investor Update</strong>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <div class="av">BS</div>
+  </div>
+</div>
+
+<div class="page">
+
+  <!-- Marginal note in the left margin pointing at the title -->
+  <div class="marg" style="top: 84px;">cleared QA at 14:32 — ship it</div>
+
+  <div class="title-block">
+    <div class="kicker">Project · refreshing hourly · last sync 2 min ago</div>
+    <h1>Q3 Investor Update</h1>
+    <p class="lede">Quarterly letter to LPs covering performance, allocations, and outlook. Sections one through three auto-refresh from Snowflake; the narrative is written by the team and reviewed before publish.</p>
+  </div>
+
+  <div class="status">
+    <div class="status-cell">
+      <div class="status-label">Live elements</div>
+      <div class="status-value">
+        <span class="tick">
+          <svg viewBox="0 0 22 18"><path d="M2 11 Q 6 13, 9 14 Q 11 13, 14 8 Q 17 4, 20 2"/></svg>
+        </span>
+        3 of 3 bound and current
+      </div>
+    </div>
+    <div class="status-cell">
+      <div class="status-label">Visual QA</div>
+      <div class="status-value">
+        <span class="tick">
+          <svg viewBox="0 0 22 18"><path d="M2 11 Q 6 13, 9 14 Q 11 13, 14 8 Q 17 4, 20 2"/></svg>
+        </span>
+        Passed — no regressions
+      </div>
+    </div>
+    <div class="status-cell">
+      <div class="status-label">Approval</div>
+      <div class="status-value">
+        <span class="tick">
+          <svg viewBox="0 0 22 18"><path d="M2 11 Q 6 13, 9 14 Q 11 13, 14 8 Q 17 4, 20 2"/></svg>
+        </span>
+        Auto-cleared (drift &lt; 5%)
+      </div>
+    </div>
+    <div class="status-cell">
+      <div class="status-label">Pipeline</div>
+      <div class="status-value">
+        <span class="cross">
+          <svg viewBox="0 0 18 18"><path d="M3 3 L 15 15 M 15 3 L 3 15"/></svg>
+        </span>
+        <span style="color: var(--ink-2);">Disabled by Sara M. on Wednesday</span>
+      </div>
+    </div>
+  </div>
+
+  <h2>Slides <span class="annote" style="left: 110px; right: auto;">slide 4 needs a look</span></h2>
+  <div class="slides">
+    <div class="slide">
+      <span class="slide-num">01</span>
+      <div class="slide-info"><h4>Cover</h4><div class="meta">3 elements · edited 2 weeks ago</div></div>
+      <span class="slide-status">manual</span>
+    </div>
+    <div class="slide">
+      <span class="slide-num">02</span>
+      <div class="slide-info"><h4>Letter to investors</h4><div class="meta">edited 4 days ago by Sara M.</div></div>
+      <span class="slide-status">manual</span>
+    </div>
+    <div class="slide">
+      <span class="slide-num">03</span>
+      <div class="slide-info"><h4>Quarter at a glance</h4><div class="meta">3 live elements · auto-refreshed 2 min ago</div></div>
+      <span class="slide-status live">
+        <span class="tick" style="width: 16px; height: 14px;">
+          <svg viewBox="0 0 22 18"><path d="M2 11 Q 6 13, 9 14 Q 11 13, 14 8 Q 17 4, 20 2"/></svg>
+        </span>
+        live
+      </span>
+    </div>
+    <div class="slide">
+      <span class="slide-num">04</span>
+      <div class="slide-info"><h4>Performance attribution</h4><div class="meta">2 live charts · QA flagged 3.2% drift</div></div>
+      <span class="slide-status flag">
+        <span class="cross" style="width: 14px; height: 14px;">
+          <svg viewBox="0 0 18 18"><path d="M3 3 L 15 15 M 15 3 L 3 15"/></svg>
+        </span>
+        flagged
+      </span>
+    </div>
+    <div class="slide">
+      <span class="slide-num">05</span>
+      <div class="slide-info"><h4>Top contributors</h4><div class="meta">1 live table · auto-refreshed 2 min ago</div></div>
+      <span class="slide-status live">
+        <span class="tick" style="width: 16px; height: 14px;">
+          <svg viewBox="0 0 22 18"><path d="M2 11 Q 6 13, 9 14 Q 11 13, 14 8 Q 17 4, 20 2"/></svg>
+        </span>
+        live
+      </span>
+    </div>
+    <div class="slide">
+      <span class="slide-num">06</span>
+      <div class="slide-info"><h4>Outlook &amp; positioning</h4><div class="meta">manual · edited 6 days ago</div></div>
+      <span class="slide-status">manual</span>
+    </div>
+  </div>
+
+  <div class="div-squiggle"></div>
+
+  <h2>Numbers right now</h2>
+  <p style="font-size: 16px; line-height: 1.7; color: var(--ink); margin-bottom: 16px;">
+    Latest sync from <span class="mono" style="font-size: 14px;">snowflake.fund_metrics</span> at 14:32 ET. AUM moved from <span class="hl-val">$4.18B</span> to <span class="hl-val">$4.21B</span>. Net flows landed at <span class="hl-val">+$118M</span>, the strongest quarterly intake since 2024. YTD return is <span class="hl-val">+14.2%</span> against a benchmark of +11.8%.
+  </p>
+  <p style="font-size: 14px; color: var(--ink-3); font-style: italic; margin-bottom: 32px;">
+    Highlights are live values — they update on every refresh. Hover any one to see its data binding.
+  </p>
+
+  <div class="div-squiggle"></div>
+
+  <h2>Refresh history</h2>
+  <div class="history bracket-wrap">
+    <div class="h-row">
+      <span class="h-time">14:32</span>
+      <span class="h-text"><strong>Auto-refresh</strong> succeeded — 0 visual regressions, 3 live values updated.</span>
+    </div>
+    <div class="h-row">
+      <span class="h-time">13:28</span>
+      <span class="h-text"><strong>Auto-refresh</strong> succeeded — 1 chart updated (slide 3, Y-axis bounds).</span>
+    </div>
+    <div class="h-row">
+      <span class="h-time">12:30</span>
+      <span class="h-text"><strong>Auto-refresh</strong> succeeded.</span>
+    </div>
+  </div>
+  <div class="history" style="padding-top: 14px;">
+    <div class="h-row">
+      <span class="h-time">11:31</span>
+      <span class="h-text"><strong>Sara M.</strong> edited slide 03 — adjusted YTD framing.</span>
+    </div>
+    <div class="h-row">
+      <span class="h-time">11:28</span>
+      <span class="h-text"><strong>QA flagged</strong> drift on chart 03 — auto-resolved within tolerance.</span>
+    </div>
+    <div class="h-row">
+      <span class="h-time">10:30</span>
+      <span class="h-text"><strong>Auto-refresh</strong> succeeded.</span>
+    </div>
+    <div class="h-row">
+      <span class="h-time">09:30</span>
+      <span class="h-text"><strong>Auto-refresh</strong> succeeded.</span>
+    </div>
+  </div>
+
+  <div class="meta-bar">
+    <strong>Sara Malek</strong> created · 12 weeks ago
+    <span class="dot"></span>
+    <span>3 editors · 9 viewers</span>
+    <span class="dot"></span>
+    <span style="color: var(--pen-blue); font-weight: 600;">3 collaborators online now</span>
+  </div>
+
+</div>
+
+<script src="../_shared.js"></script>
+<script>
+  document.querySelectorAll('#brand-mark').forEach(el => el.innerHTML = window.PERCY_MARK_SVG);
+  document.querySelectorAll('.modeswitch button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.body.dataset.mode = btn.dataset.mode;
+      document.documentElement.dataset.mode = btn.dataset.mode;
+      document.querySelectorAll('.modeswitch button').forEach(b => b.classList.toggle('active', b === btn));
+    });
+  });
+  document.documentElement.dataset.mode = 'light';
+</script>
+</body>
+</html>

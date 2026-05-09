@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>v3 / 04 — Folio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /* Folio — Swiss modernism. Massimo Vignelli's NYC subway map energy.
+     Tight grid, generous whitespace, one bold accent, no decoration.
+     Everything earns its place by being structurally necessary. */
+
+  :root[data-mode="light"] {
+    --bg: #FFFFFF;
+    --surface: #F5F5F2;
+    --ink: #000000;
+    --ink-2: #3D3D3D;
+    --ink-3: #8A8A85;
+    --line: #000000;
+    --line-soft: rgba(0,0,0,0.12);
+    --accent: #E04E1A;
+    --accent-soft: #FCEAE0;
+  }
+  :root[data-mode="dark"] {
+    --bg: #0A0A0A;
+    --surface: #161616;
+    --ink: #F5F5F2;
+    --ink-2: #BCBCB8;
+    --ink-3: #6E6E6A;
+    --line: #F5F5F2;
+    --line-soft: rgba(245,245,242,0.14);
+    --accent: #FF6534;
+    --accent-soft: rgba(255,101,52,0.16);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--ink); font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; line-height: 1.4; font-size: 14px; transition: background 200ms, color 200ms; }
+  a { color: inherit; text-decoration: none; }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+
+  .modeswitch { position: fixed; top: 16px; right: 16px; z-index: 99; background: var(--surface); border: 2px solid var(--line); padding: 0; display: flex; }
+  .modeswitch button { background: transparent; border: 0; color: var(--ink-2); font: inherit; font-size: 12px; padding: 6px 14px; cursor: pointer; }
+  .modeswitch button.active { background: var(--ink); color: var(--bg); font-weight: 600; }
+
+  /* Top bar — heavy 2px black rules */
+  .topbar { display: grid; grid-template-columns: auto 1fr auto; align-items: center; padding: 24px 48px; border-bottom: 2px solid var(--line); gap: 32px; }
+  .brand { display: flex; align-items: center; gap: 14px; font-size: 20px; font-weight: 700; letter-spacing: -0.025em; }
+  .brand .mark { width: 28px; height: 28px; color: var(--ink); }
+  .breadcrumb { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink-2); display: flex; gap: 12px; align-items: center; text-transform: uppercase; letter-spacing: 0.06em; }
+  .breadcrumb .here { color: var(--ink); font-weight: 600; }
+  .breadcrumb .sep { color: var(--ink-3); }
+  .topbar-right { display: flex; gap: 12px; align-items: center; }
+  .av { width: 36px; height: 36px; background: var(--ink); color: var(--bg); display: grid; place-items: center; font-size: 12px; font-weight: 600; font-family: 'JetBrains Mono', monospace; }
+
+  /* Page */
+  .page { padding: 56px 48px 80px; max-width: 1280px; }
+
+  /* Massive number/title pair — Vignelli style */
+  .lead { display: grid; grid-template-columns: 240px 1fr; gap: 64px; padding-bottom: 48px; border-bottom: 2px solid var(--line); margin-bottom: 48px; }
+  .lead .label { font-family: 'JetBrains Mono', monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-2); padding-top: 14px; }
+  .lead .label strong { display: block; font-size: 11px; color: var(--ink); font-weight: 700; margin-bottom: 6px; }
+  .lead-info h1 { font-size: 84px; font-weight: 700; letter-spacing: -0.04em; line-height: 0.92; margin-bottom: 24px; }
+  .lead-info h1 .red { color: var(--accent); }
+  .lead-info p { font-size: 18px; color: var(--ink-2); max-width: 680px; line-height: 1.5; }
+
+  /* Big stats row — like a Swiss timetable */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-bottom: 56px; }
+  .stat { padding: 24px 24px 24px 0; border-right: 1px solid var(--line-soft); }
+  .stat:last-child { border-right: 0; }
+  .stat .lbl { font-family: 'JetBrains Mono', monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-3); margin-bottom: 12px; }
+  .stat .val { font-family: 'JetBrains Mono', monospace; font-size: 36px; font-weight: 700; color: var(--ink); letter-spacing: -0.03em; line-height: 1; font-variant-numeric: tabular-nums; }
+  .stat .delta { font-size: 12px; color: var(--ink-2); margin-top: 8px; }
+  .stat.flag .val { color: var(--accent); }
+
+  /* Project list — full-width rows like a train schedule */
+  .row-head { display: grid; grid-template-columns: 60px 1fr 200px 140px 100px; gap: 24px; padding: 8px 0 12px; border-bottom: 2px solid var(--line); font-family: 'JetBrains Mono', monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-3); margin-bottom: 4px; }
+  .row { display: grid; grid-template-columns: 60px 1fr 200px 140px 100px; gap: 24px; padding: 18px 0; border-bottom: 1px solid var(--line-soft); align-items: center; cursor: pointer; }
+  .row:hover { background: var(--surface); }
+  .row:last-child { border-bottom: 2px solid var(--line); }
+  .row-num { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .row-title h3 { font-size: 18px; font-weight: 600; letter-spacing: -0.015em; margin-bottom: 2px; }
+  .row-title p { font-size: 13px; color: var(--ink-2); }
+  .row-owner { font-size: 14px; color: var(--ink-2); }
+  .row-owner strong { color: var(--ink); font-weight: 500; }
+  .row-when { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+  /* Status — tag boxes */
+  .tag { display: inline-flex; align-items: center; padding: 4px 10px; font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+  .tag.live { background: var(--ink); color: var(--bg); }
+  .tag.flag { background: var(--accent); color: var(--bg); }
+  .tag.draft { background: transparent; color: var(--ink-2); border: 1px solid var(--line-soft); }
+  .tag.idle { background: var(--surface); color: var(--ink-2); }
+
+  /* Footer rule */
+  .meta { padding-top: 24px; display: flex; justify-content: space-between; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.08em; }
+</style>
+</head>
+<body data-mode="light">
+
+<div class="modeswitch">
+  <button class="active" data-mode="light">light</button>
+  <button data-mode="dark">dark</button>
+</div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" id="brand-mark"></span>
+    <span>Percy</span>
+  </div>
+  <div class="breadcrumb">
+    <span>Crestwood Capital</span>
+    <span class="sep">→</span>
+    <span class="here">Projects</span>
+  </div>
+  <div class="topbar-right">
+    <div class="av">BS</div>
+  </div>
+</header>
+
+<div class="page">
+
+  <div class="lead">
+    <div class="label">
+      <strong>Workspace · Projects</strong>
+      <span>Friday · 14:32 ET</span>
+    </div>
+    <div class="lead-info">
+      <h1>24 projects.<br/><span class="red">One needs you.</span></h1>
+      <p>Twenty-three are auto-refreshed and within tolerance. The Q3 Board Deck has a chart that drifted past threshold this morning — the only thing on this page that requires your attention.</p>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="lbl">Active</div>
+      <div class="val">24</div>
+      <div class="delta">+3 this week</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">Auto-refreshes today</div>
+      <div class="val">187</div>
+      <div class="delta">All within tolerance</div>
+    </div>
+    <div class="stat flag">
+      <div class="lbl">Flagged</div>
+      <div class="val">1</div>
+      <div class="delta">Q3 Board Deck</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">Sources</div>
+      <div class="val">6</div>
+      <div class="delta">All healthy</div>
+    </div>
+  </div>
+
+  <div class="row-head">
+    <span>№</span>
+    <span>Project</span>
+    <span>Owner</span>
+    <span>Updated</span>
+    <span style="text-align: right;">Status</span>
+  </div>
+  <div class="row">
+    <span class="row-num">001</span>
+    <div class="row-title">
+      <h3>Q3 Investor Update</h3>
+      <p>Quarterly LP letter · 6 slides · 3 live elements bound to Snowflake</p>
+    </div>
+    <span class="row-owner"><strong>Sara Malek</strong></span>
+    <span class="row-when">14:32 (2 min)</span>
+    <span style="text-align: right;"><span class="tag live">live</span></span>
+  </div>
+  <div class="row">
+    <span class="row-num">002</span>
+    <div class="row-title">
+      <h3>Q3 Board Deck</h3>
+      <p>Quarterly board presentation · 18 slides · slide 4 chart drifted 3.2%</p>
+    </div>
+    <span class="row-owner"><strong>Amir K.</strong></span>
+    <span class="row-when">13:32 (1h)</span>
+    <span style="text-align: right;"><span class="tag flag">flagged</span></span>
+  </div>
+  <div class="row">
+    <span class="row-num">003</span>
+    <div class="row-title">
+      <h3>Portfolio Attribution — March</h3>
+      <p>Monthly attribution by sector, factor, holding · 2 warehouse views</p>
+    </div>
+    <span class="row-owner"><strong>Ben Steel</strong></span>
+    <span class="row-when">14:18 (14m)</span>
+    <span style="text-align: right;"><span class="tag live">live</span></span>
+  </div>
+  <div class="row">
+    <span class="row-num">004</span>
+    <div class="row-title">
+      <h3>LP Allocation Memo</h3>
+      <p>Internal recommendation for Q4 fund-of-funds reallocation</p>
+    </div>
+    <span class="row-owner"><strong>Sara Malek</strong></span>
+    <span class="row-when">Yesterday</span>
+    <span style="text-align: right;"><span class="tag draft">draft</span></span>
+  </div>
+  <div class="row">
+    <span class="row-num">005</span>
+    <div class="row-title">
+      <h3>Risk Committee Pack</h3>
+      <p>Weekly risk review · stress tests, exposure heatmaps, drawdown</p>
+    </div>
+    <span class="row-owner"><strong>Carla L.</strong></span>
+    <span class="row-when">Yesterday</span>
+    <span style="text-align: right;"><span class="tag live">live</span></span>
+  </div>
+  <div class="row">
+    <span class="row-num">006</span>
+    <div class="row-title">
+      <h3>Monthly Performance Report</h3>
+      <p>Standardized monthly performance template · auto-refresh on the 1st</p>
+    </div>
+    <span class="row-owner">Auto</span>
+    <span class="row-when">2d ago</span>
+    <span style="text-align: right;"><span class="tag idle">idle</span></span>
+  </div>
+  <div class="row">
+    <span class="row-num">007</span>
+    <div class="row-title">
+      <h3>Earnings template — 2026</h3>
+      <p>Master template for quarterly earnings · 14 elements bound to warehouse</p>
+    </div>
+    <span class="row-owner">Workspace</span>
+    <span class="row-when">4w ago</span>
+    <span style="text-align: right;"><span class="tag idle">template</span></span>
+  </div>
+
+  <div class="meta">
+    <span>showing 7 of 24 projects · sort: most recent</span>
+    <span>← → to navigate · ⌘ K to search</span>
+  </div>
+
+</div>
+
+<script src="../_shared.js"></script>
+<script>
+  document.querySelectorAll('#brand-mark').forEach(el => el.innerHTML = window.PERCY_MARK_SVG);
+  document.querySelectorAll('.modeswitch button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.body.dataset.mode = btn.dataset.mode;
+      document.documentElement.dataset.mode = btn.dataset.mode;
+      document.querySelectorAll('.modeswitch button').forEach(b => b.classList.toggle('active', b === btn));
+    });
+  });
+  document.documentElement.dataset.mode = 'light';
+</script>
+</body>
+</html>

@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>v3 / 08 — Botanical</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Cormorant+Garamond:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /* Botanical — sage + wheat + clay. Quiet, slightly luxurious; like a hand-
+     bound nature journal or a pressed-leaf invitation. Cormorant Garamond
+     headlines + Inter body. The opposite of Folio: where Folio is gridded,
+     Botanical is composed. */
+
+  :root[data-mode="light"] {
+    --bg: #F5F1E8;
+    --surface: #FBF8F0;
+    --sunk: #ECE6D6;
+    --ink: #1F2A1E;
+    --ink-2: #4A5547;
+    --ink-3: #8A8F84;
+    --line: rgba(31,42,30,0.10);
+    --line-strong: rgba(31,42,30,0.20);
+    --sage: #6B8870;
+    --sage-soft: #C5D5C7;
+    --clay: #B07458;
+    --clay-soft: #E8D2C4;
+    --wheat: #C8A967;
+  }
+  :root[data-mode="dark"] {
+    --bg: #181E18;
+    --surface: #1F2620;
+    --sunk: #0E120E;
+    --ink: #E8E5D8;
+    --ink-2: #ADB0A4;
+    --ink-3: #6E7268;
+    --line: rgba(232,229,216,0.10);
+    --line-strong: rgba(232,229,216,0.20);
+    --sage: #9DBA9F;
+    --sage-soft: rgba(157,186,159,0.18);
+    --clay: #DBA086;
+    --clay-soft: rgba(219,160,134,0.18);
+    --wheat: #E5C77A;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--ink); font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; line-height: 1.6; font-size: 15px; transition: background 200ms, color 200ms; }
+  a { color: inherit; text-decoration: none; }
+  .serif { font-family: 'Cormorant Garamond', Georgia, serif; }
+  .mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+
+  .modeswitch { position: fixed; top: 16px; right: 16px; z-index: 99; background: var(--surface); border: 1px solid var(--line); padding: 4px; border-radius: 999px; display: flex; gap: 2px; }
+  .modeswitch button { background: transparent; border: 0; color: var(--ink-2); font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 999px; cursor: pointer; }
+  .modeswitch button.active { background: var(--ink); color: var(--bg); font-weight: 600; }
+
+  /* Topbar */
+  .topbar { display: flex; align-items: center; justify-content: space-between; padding: 28px 48px 24px; border-bottom: 1px solid var(--line); }
+  .brand { display: flex; align-items: baseline; gap: 14px; }
+  .brand .mark { width: 26px; height: 26px; color: var(--sage); align-self: center; }
+  .brand-text { font-family: 'Cormorant Garamond', serif; font-size: 28px; font-weight: 600; letter-spacing: -0.01em; }
+  .brand-tag { font-family: 'Inter', sans-serif; font-size: 11px; color: var(--ink-3); font-style: italic; letter-spacing: 0.04em; }
+  .topbar-right { display: flex; align-items: center; gap: 16px; font-size: 13px; color: var(--ink-2); }
+  .av { width: 32px; height: 32px; border-radius: 50%; background: var(--sage); color: var(--bg); display: grid; place-items: center; font-size: 12px; font-weight: 600; font-family: 'Cormorant Garamond', serif; }
+
+  /* Page */
+  .page { padding: 64px 48px 96px; max-width: 1080px; margin: 0 auto; }
+
+  /* Heading composition */
+  .head { margin-bottom: 56px; max-width: 720px; }
+  .head .eyebrow { font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 500; color: var(--clay); text-transform: uppercase; letter-spacing: 0.16em; margin-bottom: 20px; }
+  .head h1 { font-family: 'Cormorant Garamond', serif; font-size: 64px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.05; margin-bottom: 20px; }
+  .head h1 em { color: var(--sage); font-style: italic; font-weight: 500; }
+  .head p { font-size: 17px; color: var(--ink-2); line-height: 1.6; }
+
+  /* Soft section divider — three dots */
+  .sep { text-align: center; margin: 56px 0; color: var(--sage); font-family: 'Cormorant Garamond', serif; font-size: 24px; letter-spacing: 0.5em; }
+
+  /* Section heads */
+  h2 { font-family: 'Cormorant Garamond', serif; font-size: 32px; font-weight: 500; letter-spacing: -0.015em; margin-bottom: 24px; }
+  h2 em { font-style: italic; color: var(--sage); }
+
+  /* Project list — vertical, generous, unornamented */
+  .projects { display: flex; flex-direction: column; }
+  .project { display: grid; grid-template-columns: 80px 1fr auto; gap: 24px; padding: 32px 0; border-bottom: 1px solid var(--line); align-items: baseline; cursor: pointer; transition: background 150ms; }
+  .project:hover { background: var(--surface); }
+  .p-num { font-family: 'Cormorant Garamond', serif; font-size: 36px; font-weight: 400; color: var(--sage); font-variant-numeric: tabular-nums; line-height: 1; }
+  .p-info h3 { font-family: 'Cormorant Garamond', serif; font-size: 26px; font-weight: 500; letter-spacing: -0.01em; line-height: 1.15; margin-bottom: 6px; }
+  .p-info p { font-size: 14px; color: var(--ink-2); line-height: 1.6; max-width: 560px; margin-bottom: 12px; }
+  .p-meta { display: flex; gap: 16px; align-items: center; font-size: 12px; color: var(--ink-3); }
+  .p-meta strong { color: var(--ink-2); font-weight: 500; }
+  .p-meta .dot { width: 3px; height: 3px; border-radius: 50%; background: currentColor; }
+  .p-status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-3); font-style: italic; align-self: start; padding-top: 8px; }
+  .p-status .pip { width: 8px; height: 8px; border-radius: 50%; background: var(--sage); }
+  .p-status.warn { color: var(--clay); }
+  .p-status.warn .pip { background: var(--clay); }
+  .p-status.draft .pip { background: var(--ink-3); }
+
+  /* News column — like a journal entry list */
+  .journal { display: flex; flex-direction: column; gap: 24px; max-width: 720px; }
+  .entry { display: grid; grid-template-columns: 80px 1fr; gap: 32px; align-items: baseline; }
+  .entry-time { font-family: 'Cormorant Garamond', serif; font-size: 16px; font-style: italic; color: var(--clay); font-variant-numeric: tabular-nums; padding-top: 4px; }
+  .entry-text { font-size: 16px; line-height: 1.65; color: var(--ink); }
+  .entry-text strong { font-weight: 600; }
+  .entry-text em { font-style: italic; color: var(--sage); }
+  .entry-text a { color: var(--clay); border-bottom: 1px solid var(--clay-soft); }
+
+  .footer { padding-top: 48px; margin-top: 64px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; font-size: 12px; color: var(--ink-3); font-style: italic; }
+</style>
+</head>
+<body data-mode="light">
+
+<div class="modeswitch">
+  <button class="active" data-mode="light">light</button>
+  <button data-mode="dark">dark</button>
+</div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" id="brand-mark"></span>
+    <span class="brand-text">Percy</span>
+    <span class="brand-tag">— Crestwood Capital</span>
+  </div>
+  <div class="topbar-right">
+    <span class="serif" style="font-style: italic;">Friday, the ninth of May</span>
+    <div class="av">B</div>
+  </div>
+</header>
+
+<div class="page">
+
+  <section class="head">
+    <div class="eyebrow">— Today —</div>
+    <h1>A measured quarter, <em>finishing strong.</em></h1>
+    <p>Three things changed since you were last here. Two are good news. One needs a glance — Sara's already noted it for you, and visual QA caught it before any of it left the building.</p>
+  </section>
+
+  <h2>Your <em>projects</em></h2>
+
+  <section class="projects">
+    <article class="project">
+      <span class="p-num">i</span>
+      <div class="p-info">
+        <h3>Q3 Investor Update</h3>
+        <p>The quarterly letter to LPs. Three live elements bound to <span class="mono">snowflake.fund_metrics</span>; the narrative is written by the team and reviewed each Wednesday.</p>
+        <div class="p-meta">
+          <strong>Sara Malek</strong>
+          <span class="dot"></span>
+          <span>Updated two minutes ago</span>
+        </div>
+      </div>
+      <div class="p-status"><span class="pip"></span>live</div>
+    </article>
+
+    <article class="project">
+      <span class="p-num">ii</span>
+      <div class="p-info">
+        <h3>Q3 Board Deck</h3>
+        <p>Quarterly board presentation. Slide 4 attribution chart drifted past tolerance this morning — the underlying data is correct; the chart's bound series widened unexpectedly.</p>
+        <div class="p-meta">
+          <strong>Amir K.</strong>
+          <span class="dot"></span>
+          <span>One hour ago</span>
+        </div>
+      </div>
+      <div class="p-status warn"><span class="pip"></span>needs review</div>
+    </article>
+
+    <article class="project">
+      <span class="p-num">iii</span>
+      <div class="p-info">
+        <h3>Portfolio Attribution, March</h3>
+        <p>Monthly attribution by sector, factor, and holding. Bound to two warehouse views, refreshed within the past quarter-hour.</p>
+        <div class="p-meta">
+          <strong>Ben Steel</strong>
+          <span class="dot"></span>
+          <span>Fourteen minutes ago</span>
+        </div>
+      </div>
+      <div class="p-status"><span class="pip"></span>live</div>
+    </article>
+
+    <article class="project">
+      <span class="p-num">iv</span>
+      <div class="p-info">
+        <h3>LP Allocation Memo</h3>
+        <p>Internal recommendation for the Q4 fund-of-funds reallocation, in advance of the investment committee meeting on Thursday.</p>
+        <div class="p-meta">
+          <strong>Sara Malek</strong>
+          <span class="dot"></span>
+          <span>Yesterday</span>
+        </div>
+      </div>
+      <div class="p-status draft"><span class="pip"></span>draft</div>
+    </article>
+
+    <article class="project">
+      <span class="p-num">v</span>
+      <div class="p-info">
+        <h3>Risk Committee Pack</h3>
+        <p>The weekly risk review for the firm's risk committee — stress tests, exposure heatmaps, drawdown analysis. Refreshed each Sunday evening.</p>
+        <div class="p-meta">
+          <strong>Carla L.</strong>
+          <span class="dot"></span>
+          <span>Yesterday</span>
+        </div>
+      </div>
+      <div class="p-status"><span class="pip"></span>live</div>
+    </article>
+  </section>
+
+  <div class="sep">· · ·</div>
+
+  <h2>Today, <em>in brief</em></h2>
+
+  <section class="journal">
+    <div class="entry">
+      <span class="entry-time">14:32</span>
+      <span class="entry-text"><strong>Q3 Investor Update</strong> auto-refreshed cleanly. AUM moved from $4.18B to $4.21B. <a>View the diff.</a></span>
+    </div>
+    <div class="entry">
+      <span class="entry-time">11:28</span>
+      <span class="entry-text">Visual QA flagged <em>three drift warnings</em> on the Q3 Board Deck. <a>Worth a glance.</a></span>
+    </div>
+    <div class="entry">
+      <span class="entry-time">10:42</span>
+      <span class="entry-text"><strong>Sara M.</strong> bound the AUM stat to <span class="mono">snowflake.fund_metrics</span> — auto-refresh runs hourly from now on.</span>
+    </div>
+    <div class="entry">
+      <span class="entry-time">9:14</span>
+      <span class="entry-text">Morning auto-refresh swept eleven projects clean.</span>
+    </div>
+  </section>
+
+  <div class="footer">
+    <span>Percy · Crestwood Capital — for the people who tell the story.</span>
+    <span>Set in Cormorant Garamond &amp; Inter.</span>
+  </div>
+</div>
+
+<script src="../_shared.js"></script>
+<script>
+  document.querySelectorAll('#brand-mark').forEach(el => el.innerHTML = window.PERCY_MARK_SVG);
+  document.querySelectorAll('.modeswitch button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.body.dataset.mode = btn.dataset.mode;
+      document.documentElement.dataset.mode = btn.dataset.mode;
+      document.querySelectorAll('.modeswitch button').forEach(b => b.classList.toggle('active', b === btn));
+    });
+  });
+  document.documentElement.dataset.mode = 'light';
+</script>
+</body>
+</html>

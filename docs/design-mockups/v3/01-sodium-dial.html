@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>v3 / 01 — Sodium + Dial</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  /* Sodium + Dial — sodium-vapor accent on warm charcoal/sand,
+     with calibration / tolerance UI language: tick marks, threshold
+     activation, ∅ as null reference. */
+
+  :root[data-mode="light"] {
+    --bg: #F2EFE7;
+    --surface: #FAF7EE;
+    --sunk: #E5E2D8;
+    --ink: #181815;
+    --ink-2: #48463E;
+    --ink-3: #86837A;
+    --line: rgba(24,24,21,0.10);
+    --line-strong: rgba(24,24,21,0.22);
+    --accent: #D49B0A;
+    --accent-soft: rgba(212,155,10,0.14);
+    --accent-glow: rgba(212,155,10,0.28);
+    --tick: rgba(24,24,21,0.32);
+  }
+  :root[data-mode="dark"] {
+    --bg: #181816;
+    --surface: #22221E;
+    --sunk: #0E0E0C;
+    --ink: #ECEAE0;
+    --ink-2: #A09D90;
+    --ink-3: #5E5C53;
+    --line: rgba(236,234,224,0.08);
+    --line-strong: rgba(236,234,224,0.18);
+    --accent: #FFD256;
+    --accent-soft: rgba(255,210,86,0.14);
+    --accent-glow: rgba(255,210,86,0.30);
+    --tick: rgba(236,234,224,0.32);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--ink); font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; line-height: 1.5; font-size: 15px; transition: background 200ms, color 200ms; }
+  a { color: inherit; text-decoration: none; }
+
+  .modeswitch { position: fixed; top: 16px; right: 16px; z-index: 99; background: var(--surface); border: 1px solid var(--line); padding: 4px; border-radius: 999px; display: flex; gap: 2px; }
+  .modeswitch button { background: transparent; border: 0; color: var(--ink-2); font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 999px; cursor: pointer; }
+  .modeswitch button.active { background: var(--ink); color: var(--bg); font-weight: 600; }
+
+  .app { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
+
+  /* Sidebar with calibration ring around the mark */
+  .sb { border-right: 1px solid var(--line); padding: 24px 0; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+  .sb-brand { display: flex; align-items: center; gap: 12px; padding: 0 24px 28px; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+  .mark-cal { position: relative; width: 32px; height: 32px; }
+  .mark-cal .ring {
+    position: absolute; inset: -3px;
+    border-radius: 50%;
+    background: conic-gradient(from -90deg, var(--accent) 0%, var(--accent) 67%, var(--line-strong) 67%, var(--line-strong) 100%);
+    -webkit-mask: radial-gradient(circle, transparent 14px, black 15px);
+            mask: radial-gradient(circle, transparent 14px, black 15px);
+  }
+  .mark-cal .mark-inner { position: absolute; inset: 4px; color: var(--ink); }
+  .mark-cal .mark-inner svg { width: 100%; height: 100%; }
+
+  .sb-link { display: flex; align-items: center; gap: 12px; padding: 9px 24px; color: var(--ink-2); font-size: 14px; font-weight: 500; cursor: pointer; border-left: 2px solid transparent; }
+  .sb-link:hover { background: var(--sunk); color: var(--ink); }
+  .sb-link.active { background: var(--accent-soft); color: var(--ink); border-left-color: var(--accent); font-weight: 600; }
+  .sb-section { padding: 20px 24px 8px; font-size: 11px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.08em; }
+
+  /* Top bar with calibration tick row */
+  .topbar { height: 64px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); padding: 0 32px; background: var(--bg); position: relative; }
+  .topbar::after {
+    content: ''; position: absolute; bottom: -1px; left: 0; right: 0; height: 4px;
+    background: repeating-linear-gradient(90deg, var(--tick) 0 1px, transparent 1px 32px);
+    pointer-events: none; opacity: 0.4;
+  }
+  .crumb { font-size: 14px; color: var(--ink-2); }
+  .crumb strong { color: var(--ink); font-weight: 600; }
+  .topbar-right { display: flex; align-items: center; gap: 12px; }
+  .search { display: flex; align-items: center; gap: 10px; padding: 9px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; font-size: 13px; color: var(--ink-3); min-width: 280px; }
+  .search .kbd { margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-3); background: var(--sunk); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line); }
+  .av { width: 32px; height: 32px; border-radius: 50%; background: var(--ink); color: var(--bg); display: grid; place-items: center; font-size: 12px; font-weight: 600; font-family: 'JetBrains Mono', monospace; }
+
+  .body { padding: 48px 64px 80px; max-width: 1240px; }
+
+  /* Hero / status banner — calibration-strip metaphor */
+  .status-strip {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    padding: 20px 24px; display: flex; align-items: center; gap: 24px; margin-bottom: 48px;
+    position: relative; overflow: hidden;
+  }
+  .status-strip::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: linear-gradient(90deg, var(--accent) 0%, var(--accent) 67%, var(--line-strong) 67%);
+  }
+  .status-tickle {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-3); letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .status-num { font-family: 'JetBrains Mono', monospace; font-size: 22px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+  .status-line { flex: 1; }
+  .status-line .top { font-size: 13px; color: var(--ink-2); }
+  .status-line .bot { font-size: 17px; color: var(--ink); margin-top: 2px; font-weight: 500; }
+  .status-line .bot .pop { color: var(--accent); font-weight: 600; }
+  .status-cta { padding: 10px 18px; background: var(--accent); color: var(--bg); border: 0; border-radius: 6px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+
+  /* Greeting */
+  .greeting { margin-bottom: 56px; }
+  .greeting .eyebrow { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 12px; }
+  .greeting h1 { font-size: 40px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.05; margin-bottom: 10px; }
+  .greeting p { font-size: 16px; color: var(--ink-2); max-width: 560px; }
+
+  /* Section heads */
+  .section-head { display: flex; align-items: baseline; justify-content: space-between; padding-bottom: 12px; border-bottom: 1px solid var(--line); margin-bottom: 24px; }
+  .section-head h2 { font-size: 13px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.08em; }
+  .section-head .new { font-size: 13px; font-weight: 600; color: var(--accent); cursor: pointer; }
+
+  /* Project list — dial-style cards */
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 24px;
+    display: grid; grid-template-columns: auto 1fr; gap: 20px; cursor: pointer;
+    transition: border-color 150ms;
+  }
+  .card:hover { border-color: var(--line-strong); }
+
+  /* Calibration dial — small SVG-like indicator showing data freshness */
+  .dial {
+    width: 64px; height: 64px; flex-shrink: 0;
+    position: relative; display: grid; place-items: center;
+  }
+  .dial-ring {
+    position: absolute; inset: 0; border-radius: 50%;
+    background: conic-gradient(from -135deg, var(--accent) var(--cal, 0.7turn), var(--line-strong) var(--cal, 0.7turn));
+    -webkit-mask: radial-gradient(circle, transparent 22px, black 23px, black 30px, transparent 31px);
+            mask: radial-gradient(circle, transparent 22px, black 23px, black 30px, transparent 31px);
+  }
+  .dial-ticks {
+    position: absolute; inset: 0; border-radius: 50%;
+    background:
+      conic-gradient(from -135deg, transparent 0deg, transparent calc(270deg / 8 - 1deg), var(--tick) calc(270deg / 8 - 1deg), var(--tick) calc(270deg / 8 + 1deg), transparent calc(270deg / 8 + 1deg)),
+      conic-gradient(from -135deg, transparent 0deg, transparent calc(270deg * 2 / 8 - 1deg), var(--tick) calc(270deg * 2 / 8 - 1deg), var(--tick) calc(270deg * 2 / 8 + 1deg), transparent calc(270deg * 2 / 8 + 1deg)),
+      conic-gradient(from -135deg, transparent 0deg, transparent calc(270deg * 3 / 8 - 1deg), var(--tick) calc(270deg * 3 / 8 - 1deg), var(--tick) calc(270deg * 3 / 8 + 1deg), transparent calc(270deg * 3 / 8 + 1deg)),
+      conic-gradient(from -135deg, transparent 0deg, transparent calc(270deg * 4 / 8 - 1deg), var(--tick) calc(270deg * 4 / 8 - 1deg), var(--tick) calc(270deg * 4 / 8 + 1deg), transparent calc(270deg * 4 / 8 + 1deg));
+    -webkit-mask: radial-gradient(circle, transparent 30px, black 31px, black 34px, transparent 35px);
+            mask: radial-gradient(circle, transparent 30px, black 31px, black 34px, transparent 35px);
+  }
+  .dial-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px; font-weight: 600; color: var(--ink);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+  }
+  .dial-value .lbl { display: block; font-size: 9px; color: var(--ink-3); margin-top: 1px; letter-spacing: 0.06em; }
+
+  .card-info { min-width: 0; }
+  .card-meta-top { display: flex; align-items: center; gap: 8px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+  .card-meta-top .pip { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+  .card-meta-top.idle .pip { background: var(--ink-3); box-shadow: none; }
+  .card-meta-top.warn .pip { background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 4px var(--accent-soft); } 50% { box-shadow: 0 0 0 7px transparent; } }
+
+  .card h3 { font-size: 18px; font-weight: 600; letter-spacing: -0.015em; margin-bottom: 6px; }
+  .card p { font-size: 14px; color: var(--ink-2); line-height: 1.5; margin-bottom: 14px; }
+
+  /* Tolerance bar — small graphical strip showing drift */
+  .tol-bar { height: 4px; background: var(--sunk); border-radius: 2px; position: relative; margin-bottom: 6px; }
+  .tol-bar .center { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--ink-3); }
+  .tol-bar .actual { position: absolute; top: 0; bottom: 0; background: var(--accent); border-radius: 2px; }
+  .tol-meta { display: flex; justify-content: space-between; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--ink-3); letter-spacing: 0.06em; }
+  .tol-meta .now { color: var(--ink); font-weight: 600; }
+</style>
+</head>
+<body data-mode="light">
+
+<div class="modeswitch">
+  <button class="active" data-mode="light">light</button>
+  <button data-mode="dark">dark</button>
+</div>
+
+<div class="app">
+
+  <aside class="sb">
+    <div class="sb-brand">
+      <div class="mark-cal">
+        <div class="ring"></div>
+        <div class="mark-inner" id="brand-mark"></div>
+      </div>
+      <span>Percy</span>
+    </div>
+    <div class="sb-link active">Home</div>
+    <div class="sb-link">Projects</div>
+    <div class="sb-link">Sources</div>
+    <div class="sb-link">Pipelines</div>
+    <div class="sb-section">Recent</div>
+    <div class="sb-link">Q3 Investor Update</div>
+    <div class="sb-link">Q3 Board Deck</div>
+    <div class="sb-link">LP Allocation Memo</div>
+    <div class="sb-section">Workspace</div>
+    <div class="sb-link">Members</div>
+    <div class="sb-link">Settings</div>
+  </aside>
+
+  <main>
+    <div class="topbar">
+      <div class="crumb"><strong>Crestwood Capital</strong> &nbsp;·&nbsp; Home</div>
+      <div class="topbar-right">
+        <div class="search">Search…<span class="kbd">⌘ K</span></div>
+        <div class="av">BS</div>
+      </div>
+    </div>
+
+    <div class="body">
+
+      <div class="greeting">
+        <div class="eyebrow">Friday · 14:32 · last sync 2 min ago</div>
+        <h1>187 refreshes today.<br/>All within tolerance.</h1>
+        <p>One pipeline drifted past threshold this morning. Visual QA caught it before it shipped.</p>
+      </div>
+
+      <!-- Status strip — like a calibration band -->
+      <div class="status-strip">
+        <div>
+          <div class="status-tickle">drift threshold</div>
+          <div class="status-num">2.4%</div>
+        </div>
+        <div class="status-line">
+          <div class="top">Q3 Board Deck — chart on slide 4 widened past acceptable bounds</div>
+          <div class="bot">It's been <span class="pop">flagged for your review</span> since 11:28.</div>
+        </div>
+        <button class="status-cta">Review</button>
+      </div>
+
+      <section>
+        <div class="section-head">
+          <h2>Your projects</h2>
+          <span class="new">+ New project</span>
+        </div>
+
+        <div class="grid">
+
+          <!-- Card 1 — high-freshness, live -->
+          <article class="card">
+            <div class="dial" style="--cal: 0.95turn">
+              <div class="dial-ring"></div>
+              <div class="dial-ticks"></div>
+              <div class="dial-value">2m<span class="lbl">SYNCED</span></div>
+            </div>
+            <div class="card-info">
+              <div class="card-meta-top"><span class="pip"></span>Live · auto · hourly</div>
+              <h3>Q3 Investor Update</h3>
+              <p>Quarterly LP letter. Sections 1–3 auto-refresh from <code style="font-family: 'JetBrains Mono', monospace; font-size: 13px;">snowflake.fund_metrics</code>; narrative is manual.</p>
+              <div class="tol-bar">
+                <div class="actual" style="left: 50%; width: 1.2%"></div>
+                <div class="center"></div>
+              </div>
+              <div class="tol-meta"><span>−2.4%</span><span class="now">+0.6% drift</span><span>+2.4%</span></div>
+            </div>
+          </article>
+
+          <!-- Card 2 — pending review -->
+          <article class="card">
+            <div class="dial" style="--cal: 0.7turn">
+              <div class="dial-ring"></div>
+              <div class="dial-ticks"></div>
+              <div class="dial-value">1h<span class="lbl">FLAGGED</span></div>
+            </div>
+            <div class="card-info">
+              <div class="card-meta-top warn"><span class="pip"></span>Drift · awaiting review</div>
+              <h3>Q3 Board Deck</h3>
+              <p>Slide 4 attribution chart grew 3.2% wider than tolerance allows. Underlying data is correct; the chart bound to a wider series than usual.</p>
+              <div class="tol-bar">
+                <div class="actual" style="left: 50%; width: 16%; background: var(--accent)"></div>
+                <div class="center"></div>
+              </div>
+              <div class="tol-meta"><span>−2.4%</span><span class="now" style="color: var(--accent)">+3.2% drift</span><span>+2.4%</span></div>
+            </div>
+          </article>
+
+          <!-- Card 3 — fresh -->
+          <article class="card">
+            <div class="dial" style="--cal: 0.92turn">
+              <div class="dial-ring"></div>
+              <div class="dial-ticks"></div>
+              <div class="dial-value">14m<span class="lbl">SYNCED</span></div>
+            </div>
+            <div class="card-info">
+              <div class="card-meta-top"><span class="pip"></span>Live · manual binding</div>
+              <h3>Portfolio Attribution — March</h3>
+              <p>Monthly attribution by sector, factor, and holding. Bound to two warehouse views.</p>
+              <div class="tol-bar">
+                <div class="actual" style="left: 50%; width: 0.8%"></div>
+                <div class="center"></div>
+              </div>
+              <div class="tol-meta"><span>−2.4%</span><span class="now">+0.4% drift</span><span>+2.4%</span></div>
+            </div>
+          </article>
+
+          <!-- Card 4 — idle/draft -->
+          <article class="card">
+            <div class="dial" style="--cal: 0turn">
+              <div class="dial-ring"></div>
+              <div class="dial-ticks"></div>
+              <div class="dial-value">—<span class="lbl">DRAFT</span></div>
+            </div>
+            <div class="card-info">
+              <div class="card-meta-top idle"><span class="pip"></span>Idle · no bindings yet</div>
+              <h3>LP Allocation Memo</h3>
+              <p>Internal recommendation for the Q4 fund-of-funds reallocation, ahead of the IC meeting.</p>
+              <div class="tol-bar">
+                <div class="center"></div>
+              </div>
+              <div class="tol-meta"><span style="color: var(--ink-3)">no live elements</span><span></span></div>
+            </div>
+          </article>
+
+          <!-- Card 5 -->
+          <article class="card">
+            <div class="dial" style="--cal: 0.85turn">
+              <div class="dial-ring"></div>
+              <div class="dial-ticks"></div>
+              <div class="dial-value">1d<span class="lbl">SYNCED</span></div>
+            </div>
+            <div class="card-info">
+              <div class="card-meta-top"><span class="pip"></span>Live · weekly</div>
+              <h3>Risk Committee Pack</h3>
+              <p>Weekly risk review for the firm's risk committee. Stress tests, exposure heatmaps, drawdown.</p>
+              <div class="tol-bar">
+                <div class="actual" style="left: 50%; width: 2%"></div>
+                <div class="center"></div>
+              </div>
+              <div class="tol-meta"><span>−2.4%</span><span class="now">+1.0% drift</span><span>+2.4%</span></div>
+            </div>
+          </article>
+
+          <!-- Card 6 -->
+          <article class="card">
+            <div class="dial" style="--cal: 0.88turn">
+              <div class="dial-ring"></div>
+              <div class="dial-ticks"></div>
+              <div class="dial-value">2d<span class="lbl">SYNCED</span></div>
+            </div>
+            <div class="card-info">
+              <div class="card-meta-top"><span class="pip"></span>Live · monthly · auto</div>
+              <h3>Monthly Performance Report</h3>
+              <p>Standardized monthly performance template, refreshed on the 1st of each month.</p>
+              <div class="tol-bar">
+                <div class="actual" style="left: 50%; width: 1.5%"></div>
+                <div class="center"></div>
+              </div>
+              <div class="tol-meta"><span>−2.4%</span><span class="now">+0.7% drift</span><span>+2.4%</span></div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<script src="../_shared.js"></script>
+<script>
+  document.querySelectorAll('#brand-mark').forEach(el => el.innerHTML = window.PERCY_MARK_SVG);
+  document.querySelectorAll('.modeswitch button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.body.dataset.mode = btn.dataset.mode;
+      document.documentElement.dataset.mode = btn.dataset.mode;
+      document.querySelectorAll('.modeswitch button').forEach(b => b.classList.toggle('active', b === btn));
+    });
+  });
+  document.documentElement.dataset.mode = 'light';
+</script>
+</body>
+</html>

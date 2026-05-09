@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>v3 / 09 — Blueprint</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  /* Blueprint — engineering drafting. Light mode is white drafting paper with
+     Prussian-blue ink lines + dimension callouts. Dark mode is the inverse —
+     classic blueprint cyan-on-blue. Picks up gemma's "Blueprint" suggestion
+     from the LLM round. */
+
+  :root[data-mode="light"] {
+    --bg: #FAFAF7;
+    --surface: #FFFFFF;
+    --sunk: #F0F0EC;
+    --ink: #0E1E3F;        /* Prussian blue ink */
+    --ink-2: #2D3F5F;
+    --ink-3: #6E80A0;
+    --line: rgba(14,30,63,0.16);
+    --line-strong: rgba(14,30,63,0.32);
+    --accent: #B23A2C;     /* drafting red — error/callout */
+    --accent-soft: rgba(178,58,44,0.14);
+    --grid: rgba(14,30,63,0.04);
+  }
+  :root[data-mode="dark"] {
+    --bg: #0E1E3F;
+    --surface: #142849;
+    --sunk: #081633;
+    --ink: #D9E5FA;
+    --ink-2: #92AFD8;
+    --ink-3: #4F6E96;
+    --line: rgba(217,229,250,0.22);
+    --line-strong: rgba(217,229,250,0.40);
+    --accent: #FFAA88;
+    --accent-soft: rgba(255,170,136,0.18);
+    --grid: rgba(217,229,250,0.04);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.55;
+    font-size: 14px;
+    transition: background 200ms, color 200ms;
+    /* Subtle drafting-paper grid on the body */
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+  a { color: inherit; text-decoration: none; }
+  .mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+
+  .modeswitch { position: fixed; top: 16px; right: 16px; z-index: 99; background: var(--bg); border: 1px solid var(--line-strong); padding: 0; display: flex; }
+  .modeswitch button { background: transparent; border: 0; color: var(--ink-2); font: inherit; font-size: 11px; padding: 5px 12px; cursor: pointer; font-family: 'JetBrains Mono', monospace; }
+  .modeswitch button.active { background: var(--ink); color: var(--bg); font-weight: 700; }
+
+  /* Topbar — drafting title block */
+  .topbar { display: grid; grid-template-columns: auto 1fr auto; align-items: center; padding: 16px 32px; border-bottom: 1.5px solid var(--ink); gap: 24px; }
+  .brand { display: flex; align-items: center; gap: 12px; font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+  .brand .mark { width: 22px; height: 22px; color: var(--ink); }
+  .titleblock { display: grid; grid-template-columns: repeat(4, auto); gap: 24px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.06em; }
+  .titleblock .key { color: var(--ink-3); display: block; font-size: 9px; margin-bottom: 2px; }
+  .titleblock .val { color: var(--ink); font-weight: 600; }
+  .av { width: 30px; height: 30px; background: var(--ink); color: var(--bg); display: grid; place-items: center; font-size: 11px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+
+  /* Page */
+  .page { padding: 56px 32px 80px; max-width: 1240px; margin: 0 auto; }
+
+  /* Status drawing — calibration ruler at top */
+  .ruler { position: relative; height: 24px; margin-bottom: 24px; }
+  .ruler::before, .ruler::after { content: ''; position: absolute; left: 0; right: 0; height: 1px; background: var(--ink); }
+  .ruler::before { top: 50%; }
+  .ruler-marks { position: absolute; inset: 0; display: flex; justify-content: space-between; }
+  .ruler-marks span { width: 1px; background: var(--ink); }
+  .ruler-marks span:nth-child(odd) { height: 100%; }
+  .ruler-marks span:nth-child(even) { height: 50%; align-self: end; }
+  .ruler-label { position: absolute; left: 50%; transform: translateX(-50%); top: -22px; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.06em; padding: 0 8px; background: var(--bg); }
+  .ruler-pin { position: absolute; top: 50%; transform: translate(-50%, -50%); width: 10px; height: 10px; background: var(--accent); border: 1.5px solid var(--ink); border-radius: 50%; }
+
+  /* Headline */
+  .head { margin-bottom: 56px; }
+  .head .eyebrow { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--accent); font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 14px; }
+  .head h1 { font-size: 52px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.05; margin-bottom: 14px; }
+  .head p { font-size: 16px; color: var(--ink-2); max-width: 640px; line-height: 1.55; }
+
+  /* Drawing-style callout — leader line + label */
+  .callout { position: relative; padding-top: 4px; }
+  .callout-leader {
+    position: absolute; right: 100%; top: 50%; width: 80px; height: 1.5px; background: var(--accent);
+  }
+  .callout-leader::before { content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  .callout-leader::after { content: ''; position: absolute; right: 0; top: -3px; border-left: 6px solid var(--accent); border-top: 4px solid transparent; border-bottom: 4px solid transparent; }
+  .callout-tag {
+    position: absolute; right: calc(100% + 84px); top: 50%; transform: translateY(-50%);
+    background: var(--accent); color: var(--bg); padding: 3px 8px;
+    font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap;
+  }
+
+  /* Project rows — drawing entries */
+  .section-head { display: flex; align-items: baseline; justify-content: space-between; padding-bottom: 8px; border-bottom: 1px solid var(--line-strong); margin-bottom: 16px; }
+  .section-head h2 { font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.08em; }
+  .section-head .new { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--accent); font-weight: 600; cursor: pointer; }
+
+  .row {
+    display: grid; grid-template-columns: 60px 1fr 200px 120px 120px;
+    gap: 24px; padding: 14px 0;
+    border-bottom: 1px solid var(--line);
+    align-items: center; cursor: pointer;
+    position: relative;
+  }
+  .row:hover { background: var(--surface); }
+  .row.flagged { background: var(--accent-soft); }
+  .row-num { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .row-title h3 { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 2px; }
+  .row-title p { font-size: 12px; color: var(--ink-2); }
+  .row-owner { font-size: 13px; color: var(--ink-2); font-family: 'JetBrains Mono', monospace; }
+  .row-when { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .row-status { display: flex; align-items: center; gap: 6px; justify-content: flex-end; font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600; }
+  .row-status.live { color: var(--ink); }
+  .row-status.flag { color: var(--accent); }
+  .row-status.idle { color: var(--ink-3); }
+  .row-status .ind { width: 8px; height: 8px; border: 1.5px solid currentColor; border-radius: 50%; }
+  .row-status.live .ind { background: currentColor; }
+
+  /* Dimension lines between sections */
+  .dim {
+    position: relative;
+    height: 28px;
+    margin: 32px 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .dim::before { content: ''; position: absolute; left: 0; top: 50%; right: 50%; height: 1px; background: var(--ink-3); margin-right: 60px; }
+  .dim::after { content: ''; position: absolute; right: 0; top: 50%; left: 50%; height: 1px; background: var(--ink-3); margin-left: 60px; }
+  .dim-label {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.08em;
+    background: var(--bg);
+    padding: 0 16px;
+    z-index: 1;
+  }
+
+  /* Footer drawing */
+  .meta { padding-top: 24px; border-top: 1.5px solid var(--ink); margin-top: 48px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+  .meta .key { display: block; color: var(--ink-3); font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+  .meta .val { color: var(--ink); }
+</style>
+</head>
+<body data-mode="light">
+
+<div class="modeswitch">
+  <button class="active" data-mode="light">light</button>
+  <button data-mode="dark">dark</button>
+</div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" id="brand-mark"></span>
+    <span>Percy</span>
+  </div>
+  <div class="titleblock">
+    <span><span class="key">workspace</span><span class="val">Crestwood Capital</span></span>
+    <span><span class="key">view</span><span class="val">Projects</span></span>
+    <span><span class="key">date</span><span class="val">2026·05·09</span></span>
+    <span><span class="key">time</span><span class="val">14:32 ET</span></span>
+  </div>
+  <div class="av">BS</div>
+</header>
+
+<div class="page">
+
+  <!-- Calibration ruler — visual placement of "where we are" today -->
+  <div class="ruler">
+    <span class="ruler-label">drift tolerance · 187 refreshes today</span>
+    <div class="ruler-marks">
+      <span></span><span></span><span></span><span></span><span></span>
+      <span></span><span></span><span></span><span></span><span></span>
+      <span></span><span></span><span></span><span></span><span></span>
+      <span></span><span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <span class="ruler-pin" style="left: 78%;"></span>
+  </div>
+
+  <section class="head">
+    <div class="eyebrow">section A · home — fri 14:32</div>
+    <h1>187 refreshes within tolerance.</h1>
+    <p>One pipeline drifted past threshold this morning — slide 4 of the Q3 Board Deck. Visual QA caught it before it shipped. Everything else is clean.</p>
+  </section>
+
+  <div class="section-head">
+    <h2>section B · projects (24)</h2>
+    <span class="new">+ new project</span>
+  </div>
+
+  <div class="row">
+    <span class="row-num">B—001</span>
+    <div class="row-title">
+      <h3>Q3 Investor Update</h3>
+      <p>Quarterly LP letter · 6 slides · 3 live elements bound to <span class="mono">snowflake.fund_metrics</span></p>
+    </div>
+    <span class="row-owner">@sara.malek</span>
+    <span class="row-when">14:32 (2m)</span>
+    <span class="row-status live"><span class="ind"></span>LIVE</span>
+  </div>
+
+  <div class="row flagged" style="position: relative;">
+    <span class="row-num">B—002</span>
+    <div class="row-title callout">
+      <span class="callout-tag">drift +3.2%</span>
+      <span class="callout-leader"></span>
+      <h3>Q3 Board Deck</h3>
+      <p>Slide 4 attribution chart drifted past tolerance · underlying data correct · awaiting review</p>
+    </div>
+    <span class="row-owner">@amir.k</span>
+    <span class="row-when">13:32 (1h)</span>
+    <span class="row-status flag"><span class="ind"></span>FLAGGED</span>
+  </div>
+
+  <div class="row">
+    <span class="row-num">B—003</span>
+    <div class="row-title">
+      <h3>Portfolio Attribution — March</h3>
+      <p>Monthly attribution by sector, factor, holding · 2 warehouse views</p>
+    </div>
+    <span class="row-owner">@ben.steel</span>
+    <span class="row-when">14:18 (14m)</span>
+    <span class="row-status live"><span class="ind"></span>LIVE</span>
+  </div>
+
+  <div class="row">
+    <span class="row-num">B—004</span>
+    <div class="row-title">
+      <h3>LP Allocation Memo</h3>
+      <p>Internal Q4 reallocation memo · IC meeting prep · no live bindings</p>
+    </div>
+    <span class="row-owner">@sara.malek</span>
+    <span class="row-when">yesterday</span>
+    <span class="row-status idle"><span class="ind"></span>DRAFT</span>
+  </div>
+
+  <div class="row">
+    <span class="row-num">B—005</span>
+    <div class="row-title">
+      <h3>Risk Committee Pack</h3>
+      <p>Weekly risk review · stress tests · exposure heatmaps · drawdown</p>
+    </div>
+    <span class="row-owner">@carla.l</span>
+    <span class="row-when">yesterday</span>
+    <span class="row-status live"><span class="ind"></span>LIVE</span>
+  </div>
+
+  <div class="row">
+    <span class="row-num">B—006</span>
+    <div class="row-title">
+      <h3>Monthly Performance Report</h3>
+      <p>Standardized monthly perf · auto-refresh on the 1st of each month</p>
+    </div>
+    <span class="row-owner">auto</span>
+    <span class="row-when">2d ago</span>
+    <span class="row-status live"><span class="ind"></span>LIVE</span>
+  </div>
+
+  <div class="dim"><span class="dim-label">— activity since 09:14 —</span></div>
+
+  <div class="row" style="grid-template-columns: 80px 1fr; gap: 24px;">
+    <span class="row-when">14:32</span>
+    <span style="font-size: 14px;">Q3 Investor Update auto-refreshed cleanly · diff: AUM 4.18B → 4.21B · 0 regressions</span>
+  </div>
+  <div class="row" style="grid-template-columns: 80px 1fr; gap: 24px;">
+    <span class="row-when">11:28</span>
+    <span style="font-size: 14px;">Visual QA flagged 3 drift warnings on Q3 Board Deck slide 4 · auto-resolved within tolerance</span>
+  </div>
+  <div class="row" style="grid-template-columns: 80px 1fr; gap: 24px;">
+    <span class="row-when">10:42</span>
+    <span style="font-size: 14px;">Sara M. bound the AUM stat to <span class="mono">snowflake.fund_metrics</span> · auto-refresh enabled</span>
+  </div>
+
+  <div class="meta">
+    <span><span class="key">drawn by</span><span class="val">Percy v0.4 · 2026.05.09</span></span>
+    <span><span class="key">scale</span><span class="val">1 row : 1 project</span></span>
+    <span><span class="key">sources</span><span class="val">snowflake · 6</span></span>
+    <span><span class="key">approved</span><span class="val">visual qa pass</span></span>
+  </div>
+
+</div>
+
+<script src="../_shared.js"></script>
+<script>
+  document.querySelectorAll('#brand-mark').forEach(el => el.innerHTML = window.PERCY_MARK_SVG);
+  document.querySelectorAll('.modeswitch button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.body.dataset.mode = btn.dataset.mode;
+      document.documentElement.dataset.mode = btn.dataset.mode;
+      document.querySelectorAll('.modeswitch button').forEach(b => b.classList.toggle('active', b === btn));
+    });
+  });
+  document.documentElement.dataset.mode = 'light';
+</script>
+</body>
+</html>

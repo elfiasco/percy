@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>v3 / 07 — Terminal</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  /* Terminal — JetBrains Mono everywhere, box-drawing characters for structure,
+     amber-phosphor accent in dark mode. Like a power user's TUI. The least
+     "design" of the ten — leans entirely on type, alignment, and characters. */
+
+  :root[data-mode="light"] {
+    --bg: #FBFAF7;
+    --surface: #F4F3EC;
+    --ink: #15130E;
+    --ink-2: #4A463A;
+    --ink-3: #7E7866;
+    --line: rgba(21,19,14,0.18);
+    --line-soft: rgba(21,19,14,0.10);
+    --accent: #B26500;
+    --accent-soft: rgba(178,101,0,0.12);
+  }
+  :root[data-mode="dark"] {
+    --bg: #0E0D0A;
+    --surface: #1A1812;
+    --ink: #F4E8C8;
+    --ink-2: #B5A88A;
+    --ink-3: #6E6651;
+    --line: rgba(244,232,200,0.16);
+    --line-soft: rgba(244,232,200,0.08);
+    --accent: #FFB347;
+    --accent-soft: rgba(255,179,71,0.16);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    transition: background 200ms, color 200ms;
+    font-feature-settings: 'liga' 0;   /* explicit characters, no ligatures */
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .modeswitch { position: fixed; top: 12px; right: 12px; z-index: 99; background: var(--bg); border: 1px solid var(--line); padding: 0; display: flex; font-family: 'JetBrains Mono', monospace; }
+  .modeswitch button { background: transparent; border: 0; color: var(--ink-2); font: inherit; font-size: 11px; padding: 5px 10px; cursor: pointer; }
+  .modeswitch button.active { background: var(--ink); color: var(--bg); font-weight: 700; }
+
+  /* Layout — pure CSS, no rounded corners */
+  .topbar { display: grid; grid-template-columns: auto 1fr auto; align-items: center; padding: 14px 24px; border-bottom: 1px solid var(--line); gap: 24px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 700; letter-spacing: -0.01em; }
+  .brand .mark { width: 22px; height: 22px; color: var(--ink); }
+  .brand .ver { color: var(--ink-3); font-weight: 400; font-size: 11px; }
+  .crumb { display: flex; gap: 0; align-items: center; color: var(--ink-2); font-size: 12px; }
+  .crumb .here { color: var(--ink); font-weight: 600; }
+  .topbar-right { color: var(--ink-3); font-size: 11px; display: flex; gap: 16px; align-items: center; }
+  .av { width: 28px; height: 28px; background: var(--ink); color: var(--bg); display: grid; place-items: center; font-size: 11px; font-weight: 700; }
+
+  /* Page */
+  .page { padding: 32px 24px 64px; max-width: 1080px; margin: 0 auto; }
+
+  pre.ascii { color: var(--ink); white-space: pre; line-height: 1.4; margin: 0; }
+  pre.ascii .accent { color: var(--accent); }
+  pre.ascii .dim { color: var(--ink-3); }
+  pre.ascii .label { color: var(--ink-2); }
+
+  .section { margin: 28px 0; }
+  .section-head {
+    color: var(--ink-3);
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--line-soft);
+    padding-bottom: 6px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    display: flex; justify-content: space-between;
+  }
+  .section-head .new { color: var(--accent); cursor: pointer; }
+
+  .row { display: grid; grid-template-columns: 28px 1fr 180px 100px 80px; gap: 18px; padding: 8px 0; align-items: baseline; cursor: pointer; }
+  .row:hover { background: var(--surface); }
+  .row .num { color: var(--ink-3); font-size: 11px; }
+  .row .name { color: var(--ink); }
+  .row .name strong { font-weight: 700; }
+  .row .desc { color: var(--ink-2); font-size: 12px; margin-top: 2px; }
+  .row .who { color: var(--ink-2); font-size: 12px; }
+  .row .when { color: var(--ink-3); font-size: 11px; text-align: right; }
+  .row .stat { font-size: 11px; text-align: right; }
+  .row .stat.live { color: var(--accent); font-weight: 600; }
+  .row .stat.flag { color: var(--accent); font-weight: 700; }
+  .row .stat.idle { color: var(--ink-3); }
+
+  .greet { font-size: 18px; line-height: 1.45; color: var(--ink); margin-bottom: 18px; }
+  .greet .accent { color: var(--accent); }
+  .greet .meta { color: var(--ink-3); font-size: 11px; margin-bottom: 8px; }
+
+  .alert { background: var(--accent-soft); border-left: 2px solid var(--accent); padding: 12px 16px; margin: 24px 0; }
+  .alert .head { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); margin-bottom: 4px; }
+  .alert .body { color: var(--ink); }
+
+  .footnote { color: var(--ink-3); font-size: 11px; padding-top: 24px; border-top: 1px solid var(--line); margin-top: 32px; display: flex; justify-content: space-between; }
+</style>
+</head>
+<body data-mode="dark">
+
+<div class="modeswitch">
+  <button data-mode="light">light</button>
+  <button class="active" data-mode="dark">dark</button>
+</div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" id="brand-mark"></span>
+    <span>percy <span class="ver">v0.4 · build 2026.05.09</span></span>
+  </div>
+  <div class="crumb">
+    <span>crestwood ~/</span><span class="here">home</span>
+  </div>
+  <div class="topbar-right">
+    <span>14:32 ET</span>
+    <span>·</span>
+    <span>187/187 ok</span>
+    <div class="av">BS</div>
+  </div>
+</header>
+
+<div class="page">
+
+  <div class="greet">
+    <div class="meta">$ percy status --since=09:14</div>
+    <span class="accent">›</span> 187 refreshes today. <span class="accent">1 flagged</span>. Q3 board deck wants you.
+  </div>
+
+  <pre class="ascii">
+<span class="dim">┌─ workspace ─────────────────────────────────────────────────────────────────┐</span>
+<span class="dim">│</span> <span class="label">org    </span> crestwood-capital                                                <span class="dim">│</span>
+<span class="dim">│</span> <span class="label">plan   </span> team                                                              <span class="dim">│</span>
+<span class="dim">│</span> <span class="label">members</span> 12 · <span class="accent">3 active</span>                                                  <span class="dim">│</span>
+<span class="dim">│</span> <span class="label">sources</span> 6 healthy                                                        <span class="dim">│</span>
+<span class="dim">└─────────────────────────────────────────────────────────────────────────────┘</span>
+  </pre>
+
+  <div class="alert">
+    <div class="head">! drift past tolerance</div>
+    <div class="body">q3-board-deck / slide 4 / chart_attribution → 3.2% wider than allowed. underlying data is correct. <a>review →</a></div>
+  </div>
+
+  <section class="section">
+    <div class="section-head"><span># projects · sort=updated_desc</span><span class="new">+ new</span></div>
+    <div class="row">
+      <span class="num">001</span>
+      <div>
+        <div class="name"><strong>q3-investor-update</strong></div>
+        <div class="desc">quarterly LP letter · 6 slides · 3 live elements (snowflake.fund_metrics)</div>
+      </div>
+      <span class="who">@sara.malek</span>
+      <span class="when">14:32  2m</span>
+      <span class="stat live">● LIVE</span>
+    </div>
+    <div class="row">
+      <span class="num">002</span>
+      <div>
+        <div class="name"><strong>q3-board-deck</strong></div>
+        <div class="desc">quarterly board deck · 18 slides · slide-4 chart drift +3.2%</div>
+      </div>
+      <span class="who">@amir.k</span>
+      <span class="when">13:32  1h</span>
+      <span class="stat flag">! FLAGGED</span>
+    </div>
+    <div class="row">
+      <span class="num">003</span>
+      <div>
+        <div class="name"><strong>portfolio-attribution-mar</strong></div>
+        <div class="desc">monthly attribution · sector / factor / holding · 2 warehouse views</div>
+      </div>
+      <span class="who">@ben.steel</span>
+      <span class="when">14:18  14m</span>
+      <span class="stat live">● LIVE</span>
+    </div>
+    <div class="row">
+      <span class="num">004</span>
+      <div>
+        <div class="name"><strong>lp-allocation-memo</strong></div>
+        <div class="desc">internal Q4 reallocation memo · IC meeting prep · no live bindings</div>
+      </div>
+      <span class="who">@sara.malek</span>
+      <span class="when">yesterday</span>
+      <span class="stat idle">○ DRAFT</span>
+    </div>
+    <div class="row">
+      <span class="num">005</span>
+      <div>
+        <div class="name"><strong>risk-committee-pack</strong></div>
+        <div class="desc">weekly risk review · stress tests · exposure heatmaps · drawdown</div>
+      </div>
+      <span class="who">@carla.l</span>
+      <span class="when">yesterday</span>
+      <span class="stat live">● LIVE</span>
+    </div>
+    <div class="row">
+      <span class="num">006</span>
+      <div>
+        <div class="name"><strong>monthly-performance-report</strong></div>
+        <div class="desc">standardized monthly perf · auto-refresh on the 1st of each month</div>
+      </div>
+      <span class="who">auto</span>
+      <span class="when">2d ago</span>
+      <span class="stat idle">● LIVE</span>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><span># activity · since=09:14</span><span><a>view all →</a></span></div>
+    <pre class="ascii">
+<span class="dim">14:32</span>  q3-investor-update auto-refresh   <span class="accent">ok</span>   diff: AUM 4.18B → 4.21B  netflow +118M
+<span class="dim">11:28</span>  q3-board-deck visual-qa            <span class="accent">!!</span>   3 drift warnings on slide 4
+<span class="dim">10:42</span>  sara.malek bind                          stat:aum → snowflake.fund_metrics
+<span class="dim">09:30</span>  scheduled refresh sweep            <span class="accent">ok</span>   11 projects · 0 regressions
+<span class="dim">09:14</span>  scheduled refresh sweep            <span class="accent">ok</span>   3 projects
+    </pre>
+  </section>
+
+  <div class="footnote">
+    <span>$ percy --help · ⌘K to search · ?:keys</span>
+    <span>percy 0.4.0 · build 2026.05.09</span>
+  </div>
+
+</div>
+
+<script src="../_shared.js"></script>
+<script>
+  document.querySelectorAll('#brand-mark').forEach(el => el.innerHTML = window.PERCY_MARK_SVG);
+  document.querySelectorAll('.modeswitch button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.body.dataset.mode = btn.dataset.mode;
+      document.documentElement.dataset.mode = btn.dataset.mode;
+      document.querySelectorAll('.modeswitch button').forEach(b => b.classList.toggle('active', b === btn));
+    });
+  });
+  document.documentElement.dataset.mode = 'dark';
+</script>
+</body>
+</html>

@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Percy — Design variations</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: #FAFAF7;
+    color: #1A1A18;
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+    height: 100vh;
+    overflow: hidden;
+  }
+  a { color: inherit; text-decoration: none; }
+
+  /* Top bar with variation switchers */
+  .top {
+    height: 64px;
+    background: #1A1A18;
+    color: #F5F5F0;
+    display: flex;
+    align-items: center;
+    padding: 0 24px;
+    gap: 24px;
+    border-bottom: 1px solid rgba(245,245,240,0.08);
+  }
+  .top-title {
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: #F5F5F0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .top-title .label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #8A8A85;
+  }
+  .switcher {
+    display: flex;
+    gap: 4px;
+    margin-left: auto;
+    background: rgba(245,245,240,0.06);
+    padding: 4px;
+    border-radius: 10px;
+  }
+  .switcher button {
+    background: transparent;
+    border: none;
+    color: #A8A8A2;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 7px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .switcher button:hover { color: #F5F5F0; }
+  .switcher button.active {
+    background: #F5F5F0;
+    color: #1A1A18;
+    font-weight: 600;
+  }
+  .switcher button .key {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: #6E6E6A;
+    background: rgba(0,0,0,0.15);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .switcher button.active .key { background: rgba(0,0,0,0.10); color: #5C5C56; }
+
+  .meta {
+    margin-left: 16px;
+    font-size: 12px;
+    color: #8A8A85;
+    font-family: 'JetBrains Mono', monospace;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .meta a {
+    color: #C29C45;
+    text-decoration: underline;
+  }
+
+  /* The frame */
+  iframe {
+    border: 0;
+    width: 100%;
+    height: calc(100vh - 64px);
+    background: #FAFAF7;
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="top-title">
+    <span class="label">Variations</span>
+    <span>Compare design directions side-by-side · same dashboard view</span>
+  </div>
+  <div class="switcher" id="switcher">
+    <button data-src="A-champagne-light.html" class="active"><span class="key">1</span>A · Champagne Light</button>
+    <button data-src="B-carbon-dark.html"><span class="key">2</span>B · Carbon Dark</button>
+    <button data-src="C-indigo-trust.html"><span class="key">3</span>C · Indigo Trust</button>
+    <button data-src="D-verdigris-data.html"><span class="key">4</span>D · Verdigris</button>
+    <button data-src="E-editorial-serif.html"><span class="key">5</span>E · Editorial Serif</button>
+  </div>
+  <div class="meta">
+    <a href="../index.html">← back to mockup index</a>
+  </div>
+</header>
+
+<iframe id="frame" src="A-champagne-light.html"></iframe>
+
+<script>
+  const frame = document.getElementById('frame');
+  const switcher = document.getElementById('switcher');
+  switcher.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-src]');
+    if (!btn) return;
+    switcher.querySelectorAll('button').forEach(b => b.classList.toggle('active', b === btn));
+    frame.src = btn.dataset.src;
+  });
+  // Keyboard 1-5 to switch
+  document.addEventListener('keydown', (e) => {
+    const idx = parseInt(e.key, 10);
+    if (idx >= 1 && idx <= 5) {
+      const btn = switcher.querySelectorAll('button')[idx - 1];
+      if (btn) btn.click();
+    }
+  });
+</script>
+
+</body>
+</html>

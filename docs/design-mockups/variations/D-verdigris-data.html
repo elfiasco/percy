@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Variation D — Verdigris</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    /* Warm cream paper, but accent leans to verdigris (the existing teal) */
+    --bg-base: #F8F7F2;
+    --bg-surface: #FFFFFF;
+    --bg-sunk: #EFEFEA;
+    --text-primary: #1A1F1E;
+    --text-secondary: #5C625F;
+    --text-tertiary: #8A8F8C;
+    --border-subtle: rgba(26,31,30,0.06);
+    --border-default: rgba(26,31,30,0.10);
+    --border-strong: rgba(26,31,30,0.18);
+    /* Verdigris is now the primary accent */
+    --accent-50: #DEF1ED;
+    --accent-100: #B8DDD5;
+    --accent-500: #2E6E66;
+    --accent-600: #245752;
+    --accent-700: #1A4540;
+    /* Champagne demoted to a warm secondary highlight */
+    --warm-50: #FAF3DC;
+    --warm-500: #C29C45;
+    --warm-700: #8B6822;
+    --success-50: #E6F0E8;
+    --success-700: #2F5A36;
+    --warning-50: #F4EAD3;
+    --warning-700: #6B4915;
+    --error-50: #F2DCD8;
+    --error-700: #6B2A20;
+    --shadow-card: 0 1px 3px rgba(26,31,30,0.06), 0 1px 2px rgba(26,31,30,0.04);
+    --shadow-pop: 0 8px 24px rgba(26,31,30,0.10), 0 2px 6px rgba(26,31,30,0.05);
+    --font-display: 'Inter', system-ui, sans-serif;
+    --font-body: 'Inter', system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg-base); color: var(--text-primary); font-family: var(--font-body); -webkit-font-smoothing: antialiased; line-height: 1.5; font-size: 14px; overflow-x: hidden; }
+  a { color: inherit; text-decoration: none; }
+  .badge { position: fixed; top: 16px; right: 16px; z-index: 99; background: var(--accent-500); color: white; padding: 6px 12px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; border-radius: 999px; box-shadow: var(--shadow-pop); }
+  .app { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
+  .sidebar { background: var(--bg-base); border-right: 1px solid var(--border-subtle); padding: 16px 0; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+  .sb-brand { display: flex; align-items: center; gap: 10px; padding: 6px 16px 16px; font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+  .sb-brand .mark { width: 22px; height: 22px; color: var(--accent-500); display: inline-block; }
+  .sb-section { padding: 16px 16px 6px; font-size: 11px; font-weight: 600; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.08em; }
+  .sb-link { display: flex; align-items: center; gap: 10px; padding: 7px 16px; color: var(--text-secondary); font-size: 14px; font-weight: 500; border-left: 2px solid transparent; cursor: pointer; }
+  .sb-link:hover { background: var(--bg-sunk); color: var(--text-primary); }
+  .sb-link.active { background: var(--accent-50); border-left-color: var(--accent-500); color: var(--accent-700); font-weight: 600; }
+  .sb-link .count { margin-left: auto; font-size: 12px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+  .sb-link.active .count { color: var(--accent-700); }
+  .sb-workspace { margin: 12px 12px 16px; padding: 10px 12px; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 10px; box-shadow: var(--shadow-card); cursor: pointer; }
+  .sb-workspace .ws-name { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .sb-workspace .ws-meta { font-size: 12px; color: var(--text-tertiary); margin-top: 2px; }
+  .ws-dot { width: 8px; height: 8px; border-radius: 4px; background: var(--accent-500); }
+  .main { padding: 0 32px 64px; max-width: 1280px; }
+  .topbar { height: 64px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border-subtle); margin: 0 -32px 32px; padding: 0 32px; background: var(--bg-base); position: sticky; top: 0; z-index: 10; }
+  .topbar-left .crumb { color: var(--text-primary); font-weight: 500; font-size: 14px; }
+  .topbar-right { display: flex; align-items: center; gap: 8px; }
+  .search-trigger { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 8px; font-size: 13px; color: var(--text-tertiary); min-width: 240px; cursor: pointer; }
+  .search-trigger .kbd { margin-left: auto; font-size: 11px; font-family: 'JetBrains Mono', monospace; color: var(--text-tertiary); background: var(--bg-sunk); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border-subtle); }
+  .icon-btn { width: 36px; height: 36px; border-radius: 8px; display: grid; place-items: center; color: var(--text-secondary); background: transparent; border: 1px solid var(--border-subtle); cursor: pointer; }
+  .icon-btn:hover { background: var(--bg-surface); color: var(--text-primary); }
+  .avatar { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, var(--accent-500), var(--warm-500)); display: grid; place-items: center; color: white; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; border: none; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 500; letter-spacing: -0.005em; border-radius: 8px; padding: 8px 14px; transition: transform 120ms, background 120ms; }
+  .btn-primary { background: linear-gradient(180deg, var(--accent-500), var(--accent-600)); color: white; box-shadow: inset 0 1px 0 rgba(255,255,255,0.16), 0 1px 2px rgba(0,0,0,0.08), 0 4px 8px rgba(46,110,102,0.18); }
+  .btn-primary:hover { background: linear-gradient(180deg, var(--accent-600), var(--accent-700)); transform: translateY(-1px); }
+  .greeting { margin-bottom: 32px; }
+  .greeting h1 { font-family: var(--font-display); font-size: 32px; font-weight: 600; letter-spacing: -0.025em; margin-bottom: 6px; }
+  .greeting p { font-size: 15px; color: var(--text-secondary); }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 40px; }
+  .stat-card { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 20px; box-shadow: var(--shadow-card); }
+  .stat-card .label { font-size: 12px; color: var(--text-tertiary); margin-bottom: 8px; font-weight: 500; }
+  .stat-card .value { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.1; font-family: var(--font-display); }
+  .stat-card .delta { font-size: 12px; margin-top: 6px; color: var(--success-700); font-weight: 500; }
+  .stat-card .delta.flat { color: var(--text-tertiary); }
+  .section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 16px; gap: 16px; }
+  .section-head h2 { font-family: var(--font-display); font-size: 19px; font-weight: 600; letter-spacing: -0.015em; }
+  .projects { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .project-card { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow-card); transition: transform 200ms, box-shadow 200ms; cursor: pointer; }
+  .project-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-pop); }
+  .project-thumb { aspect-ratio: 16/10; background: var(--bg-sunk); border-bottom: 1px solid var(--border-subtle); display: flex; align-items: center; justify-content: center; }
+  .thumb-art { width: 80%; height: 80%; background: var(--bg-surface); border-radius: 6px; box-shadow: var(--shadow-card); padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .thumb-bar { height: 5px; background: var(--text-secondary); border-radius: 3px; opacity: 0.55; }
+  .thumb-bar.short { width: 40%; } .thumb-bar.med { width: 65%; } .thumb-bar.full { width: 90%; }
+  .thumb-chart { margin-top: auto; display: flex; align-items: flex-end; gap: 4px; height: 40%; }
+  .thumb-chart > span { flex: 1; background: linear-gradient(180deg, var(--accent-500), var(--accent-700)); border-radius: 2px 2px 0 0; opacity: 0.75; }
+  .project-card.data .thumb-chart > span { background: linear-gradient(180deg, var(--warm-500), var(--warm-700)); }
+  .thumb-chart > span:nth-child(1){height:30%}.thumb-chart > span:nth-child(2){height:60%}.thumb-chart > span:nth-child(3){height:45%}.thumb-chart > span:nth-child(4){height:80%}.thumb-chart > span:nth-child(5){height:65%}.thumb-chart > span:nth-child(6){height:92%}
+  .project-meta { padding: 14px 16px 16px; }
+  .project-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+  .project-info { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-tertiary); }
+  .project-info .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--text-tertiary); }
+  .pill { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+  .pill.success { background: var(--success-50); color: var(--success-700); }
+  .pill.warn { background: var(--warning-50); color: var(--warning-700); }
+  .pill.data { background: var(--accent-50); color: var(--accent-700); }
+  .pill.neutral { background: var(--bg-sunk); color: var(--text-secondary); }
+  .pill.warm { background: var(--warm-50); color: var(--warm-700); }
+  .pill .ind { width: 6px; height: 6px; border-radius: 3px; background: currentColor; }
+  .icon-svg { width: 16px; height: 16px; stroke-width: 1.75; }
+</style>
+</head>
+<body>
+<div class="badge">D · Verdigris</div>
+<div class="app">
+  <aside class="sidebar">
+    <div class="sb-brand"><span class="mark" id="brand-mark"></span><span>Percy</span></div>
+    <div class="sb-workspace">
+      <div class="ws-name"><span class="ws-dot"></span>Crestwood Capital</div>
+      <div class="ws-meta">12 members · Team plan</div>
+    </div>
+    <div class="sb-link active"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>Home</div>
+    <div class="sb-link"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 012-2h4l2 3h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>Projects<span class="count">24</span></div>
+    <div class="sb-link"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>Templates<span class="count">8</span></div>
+    <div class="sb-link"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0018 0V5"/><path d="M3 12a9 3 0 0018 0"/></svg>Data sources<span class="count">6</span></div>
+    <div class="sb-link"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 4 5-5"/></svg>Pipelines<span class="count">3</span></div>
+    <div class="sb-section">Recent</div>
+    <div class="sb-link"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Q3 Investor Update</div>
+    <div class="sb-link"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Q3 Board Deck</div>
+    <div class="sb-link"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>LP Allocation Memo</div>
+  </aside>
+  <main class="main">
+    <div class="topbar">
+      <div class="topbar-left"><span class="crumb">Home</span></div>
+      <div class="topbar-right">
+        <div class="search-trigger"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>Search…<span class="kbd">⌘ K</span></div>
+        <button class="icon-btn"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg></button>
+        <div class="avatar">BS</div>
+      </div>
+    </div>
+    <div class="greeting"><h1>Good afternoon, Ben</h1><p>Here's what changed since you were last here.</p></div>
+    <div class="stats">
+      <div class="stat-card"><div class="label">Active projects</div><div class="value">24</div><div class="delta">3 new this week</div></div>
+      <div class="stat-card"><div class="label">Auto-refreshes today</div><div class="value">187</div><div class="delta">All passed visual QA</div></div>
+      <div class="stat-card"><div class="label">Pending approvals</div><div class="value">2</div><div class="delta">Q3 Board waiting on you</div></div>
+      <div class="stat-card"><div class="label">Data sources</div><div class="value">6</div><div class="delta flat">All healthy</div></div>
+    </div>
+    <div class="section-head"><h2>Recent projects</h2><button class="btn btn-primary"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New project</button></div>
+    <div class="projects">
+      <div class="project-card"><div class="project-thumb"><div class="thumb-art"><div class="thumb-bar med"></div><div class="thumb-bar full"></div><div class="thumb-chart"><span></span><span></span><span></span><span></span><span></span><span></span></div></div></div><div class="project-meta"><div class="project-title">Q3 Investor Update <span class="pill data"><span class="ind"></span>Live</span></div><div class="project-info"><span>Sara M.</span><span class="dot"></span><span>2 min ago</span></div></div></div>
+      <div class="project-card data"><div class="project-thumb"><div class="thumb-art"><div class="thumb-bar short"></div><div class="thumb-bar med"></div><div class="thumb-bar full"></div><div class="thumb-chart"><span></span><span></span><span></span><span></span><span></span><span></span></div></div></div><div class="project-meta"><div class="project-title">Portfolio Attribution — March</div><div class="project-info"><span>Ben S.</span><span class="dot"></span><span>14 min ago</span></div></div></div>
+      <div class="project-card"><div class="project-thumb"><div class="thumb-art"><div class="thumb-bar full"></div><div class="thumb-bar med"></div><div class="thumb-chart"><span></span><span></span><span></span><span></span><span></span><span></span></div></div></div><div class="project-meta"><div class="project-title">Q3 Board Deck <span class="pill warn"><span class="ind"></span>Pending</span></div><div class="project-info"><span>Amir K.</span><span class="dot"></span><span>1h ago</span></div></div></div>
+      <div class="project-card"><div class="project-thumb"><div class="thumb-art"><div class="thumb-bar med"></div><div class="thumb-bar short"></div><div class="thumb-bar full"></div><div class="thumb-chart"><span></span><span></span><span></span><span></span><span></span><span></span></div></div></div><div class="project-meta"><div class="project-title">LP Allocation Memo</div><div class="project-info"><span>Sara M.</span><span class="dot"></span><span class="pill neutral">Draft</span></div></div></div>
+      <div class="project-card"><div class="project-thumb"><div class="thumb-art"><div class="thumb-bar full"></div><div class="thumb-bar full"></div><div class="thumb-chart"><span></span><span></span><span></span><span></span><span></span><span></span></div></div></div><div class="project-meta"><div class="project-title">Risk Committee Pack <span class="pill warm">Featured</span></div><div class="project-info"><span>Carla L.</span><span class="dot"></span><span>Yesterday</span></div></div></div>
+      <div class="project-card data"><div class="project-thumb"><div class="thumb-art"><div class="thumb-bar short"></div><div class="thumb-bar med"></div><div class="thumb-bar med"></div><div class="thumb-chart"><span></span><span></span><span></span><span></span><span></span><span></span></div></div></div><div class="project-meta"><div class="project-title">Monthly Performance Report</div><div class="project-info"><span>Auto-refreshed</span><span class="dot"></span><span>2 days ago</span></div></div></div>
+    </div>
+  </main>
+</div>
+<script src="_shared.js"></script>
+<script>mountMark('#brand-mark');</script>
+</body>
+</html>

@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Percy — Palette test</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* All colors come from tokens.js applied to :root */
+  html, body {
+    background: var(--bg-base);
+    background-image: var(--bg-pattern, none);
+    background-size: var(--bg-pattern-size, auto);
+    color: var(--text-primary);
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+    font-size: 15px;
+    transition: background-color 200ms ease, color 200ms ease;
+  }
+  a { color: inherit; text-decoration: none; }
+
+  .app { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
+
+  /* Sidebar */
+  .sb {
+    border-right: 1px solid var(--border-subtle);
+    padding: 20px 0;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+  }
+  .sb-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 20px 24px;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.012em;
+  }
+  .sb-brand .mark { width: 24px; height: 24px; color: var(--mark-color); display: inline-block; }
+  .sb-section {
+    padding: 20px 20px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .sb-link {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 20px;
+    color: var(--text-secondary);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+    margin-left: -1px;
+  }
+  .sb-link:hover {
+    background: var(--bg-sunk);
+    color: var(--text-primary);
+  }
+  .sb-link.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-left-color: var(--accent);
+    font-weight: 600;
+  }
+
+  /* Main */
+  .main { padding: 0; }
+  .topbar {
+    height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border-subtle);
+    padding: 0 32px;
+    background: color-mix(in srgb, var(--bg-base) 90%, transparent);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .crumb { font-size: 14px; color: var(--text-secondary); }
+  .crumb strong { color: var(--text-primary); font-weight: 600; }
+  .topbar-right { display: flex; align-items: center; gap: 12px; }
+  .search {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 14px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--text-tertiary);
+    min-width: 280px;
+    cursor: pointer;
+  }
+  .search:hover { border-color: var(--border-default); }
+  .search .kbd {
+    margin-left: auto;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text-tertiary);
+    background: var(--bg-sunk);
+    padding: 1px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border-subtle);
+  }
+  .av {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--accent-on);
+    display: grid; place-items: center;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  /* Body */
+  .body { padding: 56px 64px 80px; max-width: 1240px; }
+
+  .greeting { margin-bottom: 64px; }
+  .greeting .eyebrow {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-tertiary);
+    margin-bottom: 16px;
+  }
+  .greeting h1 {
+    font-size: 44px;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    line-height: 1.05;
+    margin-bottom: 12px;
+    max-width: 760px;
+  }
+  .greeting h1 .accent { color: var(--accent); }
+  .greeting p {
+    font-size: 17px;
+    color: var(--text-secondary);
+    max-width: 580px;
+    line-height: 1.5;
+  }
+
+  /* "Since you were here" */
+  .news { margin-bottom: 80px; }
+  .news h2 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 24px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .news-row {
+    display: grid;
+    grid-template-columns: 88px 1fr auto;
+    gap: 24px;
+    padding: 20px 0;
+    align-items: baseline;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .news-row:last-child { border-bottom: none; }
+  .news-time {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+  }
+  .news-line { font-size: 16px; line-height: 1.5; color: var(--text-primary); }
+  .news-line strong { font-weight: 600; }
+  .news-line a { color: var(--accent); border-bottom: 1px solid var(--accent-soft); }
+  .news-tag {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 3px 9px;
+    border-radius: 999px;
+    text-transform: lowercase;
+    letter-spacing: 0;
+    white-space: nowrap;
+  }
+
+  /* Projects — asymmetric */
+  .projects-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 24px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .projects-head h2 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .projects-head .new {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+    cursor: pointer;
+  }
+  .projects-head .new:hover { color: var(--accent-hover); }
+
+  .featured {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 32px;
+    padding: 32px 0 40px;
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: 32px;
+    align-items: center;
+  }
+  .featured-thumb {
+    aspect-ratio: 16/10;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    padding: 32px 36px;
+    display: flex;
+    flex-direction: column;
+  }
+  .featured-thumb .ft-eyebrow {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 16px;
+  }
+  .featured-thumb .ft-title {
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+    margin-bottom: 12px;
+    color: var(--text-primary);
+  }
+  .featured-thumb .ft-stats {
+    margin-top: auto;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  .ft-stat {
+    border-left: 2px solid var(--accent);
+    padding-left: 10px;
+  }
+  .ft-stat-num {
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+  }
+  .ft-stat-lbl { font-size: 10px; color: var(--text-tertiary); margin-top: 2px; }
+
+  .featured-info .eyebrow {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 12px;
+  }
+  .featured-info h3 {
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+    margin-bottom: 16px;
+  }
+  .featured-info p {
+    font-size: 15px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: 24px;
+    max-width: 480px;
+  }
+  .featured-meta {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 13px;
+    color: var(--text-tertiary);
+  }
+  .featured-meta .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--text-tertiary); }
+  .featured-meta strong { color: var(--text-primary); font-weight: 500; }
+  .featured-meta .live {
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .live-dot {
+    width: 6px; height: 6px; border-radius: 3px;
+    background: var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-soft);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 4px var(--accent-soft); }
+    50%      { box-shadow: 0 0 0 7px transparent; }
+  }
+
+  /* Smaller project cards */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+  }
+  .card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 22px 22px 20px;
+    cursor: pointer;
+    transition: transform 150ms ease, border-color 150ms ease;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .card:hover {
+    transform: translateY(-1px);
+    border-color: var(--border-default);
+  }
+  .card .label-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .card-eyebrow {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+  }
+  .card h4 {
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    line-height: 1.25;
+    color: var(--text-primary);
+  }
+  .card p {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+  .card-meta {
+    margin-top: auto;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+  }
+  .card-meta .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--text-tertiary); }
+  .card-meta .live { color: var(--accent); font-weight: 600; }
+  .card-meta strong { color: var(--text-primary); font-weight: 500; }
+
+  /* Press variant — slight tweak: thicker borders, no shadow, more printerly */
+  :root[data-palette="press"] .card,
+  :root[data-palette="press"] .featured-thumb,
+  :root[data-palette="press"] .search,
+  :root[data-palette="press"] .av {
+    border-radius: 4px;
+  }
+  :root[data-palette="press"] .featured-thumb {
+    box-shadow: 4px 4px 0 var(--accent-soft);
+  }
+
+  /* Notebook variant — tighter type, slight grid emphasis */
+  :root[data-palette="notebook"] body {
+    background-image: var(--bg-pattern);
+    background-size: var(--bg-pattern-size);
+  }
+  :root[data-palette="notebook"] .card,
+  :root[data-palette="notebook"] .featured-thumb {
+    border-radius: 4px;
+  }
+
+  /* Sodium variant — more confident accent on CTAs */
+  :root[data-palette="sodium"] .news-tag {
+    background: var(--accent);
+    color: var(--accent-on);
+  }
+  :root[data-palette="sodium"] .featured-meta .live {
+    color: var(--text-primary);
+  }
+
+  /* Inkwell — slight letter-spacing tightening for the editorial feel */
+  :root[data-palette="inkwell"] .greeting h1,
+  :root[data-palette="inkwell"] .featured-info h3 {
+    font-feature-settings: "ss01";
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <aside class="sb">
+    <div class="sb-brand">
+      <span class="mark" id="brand-mark"></span>
+      <span>Percy</span>
+    </div>
+
+    <div class="sb-link active">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      Home
+    </div>
+    <div class="sb-link">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 012-2h4l2 3h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
+      Projects
+    </div>
+    <div class="sb-link">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0018 0V5"/><path d="M3 12a9 3 0 0018 0"/></svg>
+      Sources
+    </div>
+    <div class="sb-link">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 4 5-5"/></svg>
+      Pipelines
+    </div>
+
+    <div class="sb-section">Recent</div>
+    <div class="sb-link">Q3 Investor Update</div>
+    <div class="sb-link">Q3 Board Deck</div>
+    <div class="sb-link">LP Allocation Memo</div>
+
+    <div class="sb-section">Workspace</div>
+    <div class="sb-link">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+      Members
+    </div>
+    <div class="sb-link">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06A1.65 1.65 0 005.4 15"/></svg>
+      Settings
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="crumb"><strong>Crestwood Capital</strong> &nbsp;·&nbsp; Home</div>
+      <div class="topbar-right">
+        <div class="search">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          Search projects, data, decks…
+          <span class="kbd">⌘ K</span>
+        </div>
+        <div class="av">BS</div>
+      </div>
+    </header>
+
+    <div class="body">
+
+      <div class="greeting">
+        <div class="eyebrow">Friday, May 9</div>
+        <h1>Three things changed since you were here.<br/><span class="accent">Two are good news.</span></h1>
+        <p>The Q3 Investor Update auto-refreshed cleanly. Sara closed the loop on attribution. The QA on the Board Deck found something — worth a glance before lunch.</p>
+      </div>
+
+      <section class="news">
+        <h2>Activity since 09:14</h2>
+        <div class="news-row">
+          <span class="news-time">14:32</span>
+          <span class="news-line"><strong>Q3 Investor Update</strong> auto-refreshed cleanly. AUM moved from $4.18B to $4.21B. <a href="#">View diff</a>.</span>
+          <span class="news-tag">live</span>
+        </div>
+        <div class="news-row">
+          <span class="news-time">11:28</span>
+          <span class="news-line">Visual QA flagged <strong>three drift warnings</strong> on the Q3 Board Deck — slide 4 has a chart that's grown unexpectedly wide. <a href="#">Review</a>.</span>
+          <span class="news-tag">flagged</span>
+        </div>
+        <div class="news-row">
+          <span class="news-time">10:42</span>
+          <span class="news-line"><strong>Sara M.</strong> bound the AUM stat to <code style="font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--text-primary);">snowflake.fund_metrics</code> — auto-refresh runs hourly from now on.</span>
+          <span class="news-tag">bound</span>
+        </div>
+      </section>
+
+      <section>
+        <div class="projects-head">
+          <h2>Your projects</h2>
+          <span class="new">+ New project</span>
+        </div>
+
+        <article class="featured">
+          <div class="featured-thumb">
+            <div class="ft-eyebrow">Q3 2026 — Letter to investors</div>
+            <div class="ft-title">A measured quarter, finishing strong.</div>
+            <div class="ft-stats">
+              <div class="ft-stat"><div class="ft-stat-num">$4.21B</div><div class="ft-stat-lbl">AUM</div></div>
+              <div class="ft-stat"><div class="ft-stat-num">+$118M</div><div class="ft-stat-lbl">Net flows</div></div>
+              <div class="ft-stat"><div class="ft-stat-num">+14.2%</div><div class="ft-stat-lbl">YTD</div></div>
+            </div>
+          </div>
+          <div class="featured-info">
+            <div class="eyebrow">In progress · refreshing hourly</div>
+            <h3>Q3 Investor Update</h3>
+            <p>Quarterly letter to LPs. Sections 1–3 auto-refresh from Snowflake; the narrative is written by the team and reviewed before publish.</p>
+            <div class="featured-meta">
+              <strong>Sara Malek</strong>
+              <span class="dot"></span>
+              <span>Updated 2 min ago</span>
+              <span class="dot"></span>
+              <span class="live"><span class="live-dot"></span>Live</span>
+            </div>
+          </div>
+        </article>
+
+        <div class="grid">
+          <article class="card">
+            <div class="label-row"><span class="card-eyebrow">In progress</span></div>
+            <h4>Q3 Board Deck</h4>
+            <p>Quarterly presentation for the board of directors. Sections 4–6 auto-refresh; rest is manual.</p>
+            <div class="card-meta">
+              <strong>Amir K.</strong>
+              <span class="dot"></span>
+              <span>1h ago</span>
+              <span class="dot"></span>
+              <span style="color: var(--accent); font-weight: 600;">Pending review</span>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="label-row"><span class="card-eyebrow">Live</span></div>
+            <h4>Portfolio Attribution — March</h4>
+            <p>Monthly attribution decomposition by sector, factor, and holding. Bound to two warehouse views.</p>
+            <div class="card-meta">
+              <strong>Ben S.</strong>
+              <span class="dot"></span>
+              <span>14 min ago</span>
+              <span class="dot"></span>
+              <span class="live">Live</span>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="label-row"><span class="card-eyebrow">Draft</span></div>
+            <h4>LP Allocation Memo</h4>
+            <p>Internal recommendation for the Q4 fund-of-funds reallocation, ahead of the IC meeting.</p>
+            <div class="card-meta">
+              <strong>Sara M.</strong>
+              <span class="dot"></span>
+              <span>Yesterday</span>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="label-row"><span class="card-eyebrow">Live</span></div>
+            <h4>Risk Committee Pack</h4>
+            <p>Weekly risk review for the firm's risk committee. Stress tests, exposure heatmaps, drawdown.</p>
+            <div class="card-meta">
+              <strong>Carla L.</strong>
+              <span class="dot"></span>
+              <span>Yesterday</span>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="label-row"><span class="card-eyebrow">Auto</span></div>
+            <h4>Monthly Performance Report</h4>
+            <p>Standardized monthly performance template, refreshed on the 1st of each month from the warehouse.</p>
+            <div class="card-meta">
+              <strong>Auto-refreshed</strong>
+              <span class="dot"></span>
+              <span>2 days ago</span>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="label-row"><span class="card-eyebrow">Template</span></div>
+            <h4>Earnings template — 2026</h4>
+            <p>Master template for quarterly earnings. Branched by fund. 14 elements bound to the warehouse.</p>
+            <div class="card-meta">
+              <strong>Workspace</strong>
+              <span class="dot"></span>
+              <span>4 weeks ago</span>
+            </div>
+          </article>
+        </div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<script src="../_shared.js"></script>
+<script src="tokens.js"></script>
+<script>
+  // Render mark
+  document.querySelectorAll('#brand-mark, .real-mark, .mark').forEach(function (el) {
+    if (el.querySelector('svg')) return;
+    if (el.id !== 'brand-mark' && !el.classList.contains('real-mark') && !el.classList.contains('mark')) return;
+    el.innerHTML = window.PERCY_MARK_SVG;
+  });
+
+  // Read ?palette= and ?mode= from query string, default to notebook/light
+  const params = new URLSearchParams(location.search);
+  const palette = params.get('palette') || 'notebook';
+  const mode    = params.get('mode')    || 'light';
+  window.applyPalette(palette, mode);
+
+  // Listen for messages from the parent (the index page switcher)
+  window.addEventListener('message', (e) => {
+    if (e.data && e.data.type === 'palette') {
+      window.applyPalette(e.data.palette, e.data.mode);
+    }
+  });
+</script>
+</body>
+</html>
