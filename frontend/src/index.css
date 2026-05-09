@@ -2,63 +2,62 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Theme variables — Suit-and-Tie monochrome ────────────────────────────────
+/* ── Theme variables — Powder ─────────────────────────────────────────────────
  *
  * Two themes share the same vocabulary; only the values change.
  *
  * Tokens are space-separated RGB triples so Tailwind's opacity modifier
  * (`bg-paper/10`, `text-muted/70`, etc.) works via `rgb(var(--token) / <alpha-value>)`.
  *
- *   ink       primary background surface
- *   surface   slightly inset panel surface
- *   paper     primary text / foreground
+ *   ink       primary background surface  (warm cream in light, near-black in dark)
+ *   surface   slightly lifted panel surface
+ *   paper     primary text / foreground   (warm slate in light, cool paper in dark)
  *   muted     secondary text
- *   edge      hairline border (rgba — special, set as full color)
- *   champagne single restrained accent
+ *   edge      hairline border             (rgba — used as full color, not via opacity modifier)
+ *   champagne primary restrained accent   — Powder cobalt (was champagne-gold; name kept for stability)
  *   cream     warm off-white tint
  *   silver    cool light gray
- *   sage / ochre / brick — muted status tones
- *   verdigris               cool accent — copper-patina teal, our second-string color
- *                           (used for primary chart series, callouts, "look here" moments)
+ *   sage / ochre / brick — muted status tones (good / warn / bad)
+ *   verdigris secondary cool accent       — sage-mint, complements the cobalt
  *
- * The default theme is .theme-dark (Gatsby evening).
+ * The default theme is .theme-dark.
  * Apply .theme-light on <html> to swap to paper-on-ink.
  */
 
 :root, .theme-dark {
-  --ink:               10 10 10;
-  --base:              10 10 10;
-  --surface:           17 17 17;
-  --paper:             245 245 240;
-  --muted:             138 138 133;
-  --edge:              rgba(245, 245, 240, 0.10);   /* used as full color, not via opacity modifier */
-  --champagne:         232 201 122;
-  --champagne-light:   240 219 153;
-  --cream:             240 232 216;
-  --silver:            184 184 179;
-  --sage:              138 160 122;
-  --ochre:             200 169 110;
-  --brick:             184 88 66;
-  --verdigris:         100 162 152;     /* patina teal — copper/bronze oxidized green, our cool accent */
-  --verdigris-light:   132 192 182;
+  --ink:               26 27 32;        /* powder dark bg */
+  --base:              26 27 32;
+  --surface:           35 37 44;        /* lifted surface */
+  --paper:             229 229 234;     /* cool paper text */
+  --muted:             153 156 166;
+  --edge:              rgba(229, 229, 234, 0.08);
+  --champagne:         164 190 220;     /* powder cobalt — lighter for dark mode */
+  --champagne-light:   192 211 230;
+  --cream:             224 230 240;
+  --silver:            156 158 167;
+  --sage:              161 207 183;
+  --ochre:             229 187 110;
+  --brick:             224 135 112;
+  --verdigris:         161 207 183;     /* sage-mint, secondary accent */
+  --verdigris-light:   188 220 200;
 }
 
 .theme-light {
-  --ink:               248 246 239;
-  --base:              248 246 239;
-  --surface:           255 255 255;
-  --paper:             26 26 24;
-  --muted:             106 106 100;
-  --edge:              rgba(26, 26, 24, 0.12);
-  --champagne:         176 136 56;
-  --champagne-light:   198 157 74;
-  --cream:             239 231 211;
-  --silver:            154 154 147;
-  --sage:              106 128 89;
-  --ochre:             160 127 74;
-  --brick:             151 64 46;
-  --verdigris:         46 110 102;
-  --verdigris-light:   72 138 128;
+  --ink:               249 248 244;     /* powder warm-cream bg */
+  --base:              249 248 244;
+  --surface:           254 253 250;     /* lifted surface */
+  --paper:             42 47 58;        /* warm slate text */
+  --muted:             106 111 122;
+  --edge:              rgba(42, 47, 58, 0.06);
+  --champagne:         125 161 204;     /* powder cobalt */
+  --champagne-light:   164 190 220;
+  --cream:             240 230 216;
+  --silver:            156 158 167;
+  --sage:              111 161 122;
+  --ochre:             197 153 74;
+  --brick:             184 99 79;
+  --verdigris:         111 161 122;     /* sage-mint, secondary accent */
+  --verdigris-light:   142 184 152;
 }
 
 @layer base {
