@@ -343,7 +343,9 @@ class LoadBundleRequest(BaseModel):
 class ElementStyleUpdate(BaseModel):
     """Style properties that can be patched on a Bridge element."""
     fill_color: str | None = None          # hex "#RRGGBB" or "none" to remove fill
-    fill_type: str | None = None           # "solid" | "none"
+    fill_type: str | None = None           # "solid" | "gradient" | "none"
+    gradient_stops: list | None = None     # [{"position": 0.0, "color": "#hex"}, ...]
+    gradient_angle: float | None = None    # degrees (0=L→R, 90=T→B)
     line_color: str | None = None          # hex or "none"
     line_width: float | None = None        # pt
     line_dash: str | None = None           # SOLID|DASH|DOT|DASH_DOT|DASH_DOT_DOT|SYS_DASH|SYS_DOT
@@ -9542,11 +9544,29 @@ def _apply_style(el: Any, req: ElementStyleUpdate) -> None:
     from percy.bridge.elements import ColorSpec
 
     # fill — ShapeFill uses .color; FreeformFill uses .fill_color
-    if req.fill_color is not None or req.fill_type is not None:
+    if req.fill_color is not None or req.fill_type is not None or req.gradient_stops is not None:
         fill = getattr(el, "fill", None)
         if fill is not None:
             if req.fill_type == "none":
                 fill.fill_type = "none"
+            elif req.fill_type == "gradient" or req.gradient_stops is not None:
+                fill.fill_type = "gradient"
+                if req.gradient_stops is not None and hasattr(fill, "gradient_stops"):
+                    from percy.bridge.elements import GradientStop
+                    stops = []
+                    for s in req.gradient_stops:
+                        if not isinstance(s, dict): continue
+                        gs = GradientStop()
+                        gs.position = float(s.get("position", 0.0))
+                        c = s.get("color")
+                        gs.color = ColorSpec(value=c) if c else ColorSpec()
+                        stops.append(gs)
+                    fill.gradient_stops = stops
+                if req.gradient_angle is not None and hasattr(fill, "gradient_angle"):
+                    fill.gradient_angle = req.gradient_angle
+                if req.fill_color is not None:
+                    cs = ColorSpec(value=req.fill_color) if req.fill_color != "none" else None
+                    if hasattr(fill, "color"):      fill.color      = cs
             elif req.fill_color is not None:
                 fill.fill_type = "solid"
                 cs = ColorSpec(value=req.fill_color) if req.fill_color != "none" else None
@@ -9848,9 +9868,12 @@ def _ser_chart_axis(ax: Any, theme: dict[str, str] | None) -> dict[str, Any]:
             "font_name":  ax.title.title_font_name,
             "font_bold":  ax.title.title_font_bold,
         },
-        "tick_label_font_size":  ax.tick_labels.tick_label_font_size,
-        "tick_label_font_color": _ser_chart_color(ax.tick_labels.tick_label_font_color, theme),
-        "tick_label_rotation":   ax.tick_labels.tick_label_rotation,
+        "tick_label_font_size":     ax.tick_labels.tick_label_font_size,
+        "tick_label_font_color":    _ser_chart_color(ax.tick_labels.tick_label_font_color, theme),
+        "tick_label_rotation":      ax.tick_labels.tick_label_rotation,
+        "tick_label_position":      ax.tick_labels.tick_label_position,
+        "log_scale":                bool(getattr(ax, "log_scale", False)),
+        "display_units":            getattr(ax, "display_units", None),
     }
 
 
@@ -9975,10 +9998,13 @@ def _apply_chart_axis(ax: Any, src: dict[str, Any]) -> None:
         if "font_size" in title_src: ax.title.title_font_size = title_src["font_size"]
         if "font_name" in title_src: ax.title.title_font_name = title_src["font_name"]
         if "font_bold" in title_src: ax.title.title_font_bold = title_src["font_bold"]
-    if "tick_label_font_size" in src:  ax.tick_labels.tick_label_font_size  = src["tick_label_font_size"]
-    if "tick_label_rotation"  in src:  ax.tick_labels.tick_label_rotation   = src["tick_label_rotation"]
-    if "tick_label_font_color" in src:
+    if "tick_label_font_size"   in src: ax.tick_labels.tick_label_font_size   = src["tick_label_font_size"]
+    if "tick_label_rotation"    in src: ax.tick_labels.tick_label_rotation    = src["tick_label_rotation"]
+    if "tick_label_position"    in src: ax.tick_labels.tick_label_position    = src["tick_label_position"]
+    if "tick_label_font_color"  in src:
         ax.tick_labels.tick_label_font_color = _patch_color(ax.tick_labels.tick_label_font_color, src["tick_label_font_color"])
+    if "log_scale"      in src: ax.log_scale     = bool(src["log_scale"])
+    if "display_units"  in src: ax.display_units = src["display_units"]
 
 
 def _apply_chart_data(el: Any, req: dict[str, Any]) -> None:
@@ -10270,7 +10296,39 @@ def _apply_table_data(el: Any, req: dict[str, Any]) -> None:
     n_cols = len(el.cell_formats[0]) if el.cell_formats else 0
 
     op = req.get("op")
-    if op in ("insert_row", "delete_row", "insert_col", "delete_col"):
+    if op == "merge_cells":
+        # req: {op, row, col, row_span, col_span}
+        r0 = int(req.get("row", 0)); c0 = int(req.get("col", 0))
+        rs = max(1, int(req.get("row_span", 1))); cs = max(1, int(req.get("col_span", 1)))
+        if 0 <= r0 < n_rows and 0 <= c0 < n_cols:
+            origin = el.cell_formats[r0][c0]
+            origin.merge.is_merge_origin = True; origin.merge.is_spanned = False
+            origin.merge.merge_span_rows = rs; origin.merge.merge_span_cols = cs
+            origin.merge.is_merged = True
+            # collect and concat text from spanned cells; mark them spanned
+            texts = [getattr(origin, "text", None) or ""]
+            for r in range(r0, min(r0 + rs, n_rows)):
+                for c in range(c0, min(c0 + cs, n_cols)):
+                    if r == r0 and c == c0: continue
+                    cell = el.cell_formats[r][c]
+                    t = getattr(cell, "text", None) or ""
+                    if t: texts.append(t)
+                    cell.merge.is_spanned = True; cell.merge.is_merge_origin = False
+                    cell.merge.is_merged = True
+    elif op == "split_cells":
+        # req: {op, row, col} — split origin cell back to individual cells
+        r0 = int(req.get("row", 0)); c0 = int(req.get("col", 0))
+        if 0 <= r0 < n_rows and 0 <= c0 < n_cols:
+            origin = el.cell_formats[r0][c0]
+            rs = getattr(origin.merge, "merge_span_rows", 1) or 1
+            cs = getattr(origin.merge, "merge_span_cols", 1) or 1
+            for r in range(r0, min(r0 + rs, n_rows)):
+                for c in range(c0, min(c0 + cs, n_cols)):
+                    cell = el.cell_formats[r][c]
+                    cell.merge.is_merge_origin = False; cell.merge.is_spanned = False
+                    cell.merge.merge_span_rows = 1; cell.merge.merge_span_cols = 1
+                    cell.merge.is_merged = False
+    elif op in ("insert_row", "delete_row", "insert_col", "delete_col"):
         idx = int(req.get("index", 0))
         if op == "insert_row":
             new_row = [_make_default_cell(idx, c) for c in range(n_cols)]

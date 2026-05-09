@@ -219,6 +219,8 @@ class BridgeAxis:
     lbl_offset: int | None = None
     lbl_algn: str | None = None
     cross_between: str | None = None
+    log_scale: bool = False
+    display_units: str | None = None  # None|"hundreds"|"thousands"|"ten_thousands"|"hundred_thousands"|"millions"|"ten_millions"|"hundred_millions"|"billions"
 
 
 @dataclass(slots=True)

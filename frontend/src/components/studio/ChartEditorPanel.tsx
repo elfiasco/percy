@@ -454,6 +454,24 @@ function SeriesTab({ data, patch }: PanelProps) {
               <FieldRow label="↳ percent">
                 <Toggle on={s.data_labels.show_percent} onChange={(v) => updateLabels(sIdx, { show_percent: v })} />
               </FieldRow>
+              <FieldRow label="↳ position">
+                <Selector
+                  value={s.data_labels.position ?? ""}
+                  onChange={(v) => updateLabels(sIdx, { position: v || null })}
+                  options={[
+                    { label: "(auto)",       value: ""           },
+                    { label: "Center",       value: "ctr"        },
+                    { label: "Inside End",   value: "inEnd"      },
+                    { label: "Outside End",  value: "outEnd"     },
+                    { label: "Inside Base",  value: "inBase"     },
+                    { label: "Best Fit",     value: "bestFit"    },
+                    { label: "Above",        value: "t"          },
+                    { label: "Below",        value: "b"          },
+                    { label: "Left",         value: "l"          },
+                    { label: "Right",        value: "r"          },
+                  ]}
+                />
+              </FieldRow>
               <FieldRow label="↳ font size">
                 <NumBox value={s.data_labels.font_size} onChange={(v) => updateLabels(sIdx, { font_size: v })} step={1} />
               </FieldRow>
@@ -521,6 +539,42 @@ function AxisCard({ name, axis, onChange }: {
 
       <FieldRow label="Tick size">
         <NumBox value={axis.tick_label_font_size} onChange={(v) => onChange({ tick_label_font_size: v })} step={0.5} />
+      </FieldRow>
+
+      <FieldRow label="Tick pos">
+        <Selector
+          value={axis.tick_label_position ?? ""}
+          onChange={(v) => onChange({ tick_label_position: v || null })}
+          options={[
+            { label: "(default)",    value: ""       },
+            { label: "Next to axis", value: "nextTo" },
+            { label: "Low",          value: "low"    },
+            { label: "High",         value: "high"   },
+            { label: "None",         value: "none"   },
+          ]}
+        />
+      </FieldRow>
+
+      <FieldRow label="Log scale">
+        <Toggle on={axis.log_scale ?? false} onChange={(v) => onChange({ log_scale: v })} />
+      </FieldRow>
+
+      <FieldRow label="Display units">
+        <Selector
+          value={axis.display_units ?? ""}
+          onChange={(v) => onChange({ display_units: v || null })}
+          options={[
+            { label: "None",              value: ""                  },
+            { label: "Hundreds",          value: "hundreds"          },
+            { label: "Thousands",         value: "thousands"         },
+            { label: "Ten Thousands",     value: "ten_thousands"     },
+            { label: "100 Thousands",     value: "hundred_thousands" },
+            { label: "Millions",          value: "millions"          },
+            { label: "Ten Millions",      value: "ten_millions"      },
+            { label: "100 Millions",      value: "hundred_millions"  },
+            { label: "Billions",          value: "billions"          },
+          ]}
+        />
       </FieldRow>
     </div>
   )

@@ -337,6 +337,36 @@ function LayoutTab({ data, sel, patch }: {
         </div>
       </div>
 
+      <SectionHead title="Merge / Split" />
+      <div className="bg-base/40 border border-edge/60 rounded p-2 space-y-1.5">
+        <div className="text-[10px] text-muted/70">Select a range in the Cells tab, then merge or split.</div>
+        <div className="grid grid-cols-2 gap-1.5">
+          <button
+            disabled={!sel || (Math.abs(sel.anchor.row - sel.focus.row) === 0 && Math.abs(sel.anchor.col - sel.focus.col) === 0)}
+            onClick={() => {
+              if (!sel) return
+              const { row0, row1, col0, col1 } = rangeBounds(sel)
+              patch({ op: "merge_cells", row: row0, col: col0, row_span: row1 - row0 + 1, col_span: col1 - col0 + 1 })
+            }}
+            className="text-[10px] py-1 rounded bg-white/5 hover:bg-white/10 text-muted hover:text-slate-200 border border-edge disabled:opacity-40"
+          >
+            ⊕ Merge Cells
+          </button>
+          <button
+            disabled={!sel}
+            onClick={() => {
+              if (!sel) return
+              const cell = primaryCell(sel)
+              if (!cell) return
+              patch({ op: "split_cells", row: cell.row, col: cell.col })
+            }}
+            className="text-[10px] py-1 rounded bg-white/5 hover:bg-white/10 text-muted hover:text-slate-200 border border-edge disabled:opacity-40"
+          >
+            ⊟ Split Cells
+          </button>
+        </div>
+      </div>
+
       <SectionHead title="Column widths (in)" />
       <div className="bg-base/40 border border-edge/60 rounded p-2 space-y-1">
         {data.column_widths.map((w, i) => (
@@ -462,6 +492,167 @@ function BordersTab({ data, sel, patch }: {
         )
       })}
 
+      <SectionHead title="Border Presets" />
+      {/* PowerPoint-style 6-button preset grid */}
+      <div className="bg-base/40 border border-edge/60 rounded p-2 space-y-1.5">
+        <div className="grid grid-cols-3 gap-1.5">
+          {/* No Border */}
+          <button
+            title="No Border — remove all borders from selection"
+            onClick={() => {
+              if (!sel) return
+              patch({ cells: cellsInSelection(sel).map((coord) => ({
+                row: coord.row, col: coord.col,
+                borders: {
+                  top:    { visible: false, color: null, width: null, style: "solid" },
+                  bottom: { visible: false, color: null, width: null, style: "solid" },
+                  left:   { visible: false, color: null, width: null, style: "solid" },
+                  right:  { visible: false, color: null, width: null, style: "solid" },
+                },
+              } as any)) })
+            }}
+            className="flex flex-col items-center gap-0.5 py-1.5 rounded bg-white/5 hover:bg-white/10 text-muted hover:text-slate-200 border border-edge"
+          >
+            <svg width="18" height="18" viewBox="0 0 18 18" className="opacity-60"><rect x="2" y="2" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="0.5" strokeDasharray="2,2"/></svg>
+            <span className="text-[9px]">No Border</span>
+          </button>
+          {/* All Borders */}
+          <button
+            title="All Borders — add borders to all sides of every cell"
+            onClick={() => {
+              if (!sel) return
+              const cells = cellsInSelection(sel).map((coord) => ({
+                row: coord.row, col: coord.col,
+                borders: {
+                  top:    { visible: true, color: "#000000", width: 1.0, style: "solid" },
+                  bottom: { visible: true, color: "#000000", width: 1.0, style: "solid" },
+                  left:   { visible: true, color: "#000000", width: 1.0, style: "solid" },
+                  right:  { visible: true, color: "#000000", width: 1.0, style: "solid" },
+                },
+              } as any)
+              patch({ cells })
+            }}
+            className="flex flex-col items-center gap-0.5 py-1.5 rounded bg-white/5 hover:bg-white/10 text-muted hover:text-slate-200 border border-edge"
+          >
+            <svg width="18" height="18" viewBox="0 0 18 18" className="opacity-60"><rect x="2" y="2" width="6" height="6" fill="none" stroke="currentColor" strokeWidth="1"/><rect x="10" y="2" width="6" height="6" fill="none" stroke="currentColor" strokeWidth="1"/><rect x="2" y="10" width="6" height="6" fill="none" stroke="currentColor" strokeWidth="1"/><rect x="10" y="10" width="6" height="6" fill="none" stroke="currentColor" strokeWidth="1"/></svg>
+            <span className="text-[9px]">All Borders</span>
+          </button>
+          {/* Outside Borders */}
+          <button
+            title="Outside Borders — border only the outer perimeter of the selection"
+            onClick={() => {
+              if (!sel) return
+              const { row0, row1, col0, col1 } = rangeBounds(sel)
+              const cells = cellsInSelection(sel).map((coord) => {
+                const on = (side: "top"|"bottom"|"left"|"right") => {
+                  if (side === "top"    && coord.row === row0) return true
+                  if (side === "bottom" && coord.row === row1) return true
+                  if (side === "left"   && coord.col === col0) return true
+                  if (side === "right"  && coord.col === col1) return true
+                  return false
+                }
+                const make = (side: "top"|"bottom"|"left"|"right") => ({
+                  visible: on(side), color: on(side) ? "#000000" : null,
+                  width: on(side) ? 1.0 : null, style: "solid",
+                })
+                return { row: coord.row, col: coord.col, borders: { top: make("top"), bottom: make("bottom"), left: make("left"), right: make("right") } } as any
+              })
+              patch({ cells })
+            }}
+            className="flex flex-col items-center gap-0.5 py-1.5 rounded bg-white/5 hover:bg-white/10 text-muted hover:text-slate-200 border border-edge"
+          >
+            <svg width="18" height="18" viewBox="0 0 18 18" className="opacity-60"><rect x="2" y="2" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5"/><line x1="9" y1="2" x2="9" y2="16" stroke="currentColor" strokeWidth="0.4" strokeDasharray="1,1.5"/><line x1="2" y1="9" x2="16" y2="9" stroke="currentColor" strokeWidth="0.4" strokeDasharray="1,1.5"/></svg>
+            <span className="text-[9px]">Outside</span>
+          </button>
+          {/* Inside Borders */}
+          <button
+            title="Inside Borders — add borders to all interior edges of the selection"
+            onClick={() => {
+              if (!sel) return
+              const { row0, row1, col0, col1 } = rangeBounds(sel)
+              const cells = cellsInSelection(sel).map((coord) => {
+                const insideTop    = coord.row > row0
+                const insideBottom = coord.row < row1
+                const insideLeft   = coord.col > col0
+                const insideRight  = coord.col < col1
+                const make = (inside: boolean) => ({
+                  visible: inside, color: inside ? "#000000" : null,
+                  width: inside ? 1.0 : null, style: "solid",
+                })
+                return { row: coord.row, col: coord.col, borders: { top: make(insideTop), bottom: make(insideBottom), left: make(insideLeft), right: make(insideRight) } } as any
+              })
+              patch({ cells })
+            }}
+            className="flex flex-col items-center gap-0.5 py-1.5 rounded bg-white/5 hover:bg-white/10 text-muted hover:text-slate-200 border border-edge"
+          >
+            <svg width="18" height="18" viewBox="0 0 18 18" className="opacity-60"><rect x="2" y="2" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="0.4" strokeDasharray="1,1.5"/><line x1="9" y1="2" x2="9" y2="16" stroke="currentColor" strokeWidth="1.5"/><line x1="2" y1="9" x2="16" y2="9" stroke="currentColor" strokeWidth="1.5"/></svg>
+            <span className="text-[9px]">Inside</span>
+          </button>
+          {/* Inside H */}
+          <button
+            title="Inside Horizontal — borders between rows only"
+            onClick={() => {
+              if (!sel) return
+              const { row0, row1 } = rangeBounds(sel)
+              const cells = cellsInSelection(sel).map((coord) => {
+                const insideTop    = coord.row > row0
+                const insideBottom = coord.row < row1
+                const makeH = (inside: boolean) => ({
+                  visible: inside, color: inside ? "#000000" : null,
+                  width: inside ? 1.0 : null, style: "solid",
+                })
+                const existing = data.cells[coord.row]?.[coord.col]
+                return {
+                  row: coord.row, col: coord.col,
+                  borders: {
+                    top:    makeH(insideTop),
+                    bottom: makeH(insideBottom),
+                    left:   existing?.borders?.left   ?? { visible: false, color: null, width: null, style: "solid" },
+                    right:  existing?.borders?.right  ?? { visible: false, color: null, width: null, style: "solid" },
+                  },
+                } as any
+              })
+              patch({ cells })
+            }}
+            className="flex flex-col items-center gap-0.5 py-1.5 rounded bg-white/5 hover:bg-white/10 text-muted hover:text-slate-200 border border-edge"
+          >
+            <svg width="18" height="18" viewBox="0 0 18 18" className="opacity-60"><rect x="2" y="2" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="0.4" strokeDasharray="1,1.5"/><line x1="2" y1="9" x2="16" y2="9" stroke="currentColor" strokeWidth="1.5"/></svg>
+            <span className="text-[9px]">Inside H</span>
+          </button>
+          {/* Inside V */}
+          <button
+            title="Inside Vertical — borders between columns only"
+            onClick={() => {
+              if (!sel) return
+              const { col0, col1 } = rangeBounds(sel)
+              const cells = cellsInSelection(sel).map((coord) => {
+                const insideLeft   = coord.col > col0
+                const insideRight  = coord.col < col1
+                const makeV = (inside: boolean) => ({
+                  visible: inside, color: inside ? "#000000" : null,
+                  width: inside ? 1.0 : null, style: "solid",
+                })
+                const existing = data.cells[coord.row]?.[coord.col]
+                return {
+                  row: coord.row, col: coord.col,
+                  borders: {
+                    top:    existing?.borders?.top    ?? { visible: false, color: null, width: null, style: "solid" },
+                    bottom: existing?.borders?.bottom ?? { visible: false, color: null, width: null, style: "solid" },
+                    left:   makeV(insideLeft),
+                    right:  makeV(insideRight),
+                  },
+                } as any
+              })
+              patch({ cells })
+            }}
+            className="flex flex-col items-center gap-0.5 py-1.5 rounded bg-white/5 hover:bg-white/10 text-muted hover:text-slate-200 border border-edge"
+          >
+            <svg width="18" height="18" viewBox="0 0 18 18" className="opacity-60"><rect x="2" y="2" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="0.4" strokeDasharray="1,1.5"/><line x1="9" y1="2" x2="9" y2="16" stroke="currentColor" strokeWidth="1.5"/></svg>
+            <span className="text-[9px]">Inside V</span>
+          </button>
+        </div>
+      </div>
+
       <SectionHead title="Quick" />
       <div className="bg-base/40 border border-edge/60 rounded p-2 grid grid-cols-2 gap-1.5">
         <button
@@ -541,7 +732,86 @@ function StyleTab({ data, patch }: { data: TableData; patch: (u: TableDataUpdate
           <NumBox value={null} placeholder={`${data.defaults.font_size ?? 11}pt`} step={0.5} onChange={(v) => applyAllCells({ font_size: v })} />
         </div>
       </div>
+
+      <ConditionalFormattingSection data={data} patch={patch} />
     </div>
+  )
+}
+
+// ── Conditional Formatting section ────────────────────────────────────────────
+
+function ConditionalFormattingSection({ data, patch }: { data: TableData; patch: (u: TableDataUpdate) => void }) {
+  const [threshold, setThreshold] = useState("0")
+  const [op, setOp] = useState<">=" | "<=" | "=" | ">" | "<">(">=")
+  const [trueColor, setTrueColor] = useState<string | null>("#FBBF24")
+  const [falseColor, setFalseColor] = useState<string | null>(null)
+  const [applyText, setApplyText] = useState(false)
+
+  const applyRule = () => {
+    const thresh = parseFloat(threshold)
+    if (isNaN(thresh)) return
+    const cells: any[] = []
+    for (let r = 0; r < data.rows; r++) {
+      for (let c = 0; c < data.cols; c++) {
+        const cell = data.cells[r][c]
+        const num = parseFloat(cell.text)
+        if (isNaN(num)) continue
+        let match = false
+        if (op === ">=" && num >= thresh) match = true
+        else if (op === "<=" && num <= thresh) match = true
+        else if (op === "="  && num === thresh) match = true
+        else if (op === ">"  && num >  thresh) match = true
+        else if (op === "<"  && num <  thresh) match = true
+        const color = match ? trueColor : falseColor
+        if (color === null && !(match ? falseColor !== null : trueColor !== null)) continue
+        const update: any = { row: r, col: c }
+        if (applyText) update.font_color = color
+        else update.fill_color = color
+        cells.push(update)
+      }
+    }
+    if (cells.length) patch({ cells })
+  }
+
+  return (
+    <>
+      <SectionHead title="Conditional Formatting" />
+      <div className="bg-base/40 border border-edge/60 rounded p-2 space-y-1.5">
+        <div className="text-[10px] text-muted/70">Color numeric cells based on their value.</div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[11px] text-muted shrink-0">If value</span>
+          <select value={op} onChange={(e) => setOp(e.target.value as any)}
+            className="text-[11px] bg-base border border-edge rounded px-1 py-0.5 text-slate-200 focus:outline-none focus:border-accent w-12">
+            <option value=">=">&ge;</option>
+            <option value="<=">&le;</option>
+            <option value="=">=</option>
+            <option value=">">&gt;</option>
+            <option value="<">&lt;</option>
+          </select>
+          <input type="number" step="any" value={threshold} onChange={(e) => setThreshold(e.target.value)}
+            className="w-16 text-[11px] font-mono bg-base border border-edge rounded px-1.5 py-0.5 text-slate-200 focus:outline-none focus:border-accent [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-muted w-14 shrink-0">Match →</span>
+          <ColorBox value={trueColor} onChange={setTrueColor} allowClear />
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-muted w-14 shrink-0">No match →</span>
+          <ColorBox value={falseColor} onChange={setFalseColor} allowClear />
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-muted w-14 shrink-0">Apply to</span>
+          <button onClick={() => setApplyText(!applyText)}
+            className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${applyText ? "bg-accent/20 text-accent border-accent/40" : "bg-white/5 text-muted border-edge hover:text-slate-200"}`}>
+            {applyText ? "Text color" : "Fill color"}
+          </button>
+        </div>
+        <button onClick={applyRule}
+          className="w-full text-[10px] py-1 rounded bg-accent/10 hover:bg-accent/20 text-accent border border-accent/30">
+          Apply Rule
+        </button>
+      </div>
+    </>
   )
 }
 

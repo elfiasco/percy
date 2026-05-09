@@ -385,6 +385,102 @@ function ThemeSwatches({ colors, onPick }: { colors: Record<string, string>; onP
   )
 }
 
+// ── Gradient stop editor ──────────────────────────────────────────────────────
+
+interface GradStop { color: string; position: number }
+
+function GradientStopEditor({
+  style, patch, themeColors,
+}: {
+  style: ElementStyleData
+  patch: (u: Partial<ElementStyleData>) => void
+  themeColors: Record<string, string>
+}) {
+  const rawStops = style.gradient_stops
+  const [stops, setStops] = useState<GradStop[]>(() =>
+    rawStops && rawStops.length >= 2
+      ? rawStops.map((s) => ({ color: s.color ?? "#888888", position: s.position }))
+      : [{ color: "#4472C4", position: 0 }, { color: "#1a1a2e", position: 1 }]
+  )
+  const [angle, setAngle] = useState(style.gradient_angle ?? 90)
+
+  const commit = (nextStops: GradStop[], nextAngle: number) => {
+    patch({
+      fill_type: "gradient",
+      gradient_stops: nextStops.map((s) => ({ position: s.position, color: s.color })),
+      gradient_angle: nextAngle,
+    } as any)
+  }
+
+  const updateStop = (idx: number, fields: Partial<GradStop>) => {
+    const next = stops.map((s, i) => i === idx ? { ...s, ...fields } : s)
+    setStops(next)
+    commit(next, angle)
+  }
+
+  const addStop = () => {
+    const next = [...stops, { color: "#FFFFFF", position: 1 }]
+    setStops(next)
+    commit(next, angle)
+  }
+
+  const removeStop = (idx: number) => {
+    if (stops.length <= 2) return
+    const next = stops.filter((_, i) => i !== idx)
+    setStops(next)
+    commit(next, angle)
+  }
+
+  const commitAngle = (a: number) => {
+    setAngle(a)
+    commit(stops, a)
+  }
+
+  const previewGrad = `linear-gradient(${angle}deg, ${stops
+    .slice().sort((a, b) => a.position - b.position)
+    .map((s) => `${s.color} ${Math.round(s.position * 100)}%`).join(", ")})`
+
+  return (
+    <div className="mb-3">
+      <ThemeSwatches colors={themeColors} onPick={(v) => updateStop(0, { color: v })} />
+      <div className="space-y-1 mb-1.5">
+        {stops.map((stop, idx) => (
+          <div key={idx} className="flex items-center gap-1.5">
+            <input
+              type="color" value={stop.color}
+              onChange={(e) => updateStop(idx, { color: e.target.value })}
+              className="w-6 h-6 rounded border border-edge cursor-pointer bg-transparent p-0.5 shrink-0"
+            />
+            <input
+              type="range" min={0} max={1} step={0.01} value={stop.position}
+              onChange={(e) => updateStop(idx, { position: parseFloat(e.target.value) })}
+              className="flex-1 accent-accent"
+            />
+            <span className="text-[10px] font-mono text-muted w-7">{Math.round(stop.position * 100)}%</span>
+            {stops.length > 2 && (
+              <button onClick={() => removeStop(idx)} className="text-bad/60 hover:text-bad text-xs w-4 shrink-0">✕</button>
+            )}
+          </div>
+        ))}
+      </div>
+      <button
+        onClick={addStop}
+        className="text-[10px] text-muted hover:text-slate-200 transition-colors mb-1"
+      >+ Add stop</button>
+      <FieldRow label="Angle">
+        <div className="flex items-center gap-1">
+          <input type="range" min={0} max={360} step={5} value={angle}
+            onChange={(e) => setAngle(parseInt(e.target.value))}
+            onMouseUp={(e) => commitAngle(parseInt((e.target as HTMLInputElement).value))}
+            className="flex-1 accent-accent" />
+          <span className="text-[10px] font-mono text-muted w-8">{angle}°</span>
+        </div>
+      </FieldRow>
+      <div className="h-4 w-full rounded border border-edge/50 mb-1" style={{ background: previewGrad }} />
+    </div>
+  )
+}
+
 function StyleTab({ element, docId, slideN, onCommit }: StyleTabProps) {
   const [style, setStyle] = useState<ElementStyleData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -499,7 +595,7 @@ function StyleTab({ element, docId, slideN, onCommit }: StyleTabProps) {
               <option value="pattern">Pattern</option>
             </select>
           </FieldRow>
-          {(style.fill_type === "solid" || style.fill_type === "gradient") && (
+          {style.fill_type === "solid" && (
             <FieldRow label="Color">
               <div>
                 <ThemeSwatches colors={themeColors} onPick={(v) => patch({ fill_color: v })} />
@@ -509,6 +605,9 @@ function StyleTab({ element, docId, slideN, onCommit }: StyleTabProps) {
                 />
               </div>
             </FieldRow>
+          )}
+          {style.fill_type === "gradient" && (
+            <GradientStopEditor style={style} patch={patch} themeColors={themeColors} />
           )}
         </>
       )}
@@ -722,8 +821,6 @@ export const TYPE_ICON_MAP: Record<string, string> = {
   BridgeFreeform:  "✏",
   BridgeGroup:     "⊞",
 }
-
-interface GradStop { color: string; position: number }
 
 const TRANSITIONS = ["none","fade","slide","zoom","flip","push","wipe","dissolve"] as const
 

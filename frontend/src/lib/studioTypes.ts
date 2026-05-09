@@ -198,6 +198,8 @@ export interface ElementStyleData {
 export interface ElementStyleUpdate {
   fill_color?: string | null
   fill_type?: string | null
+  gradient_stops?: Array<{ position: number; color: string }> | null
+  gradient_angle?: number | null
   line_color?: string | null
   line_width?: number | null
   line_dash?: string | null
@@ -300,6 +302,9 @@ export interface ChartAxisData {
   tick_label_font_size: number | null
   tick_label_font_color: string | null
   tick_label_rotation: number | null
+  tick_label_position: string | null   // "nextTo" | "low" | "high" | "none" | null
+  log_scale: boolean
+  display_units: string | null   // null | "thousands" | "millions" | "billions" | etc.
 }
 
 export interface ChartPlotProperties {
@@ -393,8 +398,12 @@ export type TableDataUpdate = Partial<{
   column_widths: number[]
   row_heights:   number[]
   properties:    Partial<TableProperties>
-  op:    "insert_row" | "delete_row" | "insert_col" | "delete_col"
-  index: number
+  op:       "insert_row" | "delete_row" | "insert_col" | "delete_col" | "merge_cells" | "split_cells"
+  index:    number
+  row:      number
+  col:      number
+  row_span: number
+  col_span: number
 }>
 
 // ── Connector types (typed editor for BridgeConnector) ────────────────────────
