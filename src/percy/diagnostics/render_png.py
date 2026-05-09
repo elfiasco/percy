@@ -1826,24 +1826,55 @@ class SlideRenderer:
             pw = path_obj.width or 1
             ph = path_obj.height or 1
 
+            import math as _math
             verts, codes = [], []
+            cx_ps, cy_ps = 0.0, 0.0  # current position in path-space coords
             for cmd in path_obj.commands:
                 if cmd.command == "moveTo" and cmd.points:
                     pt = cmd.points[0]
+                    cx_ps, cy_ps = pt
                     verts.append(self._freeform_pt(pt, pw, ph, p))
                     codes.append(MplPath.MOVETO)
                 elif cmd.command == "lnTo" and cmd.points:
                     pt = cmd.points[0]
+                    cx_ps, cy_ps = pt
                     verts.append(self._freeform_pt(pt, pw, ph, p))
                     codes.append(MplPath.LINETO)
                 elif cmd.command == "cubicBezTo" and len(cmd.points) >= 3:
                     for pt in cmd.points[:3]:
                         verts.append(self._freeform_pt(pt, pw, ph, p))
                     codes += [MplPath.CURVE4] * 3
+                    cx_ps, cy_ps = cmd.points[2]
                 elif cmd.command == "quadBezTo" and len(cmd.points) >= 2:
                     for pt in cmd.points[:2]:
                         verts.append(self._freeform_pt(pt, pw, ph, p))
                     codes += [MplPath.CURVE3] * 2
+                    cx_ps, cy_ps = cmd.points[1]
+                elif cmd.command == "arcTo" and cmd.arc_params:
+                    ap = cmd.arc_params
+                    wR = ap.get("wR", 0) or 0
+                    hR = ap.get("hR", 0) or 0
+                    st  = (ap.get("stAng",  0) or 0) / 60000.0 * _math.pi / 180.0
+                    sw  = (ap.get("swAng",  0) or 0) / 60000.0 * _math.pi / 180.0
+                    ecx = cx_ps - wR * _math.cos(st)
+                    ecy = cy_ps - hR * _math.sin(st)
+                    n   = max(1, int(_math.ceil(abs(sw) / (_math.pi / 2))))
+                    seg = sw / n
+                    for i in range(n):
+                        a1 = st + i * seg
+                        a2 = a1 + seg
+                        alpha = (4.0 / 3.0) * _math.tan(seg / 4.0)
+                        cp1 = (ecx + wR * (_math.cos(a1) - alpha * _math.sin(a1)),
+                               ecy + hR * (_math.sin(a1) + alpha * _math.cos(a1)))
+                        cp2 = (ecx + wR * (_math.cos(a2) + alpha * _math.sin(a2)),
+                               ecy + hR * (_math.sin(a2) - alpha * _math.cos(a2)))
+                        ep  = (ecx + wR * _math.cos(a2), ecy + hR * _math.sin(a2))
+                        verts += [self._freeform_pt(cp1, pw, ph, p),
+                                  self._freeform_pt(cp2, pw, ph, p),
+                                  self._freeform_pt(ep,  pw, ph, p)]
+                        codes += [MplPath.CURVE4, MplPath.CURVE4, MplPath.CURVE4]
+                    cx_ps = ecx + wR * _math.cos(st + sw)
+                    cy_ps = ecy + hR * _math.sin(st + sw)
                 elif cmd.command == "close":
                     if verts:
                         verts.append(verts[0])

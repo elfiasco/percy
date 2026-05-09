@@ -3522,7 +3522,10 @@ def _element_id(el: Any, index: int) -> str:
     return f"idx_{index}"
 
 
-def _serialize_element(el: Any, index: int, slide_w: float, slide_h: float) -> dict[str, Any]:
+def _serialize_element(
+    el: Any, index: int, slide_w: float, slide_h: float,
+    parent_left: float = 0.0, parent_top: float = 0.0,
+) -> dict[str, Any]:
     pos   = getattr(el, "position", None)
     if pos is None:
         raise ValueError(f"element at index {index} has no position attribute")
@@ -3544,8 +3547,12 @@ def _serialize_element(el: Any, index: int, slide_w: float, slide_h: float) -> d
     geometry_preset: str | None = getattr(shape_id_obj, "geometry_preset", None) if shape_id_obj else None
     geometry_adjustments: dict = getattr(shape_id_obj, "geometry_adjustments", {}) if shape_id_obj else {}
 
-    left_pct  = (pos.left   / slide_w * 100) if slide_w else 0.0
-    top_pct   = (pos.top    / slide_h * 100) if slide_h else 0.0
+    # Children of a group store absolute slide positions; subtract the parent
+    # group's origin so left_pct/top_pct are relative to the group container.
+    rel_left = pos.left - parent_left
+    rel_top  = pos.top  - parent_top
+    left_pct  = (rel_left   / slide_w * 100) if slide_w else 0.0
+    top_pct   = (rel_top    / slide_h * 100) if slide_h else 0.0
     width_pct = (pos.width  / slide_w * 100) if slide_w else 0.0
     height_pct= (pos.height / slide_h * 100) if slide_h else 0.0
 
@@ -3556,14 +3563,19 @@ def _serialize_element(el: Any, index: int, slide_w: float, slide_h: float) -> d
         text_preview: str | None = (raw_text[:80] + "…") if len(raw_text) > 80 else (raw_text or None)
     except Exception:
         text_preview = None
-    # For BridgeGroup: serialize children relative to the group's own dimensions
+    # For BridgeGroup: serialize children relative to the group's own dimensions.
+    # Pass pos.left/pos.top as the new parent_left/parent_top so child positions
+    # are anchored to the group origin, not the slide origin.
     children_data = None
     if el_type == "BridgeGroup" and pos.width and pos.height:
         raw_children = getattr(el, "children", []) or []
         children_data = []
         for j, child in enumerate(raw_children):
             try:
-                children_data.append(_serialize_element(child, j, pos.width, pos.height))
+                children_data.append(_serialize_element(
+                    child, j, pos.width, pos.height,
+                    parent_left=pos.left, parent_top=pos.top,
+                ))
             except Exception:
                 pass
 
@@ -3574,8 +3586,8 @@ def _serialize_element(el: Any, index: int, slide_w: float, slide_h: float) -> d
         "label":        _ELEMENT_TYPE_LABELS.get(el_type, el_type),
         "name":         name,
         "text_preview": text_preview,
-        "left_in":      round(pos.left,   5),
-        "top_in":       round(pos.top,    5),
+        "left_in":      round(rel_left,   5),
+        "top_in":       round(rel_top,    5),
         "width_in":     round(pos.width,  5),
         "height_in":    round(pos.height, 5),
         "left_pct":     round(left_pct,   5),
