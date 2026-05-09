@@ -21,6 +21,7 @@ export interface StudioElement {
   hidden: boolean
   animation: string
   geometry_preset: string | null
+  geometry_adjustments?: Record<string, string | number>
   children?: StudioElement[] | null
 }
 
@@ -56,6 +57,8 @@ export interface RunData {
   font_color: string | null
   strikethrough: string | null  // "sng" | "dbl" | null
   font_caps: string | null      // "all" | "small" | null
+  baseline_shift: number | null // fraction of font_size; negative=superscript, positive=subscript
+  char_spacing: number | null   // pt
 }
 
 export interface ParagraphData {
@@ -63,6 +66,11 @@ export interface ParagraphData {
   alignment: string | null
   space_before: number | null
   space_after: number | null
+  line_spacing: number | null   // multiplier (1.0 = normal) or pt
+  indent_level: number | null
+  left_indent: number | null
+  bullet_type: string | null    // "none" | "bullet" | "number" | etc.
+  bullet_char: string | null
   runs: RunData[]
 }
 
@@ -109,12 +117,37 @@ export interface TableCellData {
   font_size: number | null
   font_bold: boolean | null
   font_italic: boolean | null
+  font_color: string | null
+  fill_color: string | null
+  fill_type: string | null
+  h_align: string | null   // "left" | "center" | "right" | "justify"
+  v_align: string | null   // "top" | "middle" | "bottom"
+  word_wrap: boolean | null
+  merge: { is_origin: boolean; is_spanned: boolean; row_span: number; col_span: number } | null
+  borders: {
+    top:    { visible: boolean; style: string | null; width: number | null; color: string | null } | null
+    bottom: { visible: boolean; style: string | null; width: number | null; color: string | null } | null
+    left:   { visible: boolean; style: string | null; width: number | null; color: string | null } | null
+    right:  { visible: boolean; style: string | null; width: number | null; color: string | null } | null
+  } | null
+}
+
+export interface TableProperties {
+  first_row_header: boolean
+  first_col_header: boolean
+  last_row_total:   boolean
+  last_col_total:   boolean
+  banded_rows:      boolean
+  banded_cols:      boolean
 }
 
 export interface TableTextContent {
   kind: "table"
   rows: number
   cols: number
+  column_widths?: number[]   // inches per column
+  row_heights?: number[]     // inches per row
+  properties: TableProperties | null
   cells: TableCellData[][]
 }
 
@@ -126,20 +159,37 @@ export type ElementTextContent =
 
 // ── Style types ────────────────────────────────────────────────────────────────
 
+export interface GradientStop {
+  position: number    // 0.0 – 1.0
+  color: string | null
+}
+
 export interface ElementStyleData {
-  fill_type: string | null     // "solid" | "gradient" | "pattern" | "none" | null
-  fill_color: string | null    // hex "#RRGGBB"
+  fill_type: string | null        // "solid" | "gradient" | "pattern" | "none" | null
+  fill_color: string | null       // hex "#RRGGBB"
+  gradient_stops: GradientStop[] | null
+  gradient_angle: number | null   // degrees, 0=left→right, 90=top→bottom
   line_visible: boolean | null
   line_color: string | null
-  line_width: number | null    // pt
-  line_dash: string | null     // "solid" | "dash" | "dot" | "dash_dot" etc.
-  opacity: number | null       // 0.0 – 1.0
+  line_width: number | null       // pt
+  line_dash: string | null        // "solid" | "dash" | "dot" | "dash_dot" etc.
+  head_end: string | null         // "none" | "arrow" | "diamond" | "oval" | "stealth" | "triangle"
+  tail_end: string | null
+  head_size: string | null        // "sm" | "med" | "lg"
+  tail_size: string | null
+  opacity: number | null          // 0.0 – 1.0
   shadow_on: boolean | null
   shadow_color: string | null
-  shadow_blur: number | null   // pt
-  shadow_offset_x: number | null
-  shadow_offset_y: number | null
-  crop_left: number | null     // 0.0 – 1.0 fraction
+  shadow_blur: number | null      // pt
+  shadow_offset_x: number | null  // pt
+  shadow_offset_y: number | null  // pt
+  vertical_anchor: string | null  // "top" | "middle" | "bottom"
+  text_insets: { left?: number; right?: number; top?: number; bottom?: number } | null  // inches
+  autofit_type: string | null     // "none" | "shrink" | "TEXT_TO_FIT_SHAPE"
+  font_scale: number | null       // normAutoFit fontScale (e.g. 92500 = 92.5%)
+  ln_spc_reduction: number | null // normAutoFit lnSpcReduction
+  word_wrap: boolean | null
+  crop_left: number | null        // 0.0 – 1.0 fraction
   crop_right: number | null
   crop_top: number | null
   crop_bottom: number | null
@@ -208,6 +258,7 @@ export interface ChartSeriesData {
   values: (number | null)[]
   x_values: (number | null)[]
   color: string | null
+  point_colors: (string | null)[]
   plot_type: string | null
   smooth: boolean
   invert_if_negative: boolean
@@ -325,15 +376,6 @@ export interface TableCellEditor {
   word_wrap:   boolean | null
   merge:       CellMergeData
   borders:     CellBorders
-}
-
-export interface TableProperties {
-  first_row_header: boolean
-  first_col_header: boolean
-  last_row_total:   boolean
-  last_col_total:   boolean
-  banded_rows:      boolean
-  banded_cols:      boolean
 }
 
 export interface TableData {

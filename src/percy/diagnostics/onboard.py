@@ -982,7 +982,7 @@ def _chart_series(chart: Any, theme_colors: "dict | None" = None) -> list[ChartS
                     invert_if_negative=safe_get(lambda series=series: series.invert_if_negative, False),
                     line=_chart_line_format(safe_get(lambda series=series: series.format.line), theme_colors),
                     marker=_marker_format(safe_get(lambda series=series: series.marker), theme_colors),
-                    data_labels=_data_labels(safe_get(lambda series=series: series._element.dLbls)),
+                    data_labels=_data_labels(safe_get(lambda series=series: series._element.dLbls), theme_colors),
                     x_values=[_float_or_none(value) for value in _series_x_values(series)],
                     point_formatting=_point_formatting(series, theme_colors),
                     custom_labels=_custom_data_labels(series),
@@ -2700,7 +2700,7 @@ def _dl_flag(d_lbls: Any, tag: str) -> bool:
     return False
 
 
-def _data_labels(d_lbls: Any) -> DataLabels:
+def _data_labels(d_lbls: Any, theme_colors: "dict | None" = None) -> DataLabels:
     if d_lbls is None:
         return DataLabels(show=False)
 
@@ -2735,7 +2735,7 @@ def _data_labels(d_lbls: Any) -> DataLabels:
         font_name=safe_get(lambda: d_lbls.defRPr.latin.typeface),
         font_size=_font_size_from_defrpr(safe_get(lambda: d_lbls.defRPr)),
         font_bold=safe_get(lambda: d_lbls.defRPr.b),
-        font_color=_color_from_defrpr(safe_get(lambda: d_lbls.defRPr)),
+        font_color=_color_from_defrpr(safe_get(lambda: d_lbls.defRPr), theme_colors),
         show_val=show_val,
         show_cat_name=show_cat,
         show_ser_name=show_ser,
@@ -2812,8 +2812,8 @@ def _font_size_from_defrpr(defrpr: Any) -> float | None:
     return round(size / 100.0, 2) if size is not None else None
 
 
-def _color_from_defrpr(defrpr: Any) -> "ColorSpec | None":
-    return _extract_color_spec(defrpr)
+def _color_from_defrpr(defrpr: Any, theme_colors: "dict | None" = None) -> "ColorSpec | None":
+    return _extract_color_spec(defrpr, theme_colors)
 
 
 def _bodypr_rotation(body_pr: Any) -> float | None:
@@ -3049,7 +3049,24 @@ def _fill_gradient_angle(shape: Any) -> float:
 
 
 def _fill_type(shape: Any) -> str | None:
-    return enum_name(safe_get(lambda: shape.fill.type))
+    ft = enum_name(safe_get(lambda: shape.fill.type))
+    # python-pptx returns None or BACKGROUND when the spPr has a scheme-color solidFill;
+    # always check raw XML so explicit spPr fills override style references.
+    try:
+        from pptx.oxml.ns import qn
+        spPr = shape.element.spPr
+        if spPr is not None:
+            if spPr.find(qn("a:solidFill")) is not None:
+                return "solidFill"
+            if spPr.find(qn("a:gradFill")) is not None:
+                return "gradFill"
+            if spPr.find(qn("a:noFill")) is not None:
+                return "noFill"
+            if spPr.find(qn("a:grpFill")) is not None:
+                return "grpFill"
+    except Exception:
+        pass
+    return ft
 
 
 def _shape_has_explicit_fill(shape: Any) -> bool:

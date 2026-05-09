@@ -86,10 +86,14 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
     studioStore.loadSlide(docId, slideN)
       .then((res) => {
         if (!cancelled) {
-          // Hydrate Y.Doc with the freshly-fetched element fields. Idempotent
-          // (won't clobber live remote edits already in the room).
-          if (room) {
-            try { hydrateSlide(room, res.elements, res.background_color) }
+          // Read collab context at resolve time, not at effect-schedule time.
+          // The effect captures docId/slideN but NOT room — room may have been
+          // stale (pointing at the previous slide's Y.Doc) when the effect was
+          // scheduled because useStudioCollab sets the new room asynchronously.
+          const currentCollab = getCollabContext()
+          const currentRoom = currentCollab?.enabled ? currentCollab.room : null
+          if (currentRoom) {
+            try { hydrateSlide(currentRoom, res.elements, res.background_color) }
             catch (e) { console.warn("[Percy] Y.Doc hydrate failed:", e) }
           }
           studioStore.bumpRenderKeys(res.elements.map((el) => el.id))
@@ -108,8 +112,14 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
     const unsubs: Array<() => void> = []
     // Top-level: when the elements MAP itself changes (add/remove), refresh
     // the per-element observers list.
+    const capturedRoom = room
     const wireElement = (id: string) => {
       const off = observeElement(room, id, (snap) => {
+        // Guard: reject updates from a room that is no longer the active room.
+        // React effect cleanup runs asynchronously, so the old room's observers
+        // can fire during the gap between room context update and cleanup —
+        // causing cross-slide contamination when two slides share an element ID.
+        if (getCollabContext()?.room !== capturedRoom) return
         studioStore.updateElement(id, snap)
       })
       unsubs.push(off)
@@ -470,6 +480,11 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
             minWidth: 0,
             overflow: rulerOn ? "visible" : "hidden",
             backgroundColor: "white",
+            // Scale factor: how many vh units equal one typographic point,
+            // given this slide's height in inches. Used by BridgeTextStyle and
+            // BridgeParagraph to render font/spacing in physical canvas units
+            // rather than CSS pt (which assumes 96 DPI, not 120 DPI reference).
+            ["--pt-scale"]: slideHeightIn > 0 ? zoom * 85 / (slideHeightIn * 72) : zoom * 85 / (7.5 * 72),
             // PowerPoint-style: stronger drop shadow so the slide reads as a
             // discrete object floating above the workspace.
             boxShadow: "0 14px 40px -10px rgba(0,0,0,0.30), 0 4px 12px -2px rgba(0,0,0,0.12)",

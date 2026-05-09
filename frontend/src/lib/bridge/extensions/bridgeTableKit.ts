@@ -5,15 +5,38 @@ import { TableHeader } from "@tiptap/extension-table-header"
 import { bridgeExtensions } from "./index"
 
 /**
- * Tiptap extension set for BridgeTable rendering — base bridge extensions
- * (paragraph, text, marks) plus the table family configured for our needs:
- *
- *   - Resizable columns (drag the right border of any cell)
- *   - Cells can hold full Bridge paragraphs (lists later, headings later)
- *
- * Reuses the same paragraph + textStyle extensions as text-only renderers
- * so a cell's content is identical-shape to a BridgeText element's content.
+ * Tiptap extension set for BridgeTable rendering.
+ * BridgeTableCell: preserves `style` attribute (fills, borders, alignment, width%).
+ * BridgeTableRow:  preserves `style` attribute (row height from Bridge dimensions).
  */
+
+const BridgeTableCell = TableCell.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      style: {
+        default: null as string | null,
+        parseHTML: (el) => (el as HTMLElement).getAttribute("style") || null,
+        renderHTML: (attrs: { style?: string | null }) =>
+          attrs.style ? { style: attrs.style } : {},
+      },
+    }
+  },
+})
+
+const BridgeTableRow = TableRow.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      style: {
+        default: null as string | null,
+        parseHTML: (el) => (el as HTMLElement).getAttribute("style") || null,
+        renderHTML: (attrs: { style?: string | null }) =>
+          attrs.style ? { style: attrs.style } : {},
+      },
+    }
+  },
+})
 
 export function bridgeTableExtensions() {
   return [
@@ -23,8 +46,8 @@ export function bridgeTableExtensions() {
       lastColumnResizable: true,
       HTMLAttributes: { class: "bridge-table" },
     }),
-    TableRow,
-    TableCell,
+    BridgeTableRow,
+    BridgeTableCell,
     TableHeader,
   ]
 }

@@ -10,7 +10,7 @@ function borderStr(b: CellBorderSide | null): string {
   let css = "solid"
   if (style.includes("dash")) css = "dashed"
   else if (style.includes("dot")) css = "dotted"
-  return `${w}pt ${css} ${b.color || "#666"}`
+  return `calc(${w} * var(--pt-scale, 0.1574) * 1vh) ${css} ${b.color || "#666"}`
 }
 
 function alignFor(h: string): React.CSSProperties["textAlign"] {
@@ -41,7 +41,7 @@ function CellTd({ cell, fontSize }: { cell: TableCellEditor; fontSize: number | 
     background:   cell.fill_color || undefined,
     color:        cell.font_color || "#222",
     fontFamily:   cell.font_name || undefined,
-    fontSize:     (cell.font_size ?? fontSize ?? 11) + "pt",
+    fontSize:     `calc(${cell.font_size ?? fontSize ?? 11} * var(--pt-scale, 0.1574) * 1vh)`,
     fontWeight:   cell.font_bold ? "bold" : undefined,
     fontStyle:    cell.font_italic ? "italic" : undefined,
     textAlign:    alignFor(cell.h_align),

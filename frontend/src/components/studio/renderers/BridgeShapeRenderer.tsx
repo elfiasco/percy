@@ -18,6 +18,15 @@ import { consumePendingAutoEdit } from "../../../lib/pendingAutoEdit"
 
 // ── SVG path generation ───────────────────────────────────────────────────────
 
+// Parse an OOXML guide formula like "val 16200000" → 16200000
+function adjVal(adj: Record<string, string | number> | undefined, name: string, fallback: number): number {
+  const v = adj?.[name]
+  if (v == null) return fallback
+  if (typeof v === "number") return v
+  const m = String(v).match(/val\s+(-?\d+)/)
+  return m ? parseInt(m[1]) : fallback
+}
+
 /**
  * Build the `d` attribute (or element props) for an SVG shape.
  * W and H are the viewport dimensions (always 100×100 in the normalized viewBox).
@@ -84,6 +93,133 @@ function shapeProps(
     case "heart":
       return { tag: "path", d: "M50,85 C20,65 5,45 5,30 C5,15 15,5 30,5 C38,5 46,9 50,15 C54,9 62,5 70,5 C85,5 95,15 95,30 C95,45 80,65 50,85 Z" }
 
+    case "plus": {
+      const aw = adjVal(adj, "adj", 25000) / 100000 * 100
+      const a = Math.max(5, Math.min(45, aw))
+      return {
+        tag: "polygon",
+        points: `${a},0 ${100-a},0 ${100-a},${a} 100,${a} 100,${100-a} ${100-a},${100-a} ${100-a},100 ${a},100 ${a},${100-a} 0,${100-a} 0,${a} ${a},${a}`,
+      }
+    }
+
+    case "downarrow": {
+      const headH = adjVal(adj, "adj1", 50000) / 100000 * 100
+      const shaftW = adjVal(adj, "adj2", 50000) / 100000 * 100
+      const hh = Math.max(10, Math.min(90, headH))
+      const sw = Math.max(10, Math.min(90, shaftW))
+      const sx = (100 - sw) / 2
+      const shaftY = 100 - hh
+      return {
+        tag: "polygon",
+        points: `${sx},0 ${sx+sw},0 ${sx+sw},${shaftY} 100,${shaftY} 50,100 0,${shaftY} ${sx},${shaftY}`,
+      }
+    }
+
+    case "uparrow": {
+      const headH = adjVal(adj, "adj1", 50000) / 100000 * 100
+      const shaftW = adjVal(adj, "adj2", 50000) / 100000 * 100
+      const hh = Math.max(10, Math.min(90, headH))
+      const sw = Math.max(10, Math.min(90, shaftW))
+      const sx = (100 - sw) / 2
+      return {
+        tag: "polygon",
+        points: `50,0 100,${hh} ${sx+sw},${hh} ${sx+sw},100 ${sx},100 ${sx},${hh} 0,${hh}`,
+      }
+    }
+
+    case "updownarrow": {
+      const headH = adjVal(adj, "adj1", 25000) / 100000 * 100
+      const shaftW = adjVal(adj, "adj2", 50000) / 100000 * 100
+      const hh = Math.max(10, Math.min(40, headH))
+      const sw = Math.max(10, Math.min(90, shaftW))
+      const sx = (100 - sw) / 2
+      return {
+        tag: "polygon",
+        points: `50,0 100,${hh} ${sx+sw},${hh} ${sx+sw},${100-hh} 100,${100-hh} 50,100 0,${100-hh} ${sx},${100-hh} ${sx},${hh} 0,${hh}`,
+      }
+    }
+
+    case "rightarrow": {
+      const headW = adjVal(adj, "adj1", 50000) / 100000 * 100
+      const shaftH = adjVal(adj, "adj2", 50000) / 100000 * 100
+      const hw = Math.max(10, Math.min(90, headW))
+      const sh = Math.max(10, Math.min(90, shaftH))
+      const sy = (100 - sh) / 2
+      const arrowX = 100 - hw
+      return {
+        tag: "polygon",
+        points: `0,${sy} ${arrowX},${sy} ${arrowX},0 100,50 ${arrowX},100 ${arrowX},${sy+sh} 0,${sy+sh}`,
+      }
+    }
+
+    case "leftarrow": {
+      const headW = adjVal(adj, "adj1", 50000) / 100000 * 100
+      const shaftH = adjVal(adj, "adj2", 50000) / 100000 * 100
+      const hw = Math.max(10, Math.min(90, headW))
+      const sh = Math.max(10, Math.min(90, shaftH))
+      const sy = (100 - sh) / 2
+      return {
+        tag: "polygon",
+        points: `0,50 ${hw},0 ${hw},${sy} 100,${sy} 100,${sy+sh} ${hw},${sy+sh} ${hw},100`,
+      }
+    }
+
+    case "callout1":
+    case "wedgecalloutrect":
+    case "wedgecallout": {
+      return { tag: "path", d: "M 0,0 L 100,0 L 100,75 L 25,75 L 0,100 L 15,75 L 0,75 Z" }
+    }
+
+    case "rightbracket": {
+      return { tag: "path", d: "M 25,0 L 90,0 L 90,100 L 25,100" }
+    }
+
+    case "leftbracket": {
+      return { tag: "path", d: "M 75,0 L 10,0 L 10,100 L 75,100" }
+    }
+
+    case "arc":
+    case "pie": {
+      // PowerPoint stores adj1=startAngle, adj2=endAngle (both in 60000ths of degree)
+      // despite OOXML spec naming adj2 "swAng" — empirically confirmed from PPTX XML
+      const stAng  = adjVal(adj, "adj1", 16200000) / 60000
+      const endAng = adjVal(adj, "adj2", 21600000) / 60000
+      let swAng = endAng - stAng
+      if (swAng <= 0) swAng += 360  // wrap-around past 0°/360°
+      const a1 = stAng
+      const a2 = a1 + swAng
+      const r1 = (a1 * Math.PI) / 180
+      const r2 = (a2 * Math.PI) / 180
+      const sx = (50 + 50 * Math.cos(r1)).toFixed(3)
+      const sy = (50 + 50 * Math.sin(r1)).toFixed(3)
+      const ex = (50 + 50 * Math.cos(r2)).toFixed(3)
+      const ey = (50 + 50 * Math.sin(r2)).toFixed(3)
+      const largeArc = swAng > 180 ? 1 : 0
+      if (p === "pie") {
+        return { tag: "path", d: `M 50,50 L ${sx},${sy} A 50,50 0 ${largeArc},1 ${ex},${ey} Z` }
+      }
+      return { tag: "path", d: `M ${sx},${sy} A 50,50 0 ${largeArc},1 ${ex},${ey}` }
+    }
+
+    case "can": {
+      // 3D cylinder. adj = ellipse cap height as fraction of total height (default 25000/100000 = 25%).
+      const capH = adjVal(adj, "adj", 25000) / 100000 * 100
+      const c = Math.max(3, Math.min(45, capH / 2))  // semi-height of top/bottom ellipse in viewBox units
+      // SVG arc: A rx,ry rot large-arc sweep endX,endY
+      // upper half of top ellipse: sweep=0 (CCW in y-down = goes upward)
+      // lower half of top ellipse: sweep=1 (CW = goes downward, the inner depth line)
+      // bottom ellipse lower half: sweep=1 (visible base)
+      const d = [
+        `M 0,${c}`,
+        `A 50,${c} 0 0 0 100,${c}`,           // upper half of top cap
+        `L 100,${100 - c}`,
+        `A 50,${c} 0 0 1 0,${100 - c}`,       // lower half of bottom cap
+        `Z`,
+        `M 0,${c} A 50,${c} 0 0 1 100,${c}`,  // inner depth line (lower half of top cap)
+      ].join(" ")
+      return { tag: "path", d }
+    }
+
     default:
       return { tag: "rect", x: 0, y: 0, width: 100, height: 100 }
   }
@@ -108,48 +244,111 @@ function starPolygon(n: number, cx: number, cy: number, outerR: number, innerR: 
   return pts.join(" ")
 }
 
+// ── SVG dash style ────────────────────────────────────────────────────────────
+
+function dashArray(dash: string | null | undefined, strokeW: string): string | undefined {
+  const w = parseFloat(strokeW) || 1
+  switch (dash) {
+    case "dash":           return `${w * 4} ${w * 2}`
+    case "dot":            return `${w} ${w * 2}`
+    case "dash_dot":       return `${w * 4} ${w * 2} ${w} ${w * 2}`
+    case "lg_dash":        return `${w * 8} ${w * 3}`
+    case "lg_dash_dot":    return `${w * 8} ${w * 2} ${w} ${w * 2}`
+    case "lg_dash_dot_dot":return `${w * 8} ${w * 2} ${w} ${w * 2} ${w} ${w * 2}`
+    case "sys_dash":       return `${w * 3} ${w * 2}`
+    case "sys_dot":        return `${w * 2} ${w * 2}`
+    default:               return undefined
+  }
+}
+
 // ── SVG background shape ──────────────────────────────────────────────────────
 
 interface ShapeSvgProps {
-  preset:    string | null | undefined
-  adj?:      Record<string, string | number>
-  style:     ElementStyleData | null
-  flipH:     boolean
-  flipV:     boolean
+  id?:            string
+  preset:         string | null | undefined
+  adj?:           Record<string, string | number>
+  style:          ElementStyleData | null
+  flipH:          boolean
+  flipV:          boolean
+  elementWidthIn?: number
 }
 
-function ShapeSvg({ preset, adj, style, flipH, flipV }: ShapeSvgProps) {
-  const fill = style?.fill_type === "none" || style?.fill_type === null
+function ShapeSvg({ id, preset, adj, style, flipH, flipV, elementWidthIn }: ShapeSvgProps) {
+  const gradId = id ? `grad-${id}` : "grad-shape"
+
+  // Fill (fill_type is lowercase from API: "solid", "gradient", "none")
+  const fillTypeLower = style?.fill_type?.toLowerCase()
+  const isGradient = fillTypeLower === "gradient" && style?.gradient_stops && style.gradient_stops.length >= 2
+  const noFill = fillTypeLower === "none"
+    || fillTypeLower === "nofill"
+    || (fillTypeLower === "background" && !style?.fill_color)
+    || (style?.fill_type == null && !style?.fill_color)
+  const fillAttr = isGradient
+    ? `url(#${gradId})`
+    : noFill
     ? "none"
     : (style?.fill_color ?? "#E2E8F0")
-  const lineVisible = style?.line_visible !== false  // default true unless explicitly false
+
+  // Stroke
+  const lineVisible = style?.line_visible !== false
   const stroke  = (lineVisible && style?.line_color) ? style.line_color : "none"
   const strokeW = (lineVisible && style?.line_width != null)
-    ? (style.line_width / 72 * 100 / 13.333).toFixed(3) // convert pt → % of 100-unit viewBox
+    ? (style.line_width / 72 * 100 / (elementWidthIn ?? 13.333)).toFixed(3)
     : "0"
-  const opacity  = style?.opacity ?? 1
+  const strokeDash = dashArray(style?.line_dash, strokeW)
+
+  const opacity = style?.opacity ?? 1
+
+  // Shadow via CSS filter on the SVG element
+  const shadowFilter = style?.shadow_on
+    ? `drop-shadow(${(style.shadow_offset_x ?? 0).toFixed(1)}pt ${(style.shadow_offset_y ?? 0).toFixed(1)}pt ${(style.shadow_blur ?? 0).toFixed(1)}pt ${style.shadow_color ?? "#000000"})`
+    : undefined
 
   const transform = (flipH || flipV)
     ? `scale(${flipH ? -1 : 1},${flipV ? -1 : 1}) translate(${flipH ? -100 : 0},${flipV ? -100 : 0})`
     : undefined
 
+  // Gradient defs
+  const gradDef = isGradient && style?.gradient_stops ? (() => {
+    const angle = style.gradient_angle ?? 0
+    const rad = (angle * Math.PI) / 180
+    const x1 = (50 - 50 * Math.cos(rad)).toFixed(2)
+    const y1 = (50 - 50 * Math.sin(rad)).toFixed(2)
+    const x2 = (50 + 50 * Math.cos(rad)).toFixed(2)
+    const y2 = (50 + 50 * Math.sin(rad)).toFixed(2)
+    return (
+      <defs>
+        <linearGradient id={gradId} x1={`${x1}%`} y1={`${y1}%`} x2={`${x2}%`} y2={`${y2}%`} gradientUnits="userSpaceOnUse">
+          {style.gradient_stops.map((s, i) => (
+            s.color ? <stop key={i} offset={`${(s.position * 100).toFixed(1)}%`} stopColor={s.color} /> : null
+          ))}
+        </linearGradient>
+      </defs>
+    )
+  })() : null
+
+  const shapeAttrs = { fill: fillAttr, stroke, strokeWidth: strokeW, ...(strokeDash ? { strokeDasharray: strokeDash } : {}) }
   const props = shapeProps(preset, adj)
   const { tag, ...svgAttrs } = props
   const shapeEl = tag === "rect"
-    ? <rect {...(svgAttrs as React.SVGProps<SVGRectElement>)} fill={fill} stroke={stroke} strokeWidth={strokeW} />
+    ? <rect {...(svgAttrs as React.SVGProps<SVGRectElement>)} {...shapeAttrs} />
     : tag === "ellipse"
-    ? <ellipse {...(svgAttrs as React.SVGProps<SVGEllipseElement>)} fill={fill} stroke={stroke} strokeWidth={strokeW} />
+    ? <ellipse {...(svgAttrs as React.SVGProps<SVGEllipseElement>)} {...shapeAttrs} />
     : tag === "polygon"
-    ? <polygon {...(svgAttrs as React.SVGProps<SVGPolygonElement>)} fill={fill} stroke={stroke} strokeWidth={strokeW} />
-    : <path {...(svgAttrs as React.SVGProps<SVGPathElement>)} fill={fill} stroke={stroke} strokeWidth={strokeW} />
+    ? <polygon {...(svgAttrs as React.SVGProps<SVGPolygonElement>)} {...shapeAttrs} />
+    : <path {...(svgAttrs as React.SVGProps<SVGPathElement>)} {...shapeAttrs} />
 
   return (
     <svg
       viewBox="0 0 100 100"
       preserveAspectRatio="none"
-      style={{ width: "100%", height: "100%", display: "block", overflow: "visible" }}
+      style={{
+        width: "100%", height: "100%", display: "block", overflow: "visible",
+        ...(shadowFilter ? { filter: shadowFilter } : {}),
+      }}
       opacity={opacity}
     >
+      {gradDef}
       {transform ? <g transform={transform}>{shapeEl}</g> : shapeEl}
     </svg>
   )
@@ -225,11 +424,40 @@ function BridgeShapeRendererImpl({
     } catch { return "" }
   }, [content])
 
+  // Text frame style: vertical anchor, insets, word wrap
+  const textZoom = style?.font_scale != null && style.font_scale < 100000
+    ? style.font_scale / 100000
+    : undefined
+
+  const textFrameStyle = useMemo((): React.CSSProperties => {
+    const s = style
+    const insets = s?.text_insets
+    const padLeft   = insets?.left   != null && element.width_in  > 0 ? `${(insets.left   / element.width_in  * 100).toFixed(2)}%` : "0.18em"
+    const padRight  = insets?.right  != null && element.width_in  > 0 ? `${(insets.right  / element.width_in  * 100).toFixed(2)}%` : "0.24em"
+    const padTop    = insets?.top    != null && element.height_in > 0 ? `${(insets.top    / element.height_in * 100).toFixed(2)}%` : "0.18em"
+    const padBottom = insets?.bottom != null && element.height_in > 0 ? `${(insets.bottom / element.height_in * 100).toFixed(2)}%` : "0.18em"
+    const anchorLc = s?.vertical_anchor?.toLowerCase()
+    const justifyContent = anchorLc === "middle" || anchorLc === "ctr" || anchorLc === "center" ? "center" : anchorLc === "bottom" || anchorLc === "b" ? "flex-end" : "flex-start"
+    const wordWrap = s?.word_wrap === false ? "nowrap" as const : undefined
+    return {
+      position:    "absolute",
+      inset:       0,
+      padding:     `${padTop} ${padRight} ${padBottom} ${padLeft}`,
+      overflow:    "visible",
+      pointerEvents: "none",
+      userSelect:  "none",
+      display:     "flex",
+      flexDirection: "column",
+      justifyContent,
+      whiteSpace:  wordWrap,
+    }
+  }, [style, element.width_in, element.height_in])
+
   if (editing) {
     return (
       <div style={{ width: "100%", height: "100%", position: "relative" }}>
         <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
-          <ShapeSvg preset={preset} style={style} flipH={element.flip_h} flipV={element.flip_v} />
+          <ShapeSvg id={element.id} preset={preset} style={style} flipH={element.flip_h} flipV={element.flip_v} elementWidthIn={element.width_in} />
         </div>
         <ShapeTextEditor
           elementId={element.id}
@@ -239,6 +467,8 @@ function BridgeShapeRendererImpl({
           onSaved={(c) => { setContent(c); setEditing(false) }}
           onCancel={() => setEditing(false)}
           transparent
+          textFrameStyle={textFrameStyle}
+          textZoom={textZoom}
         />
       </div>
     )
@@ -252,22 +482,16 @@ function BridgeShapeRendererImpl({
     >
       {/* SVG shape body */}
       <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
-        <ShapeSvg preset={preset} style={style} flipH={element.flip_h} flipV={element.flip_v} />
+        <ShapeSvg id={element.id} preset={preset} adj={element.geometry_adjustments} style={style} flipH={element.flip_h} flipV={element.flip_v} elementWidthIn={element.width_in} />
       </div>
       {/* Text overlay (static HTML when idle) */}
       {idleHtml && (
-        <div
-          className="tiptap-bridge-editor"
-          style={{
-            position: "absolute",
-            inset: 0,
-            padding: "0.18em 0.24em",
-            overflow: "hidden",
-            pointerEvents: "none",
-            userSelect: "none",
-          }}
-          dangerouslySetInnerHTML={{ __html: idleHtml }}
-        />
+        <div className="tiptap-text-idle" style={textFrameStyle}>
+          <div
+            style={textZoom != null ? { zoom: textZoom } as React.CSSProperties : undefined}
+            dangerouslySetInnerHTML={{ __html: idleHtml }}
+          />
+        </div>
       )}
     </div>
   )
@@ -276,15 +500,17 @@ function BridgeShapeRendererImpl({
 // ── Text editor overlay ───────────────────────────────────────────────────────
 
 function ShapeTextEditor({
-  elementId, docId, slideN, initialContent, onSaved, onCancel, transparent,
+  elementId, docId, slideN, initialContent, onSaved, onCancel, transparent, textFrameStyle, textZoom,
 }: {
-  elementId:      string
-  docId:          string
-  slideN:         number
-  initialContent: ParagraphsTextContent
-  onSaved:        (c: ParagraphsTextContent) => void
-  onCancel:       () => void
-  transparent?:   boolean
+  elementId:       string
+  docId:           string
+  slideN:          number
+  initialContent:  ParagraphsTextContent
+  onSaved:         (c: ParagraphsTextContent) => void
+  onCancel:        () => void
+  transparent?:    boolean
+  textFrameStyle?: React.CSSProperties
+  textZoom?:       number
 }) {
   const initialJSON = useRef(paragraphsToTiptap(initialContent)).current
   const lastSavedJSON = useRef<string>("")
@@ -384,12 +610,19 @@ function ShapeTextEditor({
         background: transparent ? "transparent" : "rgb(var(--surface))",
         cursor: "text",
         userSelect: "text",
-        padding: "0.18em 0.24em",
+        padding: textFrameStyle?.padding ?? "0.18em 0.24em",
         overflow: "hidden",
+        display: textFrameStyle?.display ?? undefined,
+        flexDirection: textFrameStyle?.flexDirection ?? undefined,
+        justifyContent: textFrameStyle?.justifyContent ?? undefined,
+        whiteSpace: textFrameStyle?.whiteSpace ?? undefined,
       }}
     >
       <TextBubbleMenu editor={editor} />
-      <EditorContent editor={editor} onBlur={save} />
+      {textZoom != null
+        ? <div style={{ zoom: textZoom } as React.CSSProperties}><EditorContent editor={editor} onBlur={save} /></div>
+        : <EditorContent editor={editor} onBlur={save} />
+      }
     </div>
   )
 }

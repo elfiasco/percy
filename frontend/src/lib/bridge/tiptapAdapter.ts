@@ -6,17 +6,15 @@ import type {
 /**
  * Bridge ↔ Tiptap (ProseMirror JSON) adapter.
  *
- * Bridge is the canonical model — what the backend stores, what every Python
- * connect / brand extractor / .pptx exporter reads. Tiptap is a transient
- * editing view. These two converters move data between worlds without losing
- * fidelity.
- *
  * Mapping summary:
  *
  *     ParagraphData       → ProseMirror "paragraph" node
  *       alignment           paragraph attrs.textAlign
- *       space_before        paragraph attrs.spaceBefore (custom, see BridgeParagraph)
- *       space_after         paragraph attrs.spaceAfter (custom, see BridgeParagraph)
+ *       space_before        paragraph attrs.spaceBefore
+ *       space_after         paragraph attrs.spaceAfter
+ *       line_spacing        paragraph attrs.lineSpacing
+ *       bullet_type         paragraph attrs.bulletType
+ *       bullet_char         paragraph attrs.bulletChar
  *
  *     RunData             → ProseMirror "text" node + marks
  *       text                node.text
@@ -29,6 +27,8 @@ import type {
  *       font_size           "textStyle" mark attrs.fontSize
  *       font_color          "textStyle" mark attrs.fontColor
  *       font_caps           "textStyle" mark attrs.caps
+ *       baseline_shift      "textStyle" mark attrs.baselineShift
+ *       char_spacing        "textStyle" mark attrs.charSpacing
  */
 
 // ── Bridge → Tiptap ──────────────────────────────────────────────────────────
@@ -47,9 +47,10 @@ function paragraphToTiptap(p: ParagraphData): JSONContent {
   if (p.alignment)    attrs.textAlign   = p.alignment
   if (p.space_before != null) attrs.spaceBefore = p.space_before
   if (p.space_after  != null) attrs.spaceAfter  = p.space_after
+  if (p.line_spacing != null) attrs.lineSpacing  = p.line_spacing
+  if (p.bullet_type && p.bullet_type !== "none") attrs.bulletType = p.bullet_type
+  if (p.bullet_char) attrs.bulletChar = p.bullet_char
 
-  // Empty paragraph: ProseMirror requires *some* content; we omit content
-  // entirely and let the schema fill in a placeholder cursor position.
   const inline: JSONContent[] = []
   for (const run of p.runs) {
     if (run.is_line_break) {
@@ -71,13 +72,15 @@ function runToTiptapText(run: RunData): JSONContent {
   if (run.font_bold)      marks.push({ type: "bold" })
   if (run.font_italic)    marks.push({ type: "italic" })
   if (run.font_underline) marks.push({ type: "underline" })
-  if (run.strikethrough)  marks.push({ type: "strike" })
+  if (run.strikethrough && run.strikethrough !== "noStrike")  marks.push({ type: "strike" })
 
   const styleAttrs: Record<string, unknown> = {}
   if (run.font_name)  styleAttrs.fontName  = run.font_name
   if (run.font_size != null) styleAttrs.fontSize = run.font_size
   if (run.font_color) styleAttrs.fontColor = run.font_color
   if (run.font_caps)  styleAttrs.caps      = run.font_caps
+  if (run.baseline_shift != null) styleAttrs.baselineShift = run.baseline_shift
+  if (run.char_spacing   != null) styleAttrs.charSpacing   = run.char_spacing
   if (Object.keys(styleAttrs).length > 0) {
     marks.push({ type: "textStyle", attrs: styleAttrs })
   }
@@ -123,6 +126,7 @@ function paragraphFromTiptap(node: JSONContent, idx: number): ParagraphData {
         font_name: null, font_size: null,
         font_bold: null, font_italic: null, font_underline: null,
         font_color: null, strikethrough: null, font_caps: null,
+        baseline_shift: null, char_spacing: null,
       })
       continue
     }
@@ -131,8 +135,6 @@ function paragraphFromTiptap(node: JSONContent, idx: number): ParagraphData {
     }
   }
 
-  // Merge consecutive runs with identical formatting (Tiptap can leave
-  // adjacent text nodes with the same marks, and Bridge prefers compact runs).
   const merged: RunData[] = []
   for (const r of runs) {
     const prev = merged[merged.length - 1]
@@ -142,7 +144,6 @@ function paragraphFromTiptap(node: JSONContent, idx: number): ParagraphData {
       merged.push(r)
     }
   }
-  // Re-index after merge
   merged.forEach((r, i) => { r.idx = i })
 
   return {
@@ -150,6 +151,11 @@ function paragraphFromTiptap(node: JSONContent, idx: number): ParagraphData {
     alignment:    typeof attrs.textAlign   === "string" ? attrs.textAlign : null,
     space_before: typeof attrs.spaceBefore === "number" ? attrs.spaceBefore : null,
     space_after:  typeof attrs.spaceAfter  === "number" ? attrs.spaceAfter : null,
+    line_spacing: typeof attrs.lineSpacing === "number" ? attrs.lineSpacing : null,
+    indent_level: null,
+    left_indent:  null,
+    bullet_type:  typeof attrs.bulletType === "string" ? attrs.bulletType : null,
+    bullet_char:  typeof attrs.bulletChar === "string" ? attrs.bulletChar : null,
     runs: merged.length > 0 ? merged : [emptyRun(0)],
   }
 }
@@ -168,6 +174,8 @@ function textNodeToRun(node: JSONContent, idx: number): RunData {
     font_size:      typeof sa.fontSize  === "number" ? sa.fontSize  : null,
     font_color:     typeof sa.fontColor === "string" ? sa.fontColor : null,
     font_caps:      typeof sa.caps      === "string" ? sa.caps      : null,
+    baseline_shift: typeof sa.baselineShift === "number" ? sa.baselineShift : null,
+    char_spacing:   typeof sa.charSpacing   === "number" ? sa.charSpacing   : null,
     font_bold:      has("bold")      ? true : null,
     font_italic:    has("italic")    ? true : null,
     font_underline: has("underline") ? true : null,
@@ -180,6 +188,8 @@ function sameFormat(a: RunData, b: RunData): boolean {
       && a.font_size      === b.font_size
       && a.font_color     === b.font_color
       && a.font_caps      === b.font_caps
+      && a.baseline_shift === b.baseline_shift
+      && a.char_spacing   === b.char_spacing
       && !!a.font_bold    === !!b.font_bold
       && !!a.font_italic  === !!b.font_italic
       && !!a.font_underline === !!b.font_underline
@@ -189,6 +199,8 @@ function sameFormat(a: RunData, b: RunData): boolean {
 function emptyBridgeParagraph(idx: number): ParagraphData {
   return {
     idx, alignment: null, space_before: null, space_after: null,
+    line_spacing: null, indent_level: null, left_indent: null,
+    bullet_type: null, bullet_char: null,
     runs: [emptyRun(0)],
   }
 }
@@ -199,5 +211,6 @@ function emptyRun(idx: number): RunData {
     font_name: null, font_size: null,
     font_bold: null, font_italic: null, font_underline: null,
     font_color: null, strikethrough: null, font_caps: null,
+    baseline_shift: null, char_spacing: null,
   }
 }

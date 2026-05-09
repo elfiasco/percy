@@ -91,6 +91,8 @@ class StudioStore {
   private state: StudioSessionState = EMPTY_STATE
   private listeners = new Set<Listener>()
   private payloadInflight = new Map<string, Promise<unknown>>()
+  // Tracks which "docId:slideN" each elementId's payload was last fetched for.
+  private payloadSlide = new Map<string, string>()
 
   getSnapshot = (): StudioSessionState => this.state
 
@@ -154,6 +156,17 @@ class StudioStore {
     for (const el of response.elements) {
       renderKeys[el.id] = prevKeys[el.id] ?? 0
     }
+    const slideKey = `${docId}:${response.slide_number}`
+    // Drop payloads for elements whose cached slide doesn't match the incoming slide.
+    // Elements share shape_id-based IDs across slides, so stale cross-slide payloads
+    // would otherwise show the previous slide's content until the re-fetch completes.
+    const freshPayloads = keepPayloadsForElements(this.state.payloads, response.elements)
+    for (const id of Object.keys(freshPayloads)) {
+      if (this.payloadSlide.get(id) !== slideKey) {
+        delete freshPayloads[id]
+        this.payloadSlide.delete(id)
+      }
+    }
     this.patch({
       docId,
       slideN: response.slide_number,
@@ -163,7 +176,7 @@ class StudioStore {
       elements: response.elements.map((el) =>
         withDerivedPercentages(el, response.slide_width_in, response.slide_height_in),
       ),
-      payloads: keepPayloadsForElements(this.state.payloads, response.elements),
+      payloads: freshPayloads,
       renderKeys,
       selectedIds: this.state.slideN === response.slide_number ? this.state.selectedIds : [],
       loading: false,
@@ -175,7 +188,13 @@ class StudioStore {
     this.patch({ docId, slideN, loading: true, error: null })
     try {
       const response = await fetchSlideElements(docId, slideN)
-      this.hydrateSlide(docId, response)
+      // Guard: only hydrate if we're still on the slide we fetched for.
+      // During rapid navigation, multiple loadSlide calls can be in-flight
+      // simultaneously; the last patch({ slideN }) wins, so earlier responses
+      // arriving out of order must not clobber the correct slide's elements.
+      if (this.state.slideN === response.slide_number) {
+        this.hydrateSlide(docId, response)
+      }
       return response
     } catch (err) {
       this.patch({ loading: false, error: errorMessage(err) })
@@ -223,7 +242,7 @@ class StudioStore {
     const renderKeys = { ...this.state.renderKeys }
     for (const id of remove) delete renderKeys[id]
     const payloads = { ...this.state.payloads }
-    for (const id of remove) delete payloads[id]
+    for (const id of remove) { delete payloads[id]; this.payloadSlide.delete(id) }
     this.patch({
       elements: this.state.elements.filter((el) => !remove.has(el.id)),
       selectedIds: this.state.selectedIds.filter((id) => !remove.has(id)),
@@ -291,8 +310,13 @@ class StudioStore {
     force: boolean,
     loader: () => Promise<T>,
   ): Promise<T | null> {
+    // Payloads are slide-specific: only use the cache when force=false AND we're on the
+    // same doc+slide that the payload was fetched for (tracked via payloadSlide).
     const existing = this.state.payloads[elementId]
-    if (!force && existing && existing[kind] !== undefined) return existing[kind] as T
+    const cachedSlide = this.payloadSlide.get(elementId)
+    if (!force && existing && existing[kind] !== undefined && cachedSlide === `${docId}:${slideN}`) {
+      return existing[kind] as T
+    }
 
     const key = this.payloadKey(docId, slideN, elementId, kind)
     const inflight = this.payloadInflight.get(key)
@@ -301,6 +325,9 @@ class StudioStore {
     this.setPayloadLoading(elementId, kind, true, null)
     const promise = loader()
       .then((data) => {
+        // Discard result if the user has navigated away from this slide.
+        if (this.state.docId !== docId || this.state.slideN !== slideN) return data
+        this.payloadSlide.set(elementId, `${docId}:${slideN}`)
         this.setPayloadData(elementId, { [kind]: data } as Partial<Omit<StudioElementPayloadState, "loading" | "errors" | "version">>)
         this.setPayloadLoading(elementId, kind, false, null)
         return data

@@ -101,7 +101,15 @@ export function hydrateSlide(
 ): void {
   room.doc.transact(() => {
     const meta = room.doc.getMap("slide_meta")
-    if (!meta.has("background_color")) meta.set("background_color", background_color)
+    // Always update background_color — slides can differ
+    meta.set("background_color", background_color)
+    // Remove elements no longer in this slide's API response (stale from prior
+    // slide navigations where the wrong room was hydrated via a stale closure).
+    const elementsMap = room.doc.getMap<Y.Map<unknown>>("elements")
+    const newIds = new Set(elements.map((el) => el.id))
+    for (const existingId of [...elementsMap.keys()]) {
+      if (!newIds.has(existingId)) elementsMap.delete(existingId)
+    }
     for (const el of elements) hydrateElement(room, el)
   })
 }
@@ -147,7 +155,11 @@ export function observeElement(
   elementId: string,
   cb: (snapshot: Partial<StudioElement>) => void,
 ): () => void {
-  const m = elementMap(room, elementId)
+  // Read-only lookup — do NOT call elementMap() here, which would create a new
+  // Y.Map entry for an element that doesn't belong in this room (e.g. when the
+  // Y.Doc subscription effect fires on the OLD room during slide navigation).
+  const m = room.doc.getMap<Y.Map<unknown>>("elements").get(elementId)
+  if (!m) return () => {}
   const handler = () => {
     const snap = readElementScalar(room, elementId)
     if (snap) cb(snap)

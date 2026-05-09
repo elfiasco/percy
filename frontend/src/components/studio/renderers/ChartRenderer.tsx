@@ -23,6 +23,22 @@ function seriesColor(s: ChartSeriesData, idx: number): string {
   return s.color || DEFAULT_PALETTE[idx % DEFAULT_PALETTE.length]
 }
 
+// Returns a readable label color for labels rendered OUTSIDE on white background.
+// If the chart's configured label color is too light (e.g. white intended for
+// inside-bar rendering), fall back to a dark color matching matplotlib's default.
+function outsideLabelColor(fontColor: string | null | undefined): string {
+  if (!fontColor) return "#555"
+  const c = fontColor.replace("#", "")
+  if (c.length === 6) {
+    const r = parseInt(c.slice(0, 2), 16)
+    const g = parseInt(c.slice(2, 4), 16)
+    const b = parseInt(c.slice(4, 6), 16)
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+    if (luminance > 0.75) return "#555"
+  }
+  return fontColor
+}
+
 // Recharts Legend props from Bridge legend.position
 function legendProps(lg: ChartLegendData) {
   if (!lg.visible) return null
@@ -82,7 +98,7 @@ function buildPieData(data: ChartData): Array<{ name: string; value: number; col
   return s0.values.map((v, i) => ({
     name: data.categories[i] ?? `Slice ${i + 1}`,
     value: Number(v ?? 0),
-    color: DEFAULT_PALETTE[i % DEFAULT_PALETTE.length],
+    color: (s0.point_colors && s0.point_colors[i]) || DEFAULT_PALETTE[i % DEFAULT_PALETTE.length],
   }))
 }
 
@@ -105,35 +121,50 @@ function buildScatterSeries(data: ChartData) {
 
 // ── Sub-renderers per chart-type family ───────────────────────────────────────
 
-function CartesianMargins() {
-  return { top: 6, right: 12, bottom: 8, left: 8 }
+// Title is an overlay; top margin only needs to clear data labels if present.
+// Keep margins tight to match matplotlib's minimal internal chart padding.
+function CartesianMargins(hasDataLabels = false) {
+  return { top: hasDataLabels ? 14 : 4, right: 4, bottom: 0, left: 2 }
 }
 
 function renderXAxis(data: ChartData, dataKey: string = "__cat__", horizontal = false) {
   const ax = horizontal ? data.value_axis : data.category_axis
   if (!ax.visible) return null
+  const fontSize = ax.tick_label_font_size ?? 7
   return (
     <XAxis
       dataKey={horizontal ? undefined : dataKey}
       type={horizontal ? "number" : "category"}
       domain={horizontal && (ax.min !== null || ax.max !== null) ? [ax.min ?? "auto", ax.max ?? "auto"] : undefined}
-      tick={{ fontSize: ax.tick_label_font_size ?? 9, fill: ax.tick_label_font_color || "#555" }}
+      tick={{ fontSize, fill: ax.tick_label_font_color || "#555", angle: !horizontal ? -30 : 0, textAnchor: !horizontal ? "end" : "middle" }}
+      height={horizontal ? 26 : 34}
       reversed={ax.reverse_order}
       tickFormatter={ax.number_format && horizontal ? (v) => formatNumber(v, ax.number_format!) : undefined}
     />
   )
 }
 
-function renderYAxis(data: ChartData, horizontal = false) {
+function renderYAxis(data: ChartData, horizontal = false, zeroFloor = false) {
   const ax = horizontal ? data.category_axis : data.value_axis
   if (!ax.visible) return null
+  let domain: [number | string, number | string] | undefined
+  if (!horizontal) {
+    if (ax.min !== null || ax.max !== null) {
+      domain = [ax.min ?? "auto", ax.max ?? "auto"]
+    } else if (zeroFloor) {
+      domain = [0, "auto"]
+    }
+  }
+  const fontSize = ax.tick_label_font_size ?? 7
   return (
     <YAxis
       dataKey={horizontal ? "__cat__" : undefined}
       type={horizontal ? "category" : "number"}
-      domain={!horizontal && (ax.min !== null || ax.max !== null) ? [ax.min ?? "auto", ax.max ?? "auto"] : undefined}
-      tick={{ fontSize: ax.tick_label_font_size ?? 9, fill: ax.tick_label_font_color || "#555" }}
+      domain={domain}
+      tick={{ fontSize, fill: ax.tick_label_font_color || "#555" }}
+      width={horizontal ? undefined : 24}
       reversed={ax.reverse_order}
+      tickCount={!horizontal ? 6 : undefined}
       tickFormatter={!horizontal && ax.number_format ? (v) => formatNumber(v, ax.number_format!) : undefined}
     />
   )
@@ -170,20 +201,21 @@ function ColumnOrBarChart({ data, horizontal, stacked, percent }: {
   }
   const lp = legendProps(data.legend)
   const valAxFormat = percent ? "0%" : (data.value_axis.number_format || undefined)
+  const anyDataLabels = data.series.some((s) => s.data_labels.show)
+  // Reference renderer hardcodes width=0.8 per bar cluster, matching barCategoryGap=20%.
+  const barCategoryGap = "20%"
+
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart
         data={rows}
         layout={horizontal ? "vertical" : "horizontal"}
-        margin={CartesianMargins()}
-        barCategoryGap={data.plot_properties.bar_width_ratio ? `${10 / data.plot_properties.bar_width_ratio}%` : "20%"}
+        margin={CartesianMargins(anyDataLabels)}
+        barCategoryGap={barCategoryGap}
         stackOffset={percent ? "expand" : undefined}
       >
-        {(data.value_axis.gridlines_major || data.category_axis.gridlines_major) &&
-          <CartesianGrid stroke="#e6e6e6" strokeDasharray="3 3" />
-        }
         {renderXAxis(data, "__cat__", horizontal)}
-        {renderYAxis(data, horizontal)}
+        {renderYAxis(data, horizontal, !horizontal && !percent)}
         <Tooltip cursor={{ fill: "rgba(0,0,0,0.04)" }} formatter={valAxFormat ? (v) => formatNumber(v as number, valAxFormat) : undefined} />
         {lp && <Legend {...lp} />}
         {data.series.map((s, idx) => {
@@ -203,7 +235,7 @@ function ColumnOrBarChart({ data, horizontal, stacked, percent }: {
                   position={horizontal ? "right" : "top"}
                   style={{
                     fontSize: s.data_labels.font_size ?? 9,
-                    fill: s.data_labels.font_color || "#444",
+                    fill: outsideLabelColor(s.data_labels.font_color),
                   }}
                   formatter={(v: unknown) => {
                     const n = Number(v)
@@ -223,12 +255,10 @@ function LineOrAreaChart({ data, area, stacked }: { data: ChartData; area: boole
   const rows = buildCategoryRows(data)
   const lp = legendProps(data.legend)
   const Chart = area ? AreaChart : LineChart
+  const anyDataLabels = data.series.some((s) => s.data_labels.show)
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <Chart data={rows} margin={CartesianMargins()}>
-        {(data.value_axis.gridlines_major || data.category_axis.gridlines_major) &&
-          <CartesianGrid stroke="#e6e6e6" strokeDasharray="3 3" />
-        }
+      <Chart data={rows} margin={CartesianMargins(anyDataLabels)}>
         {renderXAxis(data)}
         {renderYAxis(data)}
         <Tooltip cursor={{ stroke: "#999", strokeDasharray: "3 3" }} />
@@ -289,11 +319,27 @@ function dashArray(dash: string | null | undefined): string | undefined {
 function PieOrDonutChart({ data, donut, exploded }: { data: ChartData; donut: boolean; exploded: boolean }) {
   const pieData = buildPieData(data)
   const lp = legendProps(data.legend)
-  const showLabels = !!data.series[0]?.data_labels.show
+  const total = pieData.reduce((s, d) => s + (d.value || 0), 0)
+  const pctLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent }: {
+    cx: number; cy: number; midAngle: number
+    innerRadius: number; outerRadius: number; percent: number
+  }) => {
+    if (percent < 0.04) return null
+    const RADIAN = Math.PI / 180
+    const dist = donut ? (innerRadius + outerRadius) * 0.5 : outerRadius * 0.6
+    const x = cx + dist * Math.cos(-midAngle * RADIAN)
+    const y = cy + dist * Math.sin(-midAngle * RADIAN)
+    return (
+      <text x={x} y={y} fill="white" textAnchor="middle" dominantBaseline="central"
+        style={{ fontSize: "9px", fontWeight: 600, pointerEvents: "none" }}>
+        {`${Math.round(percent * 100)}%`}
+      </text>
+    )
+  }
   return (
     <ResponsiveContainer width="100%" height="100%">
       <PieChart>
-        <Tooltip />
+        <Tooltip formatter={(v: number) => `${total > 0 ? ((v / total) * 100).toFixed(1) : 0}%`} />
         {lp && <Legend {...lp} />}
         <Pie
           data={pieData}
@@ -303,10 +349,11 @@ function PieOrDonutChart({ data, donut, exploded }: { data: ChartData; donut: bo
           cy="50%"
           outerRadius="80%"
           innerRadius={donut ? `${data.plot_properties.hole_size ?? 50}%` : 0}
-          startAngle={90 - (data.plot_properties.first_slice_ang ?? 0)}
-          endAngle={90 - (data.plot_properties.first_slice_ang ?? 0) - 360}
+          startAngle={90}
+          endAngle={450}
           isAnimationActive={false}
-          label={showLabels}
+          label={pctLabel}
+          labelLine={false}
           paddingAngle={exploded ? 2 : 0}
         >
           {pieData.map((entry, i) => (
@@ -324,9 +371,8 @@ function ScatterOrBubbleChart({ data, withLines, bubble }: { data: ChartData; wi
   return (
     <ResponsiveContainer width="100%" height="100%">
       <ScatterChart margin={CartesianMargins()}>
-        <CartesianGrid stroke="#e6e6e6" strokeDasharray="3 3" />
-        <XAxis type="number" dataKey="x" tick={{ fontSize: 9 }} />
-        <YAxis type="number" dataKey="y" tick={{ fontSize: 9 }} />
+        <XAxis type="number" dataKey="x" tick={{ fontSize: 7 }} height={18} />
+        <YAxis type="number" dataKey="y" tick={{ fontSize: 7 }} width={24} />
         {bubble && <ZAxis type="number" dataKey="z" range={[20, 200]} />}
         <Tooltip cursor={{ strokeDasharray: "3 3" }} />
         {lp && <Legend {...lp} />}
@@ -353,7 +399,6 @@ function ComboChart({ data }: { data: ChartData }) {
   return (
     <ResponsiveContainer width="100%" height="100%">
       <ComposedChart data={rows} margin={CartesianMargins()}>
-        <CartesianGrid stroke="#e6e6e6" strokeDasharray="3 3" />
         {renderXAxis(data)}
         {renderYAxis(data)}
         <Tooltip />
@@ -450,16 +495,22 @@ function ChartRendererImpl({ element, docId, slideN, renderKey }: NativeRenderer
   return (
     <div style={{
       width: "100%", height: "100%",
-      display: "flex", flexDirection: "column",
-      background: "transparent",   // composite over slide background
-      pointerEvents: "none",       // pointer events stay with the overlay parent (drag/select)
+      position: "relative",
+      background: "transparent",
+      pointerEvents: "none",
       userSelect: "none",
       boxSizing: "border-box",
     }}>
-      {title && <div style={title.style}>{title.text}</div>}
-      <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
-        <ChartByType data={data} />
-      </div>
+      {title && (
+        <div style={{
+          position: "absolute", top: 2, left: 0, right: 0, zIndex: 1,
+          pointerEvents: "none", userSelect: "none",
+          ...title.style,
+        }}>
+          {title.text}
+        </div>
+      )}
+      <ChartByType data={data} />
     </div>
   )
 }

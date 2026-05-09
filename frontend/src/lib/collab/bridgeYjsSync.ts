@@ -94,8 +94,13 @@ export function hydrateSlide(
   background_color: string | null,
 ): void {
   room.doc.transact(() => {
-    if (!room.meta.has("background_color")) {
-      room.meta.set("background_color", background_color)
+    room.meta.set("background_color", background_color)
+    // Remove elements that are no longer in the API response (stale from previous load)
+    const newIds = new Set(elements.map(el => el.id))
+    for (const existingId of [...room.elements.keys()]) {
+      if (!newIds.has(existingId)) {
+        room.elements.delete(existingId)
+      }
     }
     for (const el of elements) {
       hydrateElement(room, el)

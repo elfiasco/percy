@@ -126,6 +126,29 @@
   /* Tiptap renders inline color via element style — wire to our CSS var. */
   .ProseMirror .collaboration-cursor__caret[style*="--cursor-color"] {}
 
+  /* Bullet markers for Bridge paragraphs with bulletType set.
+     The ::before pseudo-element renders the bullet character or a default bullet. */
+  .tiptap-bridge-editor p[data-bullet-type]:not([data-bullet-type="none"])::before {
+    content: attr(data-bullet-char, "•");
+    position: absolute;
+    left: 0.15em;
+  }
+  .tiptap-bridge-editor p[data-bullet-type="number"]::before {
+    content: "•";  /* fallback — proper numbering needs counter-reset */
+  }
+
+  /* Bridge idle text rendering — reset browser <p> margins so space_before/after
+     attributes are the sole source of paragraph spacing, matching PPTX behavior.
+     Without this, browser default margin-top: 1em pushes text outside the
+     overflow:hidden container, making it invisible. */
+  .tiptap-text-idle p,
+  .tiptap-text-idle ul,
+  .tiptap-text-idle ol {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
   /* Default table styling for BridgeTable Tiptap renderer.
      Element-style fills/borders override these per-element, but at minimum
      a table reads as a table. */
@@ -134,6 +157,9 @@
     width: 100%;
     table-layout: fixed;
   }
+  /* Row heights from Bridge model are applied via inline style; allow rows to
+     enforce their height. min-height doesn't work on <tr> — use height. */
+  .bridge-table tr { height: auto; }
   .bridge-table td, .bridge-table th {
     border: 1px solid var(--edge);
     padding: 4px 6px;

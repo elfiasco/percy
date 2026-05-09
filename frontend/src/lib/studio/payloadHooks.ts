@@ -45,9 +45,8 @@ export function useStudioTextStylePayload(
 ) {
   const state = useStudioStore()
   useEffect(() => {
-    const force = renderKey > 0
-    void studioStore.loadTextPayload(docId, slideN, elementId, force)
-    void studioStore.loadStylePayload(docId, slideN, elementId, force)
+    void studioStore.loadTextPayload(docId, slideN, elementId, renderKey > 0)
+    void studioStore.loadStylePayload(docId, slideN, elementId, renderKey > 0)
   }, [docId, slideN, elementId, renderKey])
   const payload = state.payloads[elementId]
   return {

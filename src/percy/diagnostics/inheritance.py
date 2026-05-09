@@ -307,7 +307,7 @@ def _resolve_underline(run: Any | None, sources: list[dict[str, Any]]) -> Resolv
 
 
 def _resolve_color(shape: Any, run: Any | None, sources: list[dict[str, Any]], theme: dict[str, Any]) -> ResolvedValue:
-    explicit = _python_color(run)
+    explicit = _python_color(run, theme)
     if explicit:
         return ResolvedValue(explicit, "slide:run:rPr")
     for source in sources:
@@ -348,7 +348,7 @@ def _font_size_from_rpr(r_pr: Any) -> float | None:
     return round(int(size) / 100.0, 2)
 
 
-def _python_color(run: Any | None) -> "ColorSpec | None":
+def _python_color(run: Any | None, theme: dict[str, Any] | None = None) -> "ColorSpec | None":
     from percy.bridge.elements import ColorSpec
     if run is None:
         return None
@@ -356,7 +356,7 @@ def _python_color(run: Any | None) -> "ColorSpec | None":
         from pptx.oxml.ns import qn
         rpr_el = run._r.find(qn("a:rPr"))
         if rpr_el is not None:
-            spec = _xml_color(rpr_el, {})
+            spec = _xml_color(rpr_el, theme or {})
             if spec is not None:
                 return spec
     except Exception:
@@ -408,13 +408,27 @@ def _xml_color(r_pr: Any, theme: dict[str, Any]) -> "ColorSpec | None":
                     pass
             return None
 
+        lum_mod = _int_val("lumMod")
+        lum_off = _int_val("lumOff")
+        shade   = _int_val("shade")
+        tint    = _int_val("tint")
+        alpha   = _int_val("alpha")
+
+        # Try to resolve to a concrete hex value immediately so bridge objects
+        # are self-contained and don't rely on theme_colors at serialization time.
+        raw_hex = theme.get("colors", {}).get(xml_name, "")
+        if raw_hex:
+            base = raw_hex if raw_hex.startswith("#") else f"#{raw_hex}"
+            temp = ColorSpec(value=base, lum_mod=lum_mod, lum_off=lum_off,
+                             shade=shade, tint=tint)
+            resolved = temp.resolve()
+            if len(resolved.lstrip("#")) == 6 and resolved.upper() != "#888888":
+                return ColorSpec(value=resolved, alpha=alpha)
+
         return ColorSpec(
             value=f"scheme:{normalized}",
-            lum_mod=_int_val("lumMod"),
-            lum_off=_int_val("lumOff"),
-            shade=_int_val("shade"),
-            tint=_int_val("tint"),
-            alpha=_int_val("alpha"),
+            lum_mod=lum_mod, lum_off=lum_off,
+            shade=shade, tint=tint, alpha=alpha,
         )
     except Exception:
         pass

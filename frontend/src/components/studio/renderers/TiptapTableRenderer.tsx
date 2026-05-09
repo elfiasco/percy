@@ -33,7 +33,7 @@ function TiptapTableRendererImpl({
 
   useEffect(() => {
     setError(payload.error)
-    if (payload.text) setContent(payload.text.kind === "table" ? payload.text : { kind: "table", rows: 0, cols: 0, cells: [] })
+    if (payload.text) setContent(payload.text.kind === "table" ? payload.text : { kind: "table", rows: 0, cols: 0, properties: null, cells: [] })
     if (payload.style) setStyle(payload.style)
   }, [payload.error, payload.text, payload.style])
 
@@ -138,7 +138,7 @@ function tiptapTableToTableContent(json: object): TableTextContent {
   let rows = 0, cols = 0
   const doc = json as { content?: Array<{ type: string; content?: Array<{ type: string; content?: Array<{ type: string; content?: Array<{ type: string; content?: Array<{ type: string; text?: string }> }> }> }> }> }
   const tableNode = doc.content?.find((n) => n.type === "table")
-  if (!tableNode) return { kind: "table", rows: 0, cols: 0, cells: [] }
+  if (!tableNode) return { kind: "table", rows: 0, cols: 0, properties: null, cells: [] }
   const tableRows = tableNode.content ?? []
   rows = tableRows.length
   for (const row of tableRows) {
@@ -151,6 +151,11 @@ function tiptapTableToTableContent(json: object): TableTextContent {
         alignment: null,
         space_before: null,
         space_after: null,
+        line_spacing: null,
+        indent_level: null,
+        left_indent: null,
+        bullet_type: null,
+        bullet_char: null,
         runs: (p.content ?? []).map((run, ri) => ({
           idx: ri,
           text: run.text ?? "",
@@ -158,13 +163,14 @@ function tiptapTableToTableContent(json: object): TableTextContent {
           font_name: null, font_size: null, font_bold: null,
           font_italic: null, font_underline: null,
           font_color: null, strikethrough: null, font_caps: null,
+          baseline_shift: null, char_spacing: null,
         })),
       }))
       cellRow.push(paragraphs)
     }
     cells.push(cellRow)
   }
-  return { kind: "table", rows, cols, cells: cells as unknown as TableTextContent["cells"] }
+  return { kind: "table", rows, cols, properties: null, cells: cells as unknown as TableTextContent["cells"] }
 }
 
 // ── live editor ──────────────────────────────────────────────────────────────

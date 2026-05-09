@@ -3,15 +3,13 @@ import { TextStyle } from "@tiptap/extension-text-style"
 /**
  * Extends Tiptap's TextStyle mark with Bridge font attributes:
  *
- *   - fontName   →  font-family
- *   - fontSize   →  font-size (pt; rendered as `Npt`)
- *   - fontColor  →  color
- *   - caps       →  "all" → text-transform: uppercase
- *                   "small" → font-variant-caps: small-caps
- *
- * Color is also handled by the separate Color extension (writes to the
- * "color" attr of textStyle); fontColor here is our explicit field that
- * round-trips cleanly with Bridge's font_color.
+ *   - fontName      →  font-family
+ *   - fontSize      →  font-size (pt)
+ *   - fontColor     →  color
+ *   - caps          →  "all" → text-transform: uppercase
+ *                      "small" → font-variant-caps: small-caps
+ *   - baselineShift →  vertical-align (fraction of font-size; negative=superscript)
+ *   - charSpacing   →  letter-spacing (pt)
  */
 
 function cssFamily(name: string): string {
@@ -31,10 +29,12 @@ function pxToPt(v: string | null): number | null {
 }
 
 interface BridgeStyleAttrs {
-  fontName?:  string | null
-  fontSize?:  number | null
-  fontColor?: string | null
-  caps?:      string | null
+  fontName?:      string | null
+  fontSize?:      number | null
+  fontColor?:     string | null
+  caps?:          string | null
+  baselineShift?: number | null
+  charSpacing?:   number | null
 }
 
 export const BridgeTextStyle = TextStyle.extend({
@@ -55,7 +55,9 @@ export const BridgeTextStyle = TextStyle.extend({
         default: null as number | null,
         parseHTML: (el) => pxToPt((el as HTMLElement).style.fontSize),
         renderHTML: (attrs: BridgeStyleAttrs) =>
-          attrs.fontSize != null ? { style: `font-size: ${attrs.fontSize}pt` } : {},
+          attrs.fontSize != null
+            ? { style: `font-size: calc(${attrs.fontSize} * var(--pt-scale, 0.1574) * 1vh)` }
+            : {},
       },
       fontColor: {
         default: null as string | null,
@@ -76,6 +78,34 @@ export const BridgeTextStyle = TextStyle.extend({
           if (attrs.caps === "small") return { style: "font-variant-caps: small-caps" }
           return {}
         },
+      },
+      baselineShift: {
+        default: null as number | null,
+        parseHTML: (el) => {
+          const v = (el as HTMLElement).style.verticalAlign
+          if (!v || v === "baseline") return null
+          // Encoded as CSS percentage: -50% → shift = -0.5 (negative = superscript = up)
+          if (v.endsWith("%")) return -parseFloat(v) / 100 || null
+          return null
+        },
+        renderHTML: (attrs: BridgeStyleAttrs) => {
+          if (attrs.baselineShift == null) return {}
+          // Negative baselineShift = text goes up = negative vertical-align in CSS (superscript)
+          return { style: `vertical-align: ${(-attrs.baselineShift * 100).toFixed(1)}%` }
+        },
+      },
+      charSpacing: {
+        default: null as number | null,
+        parseHTML: (el) => {
+          const v = (el as HTMLElement).style.letterSpacing
+          if (!v || v === "normal") return null
+          // Convert from CSS pt back to OOXML hundredths-of-a-point
+          const pt = pxToPt(v)
+          return pt != null ? Math.round(pt * 100) : null
+        },
+        renderHTML: (attrs: BridgeStyleAttrs) =>
+          // charSpacing is in OOXML units: hundredths of a point (spc attribute)
+          attrs.charSpacing != null ? { style: `letter-spacing: ${(attrs.charSpacing / 100).toFixed(2)}pt` } : {},
       },
     }
   },

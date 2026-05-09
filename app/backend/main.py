@@ -3507,7 +3507,19 @@ _ELEMENT_TYPE_LABELS: dict[str, str] = {
 def _element_id(el: Any, index: int) -> str:
     ident = getattr(el, "identification", None)
     shape_id = getattr(ident, "shape_id", None) if ident else None
-    return str(shape_id) if shape_id is not None else f"idx_{index}"
+    if shape_id is not None:
+        # Inherited layout/master shapes are assigned negative z-indices by
+        # _onboard_inherited_shapes (-2000…-1001 for master, -1000…-1 for
+        # layout). Slide-own shapes have non-negative z-indices. Master/layout
+        # shapes from different sources can share shape_id values with
+        # slide-own shapes, so prefix them to prevent ID collisions that would
+        # cause raw-image / element-png to find the wrong element.
+        z_index = getattr(getattr(el, "stacking", None), "z_index", None)
+        if z_index is not None and z_index < 0:
+            prefix = "m" if z_index < -1000 else "l"
+            return f"{prefix}{shape_id}"
+        return str(shape_id)
+    return f"idx_{index}"
 
 
 def _serialize_element(el: Any, index: int, slide_w: float, slide_h: float) -> dict[str, Any]:
@@ -3526,10 +3538,11 @@ def _serialize_element(el: Any, index: int, slide_w: float, slide_h: float) -> d
     z_index  = int(getattr(st, "z_index", 1) or 1)
     el_type  = el.element_type
 
-    # geometry_preset — used by the native SVG shape renderer to pick the right
-    # SVG path without an extra round-trip. Only meaningful for BridgeShape.
+    # geometry_preset + adjustments — used by the native SVG shape renderer.
+    # Only meaningful for BridgeShape; adjustments used for arc, pie, etc.
     shape_id_obj = getattr(el, "shape_identification", None)
     geometry_preset: str | None = getattr(shape_id_obj, "geometry_preset", None) if shape_id_obj else None
+    geometry_adjustments: dict = getattr(shape_id_obj, "geometry_adjustments", {}) if shape_id_obj else {}
 
     left_pct  = (pos.left   / slide_w * 100) if slide_w else 0.0
     top_pct   = (pos.top    / slide_h * 100) if slide_h else 0.0
@@ -3577,6 +3590,7 @@ def _serialize_element(el: Any, index: int, slide_w: float, slide_h: float) -> d
         "hidden":           bool(custom.get("studio_hidden", False)),
         "animation":        custom.get("studio_animation", "none"),
         "geometry_preset":  geometry_preset,
+        "geometry_adjustments": geometry_adjustments or {},
         "children":         children_data,
     }
 
@@ -7573,6 +7587,14 @@ def adapt_for_audience(doc_id: str, req: AudienceAdaptRequest):
 def _color_to_str(c: Any) -> str | None:
     if c is None:
         return None
+    # Use resolve() so lum_mod, tint, shade, and alpha modifiers are applied.
+    # alpha blends against white — matches matplotlib's white-canvas composite.
+    resolve = getattr(c, "resolve", None)
+    if resolve is not None and callable(resolve):
+        try:
+            return resolve() or None
+        except Exception:
+            pass
     v = getattr(c, "value", None)
     return v if v else None
 
@@ -7597,15 +7619,31 @@ def _ser_run(run: Any, idx: int) -> dict:
         "font_color":     _color_to_str(run.font_color),
         "strikethrough":  run.strikethrough,
         "font_caps":      run.font_caps,
+        "baseline_shift": getattr(run, "baseline_shift", None),
+        "char_spacing":   getattr(run, "char_spacing", None),
     }
+
+
+_ALIGN_MAP = {"ctr": "center", "r": "right", "l": "left", "just": "justify"}
+
+
+def _norm_align(a: str | None) -> str | None:
+    if not a:
+        return a
+    return _ALIGN_MAP.get(a.lower(), a.lower())
 
 
 def _ser_para(para: Any, idx: int) -> dict:
     return {
         "idx":          idx,
-        "alignment":    para.alignment,
+        "alignment":    _norm_align(para.alignment),
         "space_before": para.space_before,
         "space_after":  para.space_after,
+        "line_spacing": getattr(para, "line_spacing", None),
+        "indent_level": getattr(para, "indent_level", 0),
+        "left_indent":  getattr(para, "left_indent", None),
+        "bullet_type":  getattr(para, "bullet_type", "none"),
+        "bullet_char":  getattr(para, "bullet_char", None),
         "runs":         [_ser_run(r, i) for i, r in enumerate(para.runs)],
     }
 
@@ -7678,24 +7716,64 @@ def _serialize_element_text_content(el: Any, el_type: str) -> dict:
 
     if el_type == "BridgeTable":
         cfs = getattr(el, "cell_formats", []) or []
+        tp  = getattr(el, "table_properties", None)
+        def _ser_cell_border(b: Any) -> dict | None:
+            if b is None: return None
+            return {
+                "visible": bool(getattr(b, "visible", True)),
+                "style":   getattr(b, "style", None) or getattr(b, "dash_style", None),
+                "width":   getattr(b, "width", None),
+                "color":   _color_to_str(getattr(b, "color", None)),
+            }
+        def _ser_table_cell_full(r: int, c: int, cf: Any) -> dict:
+            borders_obj = getattr(cf, "borders", None)
+            align_obj   = getattr(cf, "alignment", None)
+            merge_obj   = getattr(cf, "merge", None)
+            return {
+                "row":        r,
+                "col":        c,
+                "text":       cf.text or "",
+                "paragraphs": [_ser_para(p, i) for i, p in enumerate(cf.paragraphs or [])],
+                "font_name":  cf.font.font_name,
+                "font_size":  cf.font.font_size,
+                "font_bold":  cf.font.font_bold,
+                "font_italic":cf.font.font_italic,
+                "font_color": _color_to_str(getattr(cf.font, "text_color", None)),
+                "fill_color": _color_to_str(getattr(cf, "fill_color", None)),
+                "fill_type":  getattr(cf, "fill_type", None),
+                "h_align":    getattr(align_obj, "text_alignment", "left") if align_obj else "left",
+                "v_align":    getattr(align_obj, "vertical_alignment", "top") if align_obj else "top",
+                "word_wrap":  getattr(cf, "word_wrap", None),
+                "merge": {
+                    "is_origin":  bool(getattr(merge_obj, "is_merge_origin", False)) if merge_obj else False,
+                    "is_spanned": bool(getattr(merge_obj, "is_spanned",      False)) if merge_obj else False,
+                    "row_span":   getattr(merge_obj, "merge_span_rows", 1)          if merge_obj else 1,
+                    "col_span":   getattr(merge_obj, "merge_span_cols", 1)          if merge_obj else 1,
+                },
+                "borders": {
+                    "top":    _ser_cell_border(getattr(borders_obj, "border_top",    None) if borders_obj else None),
+                    "bottom": _ser_cell_border(getattr(borders_obj, "border_bottom", None) if borders_obj else None),
+                    "left":   _ser_cell_border(getattr(borders_obj, "border_left",   None) if borders_obj else None),
+                    "right":  _ser_cell_border(getattr(borders_obj, "border_right",  None) if borders_obj else None),
+                },
+            }
+        dims = getattr(el, "dimensions", None)
         return {
             "kind": "table",
             "rows": len(cfs),
             "cols": len(cfs[0]) if cfs else 0,
+            "column_widths": list(getattr(dims, "column_widths", None) or []),
+            "row_heights":   list(getattr(dims, "row_heights",   None) or []),
+            "properties": {
+                "first_row_header": bool(getattr(tp, "first_row_header", False)) if tp else False,
+                "first_col_header": bool(getattr(tp, "first_col_header", False)) if tp else False,
+                "last_row_total":   bool(getattr(tp, "last_row_total",   False)) if tp else False,
+                "last_col_total":   bool(getattr(tp, "last_col_total",   False)) if tp else False,
+                "banded_rows":      bool(getattr(tp, "banded_rows",      False)) if tp else False,
+                "banded_cols":      bool(getattr(tp, "banded_cols",      False)) if tp else False,
+            } if tp else None,
             "cells": [
-                [
-                    {
-                        "row":        r,
-                        "col":        c,
-                        "text":       cf.text or "",
-                        "paragraphs": [_ser_para(p, i) for i, p in enumerate(cf.paragraphs or [])],
-                        "font_name":  cf.font.font_name,
-                        "font_size":  cf.font.font_size,
-                        "font_bold":  cf.font.font_bold,
-                        "font_italic":cf.font.font_italic,
-                    }
-                    for c, cf in enumerate(row)
-                ]
+                [_ser_table_cell_full(r, c, cf) for c, cf in enumerate(row)]
                 for r, row in enumerate(cfs)
             ],
         }
@@ -7801,19 +7879,44 @@ def _find_element(doc_id: str, n: int, element_id: str):
     if slide is None:
         raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
 
-    def _search(elements, start_index=0):
-        for i, e in enumerate(elements, start_index):
-            if _element_id(e, i) == element_id:
-                return e
-            for child in getattr(e, "children", []) or []:
-                if _element_id(child, 0) == element_id:
-                    return child
-        return None
+    # Walk the full list and keep the LAST match so that slide-level shapes
+    # (appended after layout/master shapes) win when IDs collide across layers.
+    found = None
+    for i, e in enumerate(slide.elements):
+        if _element_id(e, i) == element_id:
+            found = e
+        for child in getattr(e, "children", []) or []:
+            if _element_id(child, 0) == element_id:
+                found = child
 
-    found = _search(slide.elements)
     if found is None:
         raise HTTPException(404, f"Element {element_id!r} not found on slide {n}")
     return found
+
+
+@app.get("/api/docs/{doc_id}/slides/{n}/render.png")
+def render_slide_png(doc_id: str, n: int, dpi: int = 150):
+    """Render slide N via SlideRenderer (matplotlib) and return as PNG.
+    Used by the roundtrip fidelity test suite to generate Bridge-model reference images."""
+    d = _require(doc_id)
+    doc = d["doc"]
+    slide = next((s for s in doc.slides if s.slide_number == n), None)
+    if slide is None:
+        raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
+    theme = getattr(doc, "theme_colors", None) or None
+    try:
+        renderer = SlideRenderer(dpi=dpi, theme=theme)
+        renderer.set_document(doc)
+        fig = renderer.render_slide(slide)
+        import io as _io
+        buf = _io.BytesIO()
+        fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", pad_inches=0)
+        fig.clf()
+        buf.seek(0)
+        return Response(content=buf.read(), media_type="image/png")
+    except Exception as e:
+        log.warning("render_slide_png failed for %s slide %d: %s", doc_id, n, e)
+        raise HTTPException(500, f"Render failed: {e}")
 
 
 @app.get("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/freeform-data")
@@ -7826,7 +7929,10 @@ def get_freeform_data(doc_id: str, n: int, element_id: str):
     for p in (el.paths or []):
         cmds = []
         for c in (p.commands or []):
-            cmds.append({"command": c.command, "points": list(c.points or [])})
+            cmd_entry: dict = {"command": c.command, "points": list(c.points or [])}
+            if c.arc_params:
+                cmd_entry["arc_params"] = dict(c.arc_params)
+            cmds.append(cmd_entry)
         paths_out.append({
             "width":     p.width or 1,
             "height":    p.height or 1,
@@ -7834,14 +7940,27 @@ def get_freeform_data(doc_id: str, n: int, element_id: str):
             "fill_mode": p.fill_mode,
             "commands":  cmds,
         })
+    fill_type_str = getattr(el.fill, "fill_type", None)
+    grad_stops = None
+    grad_angle = None
+    if fill_type_str and fill_type_str.lower() in ("gradient", "gradfill"):
+        stops = getattr(el.fill, "gradient_stops", []) or []
+        grad_stops = [
+            {"position": float(s.position), "color": _color_to_str(s.color)}
+            for s in stops if _color_to_str(s.color) is not None
+        ]
+        grad_angle = float(getattr(el.fill, "gradient_angle", 0.0) or 0.0)
     return {
-        "paths":       paths_out,
-        "fill_type":   getattr(el.fill, "fill_type", None),
-        "fill_color":  _color_to_str(getattr(el.fill, "fill_color", None)),
-        "line_visible": bool(getattr(el.line, "line_visible", False)),
-        "line_color":  _color_to_str(getattr(el.line, "line_color", None)),
-        "line_width":  getattr(el.line, "line_width", None),
-        "opacity":     max(0.0, 1.0 - float(getattr(el.fill, "transparency", 0) or 0)),
+        "paths":           paths_out,
+        "fill_type":       fill_type_str,
+        "fill_color":      _color_to_str(getattr(el.fill, "fill_color", None)),
+        "gradient_stops":  grad_stops,
+        "gradient_angle":  grad_angle,
+        "line_visible":    bool(getattr(el.line, "line_visible", False)),
+        "line_color":      _color_to_str(getattr(el.line, "line_color", None)),
+        "line_width":      getattr(el.line, "line_width", None),
+        "line_dash":       getattr(el.line, "line_dash", None),
+        "opacity":         max(0.0, 1.0 - float(getattr(el.fill, "transparency", 0) or 0)),
     }
 
 
@@ -9275,23 +9394,42 @@ def replace_text(doc_id: str, req: ReplaceTextRequest):
 
 def _ser_style(el: Any) -> dict:
     """Serialize current style properties of a Bridge element."""
+    import math as _math
+
     fill_color = None
     fill_type  = "none"
+    gradient_stops: list | None = None
+    gradient_angle: float | None = None
     line_color = None
     line_width = None
     line_dash  = None
-    opacity    = None
-    shadow     = {}
+    head_end = tail_end = head_size = tail_size = None
 
     el_type = getattr(el, "element_type", "")
 
     # fill
     fill = getattr(el, "fill", None)
     if fill:
-        fill_type = getattr(fill, "fill_type", "none") or "none"
-        if fill_type == "solid":
+        fill_type_raw = getattr(fill, "fill_type", "none") or "none"
+        # Normalize: OOXML stores "solidFill"/"SOLID"/"gradFill"/"GRADIENT"/etc.
+        _ft = fill_type_raw.lower()
+        if _ft in ("solid", "solidfill"):
+            fill_type = "solid"
             fg = getattr(fill, "color", None) or getattr(fill, "fill_color", None)
             fill_color = _color_to_str(fg)
+        elif _ft in ("gradient", "gradfill"):
+            fill_type = "gradient"
+            stops = getattr(fill, "gradient_stops", []) or []
+            gradient_stops = [
+                {"position": float(s.position), "color": _color_to_str(s.color)}
+                for s in stops
+                if _color_to_str(s.color) is not None
+            ]
+            gradient_angle = float(getattr(fill, "gradient_angle", 0.0) or 0.0)
+        elif _ft in ("none", "nofill"):
+            fill_type = "none"
+        else:
+            fill_type = fill_type_raw
 
     # line — ShapeLine uses .color/.width/.dash_style; FreeformLine uses .line_color/.line_width/.line_dash
     line_visible = True
@@ -9301,29 +9439,51 @@ def _ser_style(el: Any) -> dict:
         line_color = _color_to_str(lc)
         line_width = getattr(line, "width", None) or getattr(line, "line_width", None)
         line_dash  = getattr(line, "dash_style", None) or getattr(line, "line_dash", None)
-        # ShapeLine uses .visible; FreeformLine uses .line_visible
         lv = getattr(line, "visible", None)
         if lv is None:
             lv = getattr(line, "line_visible", True)
         line_visible = bool(lv)
+        head_end  = getattr(line, "head_end",  None)
+        tail_end  = getattr(line, "tail_end",  None)
+        head_size = getattr(line, "head_size", None)
+        tail_size = getattr(line, "tail_size", None)
 
     # opacity — stored as fill.transparency (0.0 = fully opaque, 1.0 = fully transparent)
-    # We expose it as 0.0–1.0 opacity (inverse of transparency)
     fill_transp = getattr(fill, "transparency", None) if fill else None
     opacity = (1.0 - float(fill_transp)) if fill_transp is not None else 1.0
 
-    # shadow (common for shapes, images) — ShapeShadow has has_shadow, blur, distance, direction
+    # shadow — compute offset_x/offset_y from distance (pt) and direction (degrees)
+    shadow_on = shadow_color = shadow_blur = shadow_offset_x = shadow_offset_y = None
     sf = getattr(el, "shadow", None)
     if sf:
-        shadow = {
-            "on":       getattr(sf, "has_shadow", False),
-            "color":    _color_to_str(getattr(sf, "color", None)),
-            "blur":     getattr(sf, "blur", None),
-            "offset_x": getattr(sf, "distance", None),   # distance as proxy for offset
-            "offset_y": getattr(sf, "direction", None),  # direction (degrees)
-        }
+        shadow_on    = getattr(sf, "has_shadow", False)
+        shadow_color = _color_to_str(getattr(sf, "color", None))
+        shadow_blur  = getattr(sf, "blur", None)
+        dist = getattr(sf, "distance", None)
+        dirn = getattr(sf, "direction", None)
+        if dist is not None and dirn is not None:
+            rad = _math.radians(float(dirn))
+            shadow_offset_x = round(float(dist) * _math.cos(rad), 3)
+            shadow_offset_y = round(float(dist) * _math.sin(rad), 3)
+        elif dist is not None:
+            shadow_offset_x = round(float(dist), 3)
+            shadow_offset_y = round(float(dist), 3)
 
-    # image crop — BridgeImage.cropping is ImageCropping with crop_left etc.
+    # text frame — ShapeTextFrame for BridgeShape and BridgeText
+    vertical_anchor = word_wrap = text_insets = autofit_type = None
+    font_scale = ln_spc_reduction = None
+    tf = getattr(el, "text_frame", None)
+    if tf:
+        vertical_anchor   = getattr(tf, "vertical_anchor", None)
+        word_wrap         = bool(getattr(tf, "word_wrap", True))
+        autofit_type      = getattr(tf, "autofit_type", None)
+        font_scale        = getattr(tf, "font_scale", None)
+        ln_spc_reduction  = getattr(tf, "ln_spc_reduction", None)
+        insets = getattr(tf, "text_insets", None) or getattr(tf, "body_insets", None)
+        if insets:
+            text_insets = dict(insets)
+
+    # image crop
     crop_left = crop_right = crop_top = crop_bottom = None
     if el_type == "BridgeImage":
         crop_obj = getattr(el, "cropping", None)
@@ -9333,27 +9493,31 @@ def _ser_style(el: Any) -> dict:
             crop_top    = getattr(crop_obj, "crop_top",    0.0)
             crop_bottom = getattr(crop_obj, "crop_bottom", 0.0)
 
-    shadow_on = shadow_color = shadow_blur = shadow_offset_x = shadow_offset_y = None
-    if shadow:
-        shadow_on       = shadow.get("on", False)
-        shadow_color    = shadow.get("color")
-        shadow_blur     = shadow.get("blur")
-        shadow_offset_x = shadow.get("offset_x")
-        shadow_offset_y = shadow.get("offset_y")
-
     return {
         "fill_type":        fill_type,
         "fill_color":       fill_color,
+        "gradient_stops":   gradient_stops,
+        "gradient_angle":   gradient_angle,
         "line_visible":     line_visible,
         "line_color":       line_color,
         "line_width":       line_width,
         "line_dash":        line_dash,
+        "head_end":         head_end,
+        "tail_end":         tail_end,
+        "head_size":        head_size,
+        "tail_size":        tail_size,
         "opacity":          opacity,
         "shadow_on":        shadow_on,
         "shadow_color":     shadow_color,
         "shadow_blur":      shadow_blur,
         "shadow_offset_x":  shadow_offset_x,
         "shadow_offset_y":  shadow_offset_y,
+        "vertical_anchor":  vertical_anchor,
+        "text_insets":      text_insets,
+        "autofit_type":     autofit_type,
+        "font_scale":       font_scale,
+        "ln_spc_reduction": ln_spc_reduction,
+        "word_wrap":        word_wrap,
         "crop_left":        crop_left,
         "crop_right":       crop_right,
         "crop_top":         crop_top,
@@ -9456,6 +9620,33 @@ def update_element_style(doc_id: str, n: int, element_id: str, req: ElementStyle
     _apply_style(el, req)
     log.info("studio: updated style on %s slide %d of %s", element_id, n, doc_id)
     return _ser_style(el)
+
+
+@app.get("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/raw-image")
+def get_element_raw_image(doc_id: str, n: int, element_id: str, v: int = 0):
+    """Serve raw image bytes for a BridgeImage element. Returns 404 for non-raster formats
+    (EMF/WMF) so the caller can fall back to the element-png renderer."""
+    el = _find_element(doc_id, n, element_id)
+    if type(el).__name__ != "BridgeImage":
+        raise HTTPException(400, "Element is not a BridgeImage")
+    img_data = getattr(el, "image_data", None)
+    raw = getattr(img_data, "image_bytes", None) if img_data else None
+    b64 = getattr(img_data, "image_base64", None) if img_data else None
+    fmt = (getattr(img_data, "image_format", None) or "PNG").upper() if img_data else "PNG"
+    # Reject vector formats browsers can't render
+    if fmt in ("EMF", "WMF", "WMFX", "SVG") or not raw and not b64:
+        raise HTTPException(404, f"Raw image not available for format {fmt}")
+    if not raw and b64:
+        import base64 as _b64
+        raw = _b64.b64decode(b64)
+    if not raw:
+        raise HTTPException(404, "No image bytes available")
+    _FMT_MIME = {"PNG": "image/png", "JPG": "image/jpeg", "JPEG": "image/jpeg",
+                 "GIF": "image/gif", "WEBP": "image/webp", "BMP": "image/bmp",
+                 "TIFF": "image/tiff", "TIF": "image/tiff"}
+    media_type = _FMT_MIME.get(fmt, "image/png")
+    return Response(content=raw, media_type=media_type,
+                    headers={"Cache-Control": "max-age=3600", "X-Image-Format": fmt})
 
 
 @app.get("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/element-png")
@@ -9579,12 +9770,24 @@ def _ser_chart_series(s: Any, theme: dict[str, str] | None, idx: int) -> dict[st
     line = s.line
     marker = s.marker
     dl = s.data_labels
+    # Build per-point colors list for pie/donut slices. Prefer point_formatting
+    # (index-keyed dict from dPt XML) over point_colors (unindexed list).
+    pf = getattr(s, "point_formatting", {}) or {}
+    pc = getattr(s, "point_colors", []) or []
+    n_vals = len(s.values or [])
+    if pf:
+        point_colors_list = [_ser_chart_color(pf.get(i, {}).get("fill_color"), theme) for i in range(n_vals)]
+    elif pc:
+        point_colors_list = [_ser_chart_color(c, theme) for c in pc]
+    else:
+        point_colors_list = []
     return {
-        "idx":       idx,
-        "name":      s.name or "",
-        "values":    [float(v) if v is not None else None for v in (s.values or [])],
-        "x_values":  [float(v) if v is not None else None for v in (s.x_values or [])],
-        "color":     _ser_chart_color(s.color, theme),
+        "idx":          idx,
+        "name":         s.name or "",
+        "values":       [float(v) if v is not None else None for v in (s.values or [])],
+        "x_values":     [float(v) if v is not None else None for v in (s.x_values or [])],
+        "color":        _ser_chart_color(s.color, theme),
+        "point_colors": point_colors_list,
         "plot_type": s.plot_type,
         "smooth":    bool(s.smooth),
         "invert_if_negative": bool(s.invert_if_negative),

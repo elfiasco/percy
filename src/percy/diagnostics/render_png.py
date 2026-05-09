@@ -417,7 +417,7 @@ _MARK_TYPE_MAP = {
     "LINE": "line",
     "LINE_MARKERS": "line",
     "AREA": "area",
-    "AREA_STACKED": "area",
+    "AREA_STACKED": "area_stacked",
     "PIE": "pie",
     "PIE_EXPLODED": "pie",
     "DOUGHNUT": "doughnut",
@@ -1111,9 +1111,9 @@ class SlideRenderer:
             return mpatches.Polygon(verts, closed=True, **kw)
 
         if preset in {"arc", "pie"}:
-            # Render as a wedge/arc — use matplotlib Wedge
+            # PowerPoint stores adj1=startAngle, adj2=endAngle (in 60000ths of degree)
             import matplotlib.patches as mp
-            theta1, theta2 = 0, 270  # default: 3/4 circle
+            theta1, theta2 = 270, 360  # defaults
             adj1 = adj.get("adj1") or adj.get("stAng")
             adj2 = adj.get("adj2") or adj.get("swAng")
             try:
@@ -1121,11 +1121,21 @@ class SlideRenderer:
             except Exception:
                 pass
             try:
-                span = int(str(adj2).replace("val ", "")) / 60000.0
-                theta2 = theta1 + span
+                end_ang = int(str(adj2).replace("val ", "")) / 60000.0
+                sw = end_ang - theta1
+                if sw <= 0:
+                    sw += 360
+                theta2 = theta1 + sw
             except Exception:
                 pass
-            return mp.Wedge((cx, cy), min(W, H) / 2, theta1, theta2, **kw)
+            if preset == "arc":
+                # Open arc stroke — no fill, no radial spokes (matches PPTX arc preset)
+                return mp.Arc((cx, cy), W, H, angle=0,
+                              theta1=theta1, theta2=theta2,
+                              color=ec, linewidth=lw, zorder=z, alpha=alpha)
+            else:
+                # Filled pie sector
+                return mp.Wedge((cx, cy), min(W, H) / 2, theta1, theta2, **kw)
 
         if preset == "can":
             # Cylinder: draw as rectangle with ellipse caps via compound path
@@ -1249,8 +1259,11 @@ class SlideRenderer:
         p = el.position
         z = el.stacking.z_index
         ftype = (el.fill.fill_type or "").lower()
-        is_gradient = ftype == "gradient" and el.fill.gradient_stops
-        fc = self._c(el.fill.color) if ftype == "solid" else ("none" if not is_gradient else "none")
+        is_gradient = ftype in ("gradient", "gradfill") and el.fill.gradient_stops
+        is_solid_shape = ftype in ("solid", "solidfill") \
+            or (not ftype and bool(el.fill.color)) \
+            or (ftype == "background" and bool(el.fill.color))
+        fc = self._c(el.fill.color) if is_solid_shape else ("none" if not is_gradient else "none")
         ec = self._c(el.line.color) if el.line.visible and el.line.color else "none"
         lw = max((el.line.width or 1.0) / 72 * self.dpi * 0.5, 0.5) if el.line.visible else 0
         alpha = max(0.0, 1.0 - (el.fill.transparency or 0.0))
@@ -1540,6 +1553,9 @@ class SlideRenderer:
         if not el.series and not el.categories.categories and not el.categories.categories_raw:
             return
 
+        ct = (el.chart_type or "").upper()
+        mark = _MARK_TYPE_MAP.get(ct, "bar_v")
+
         chart_ax = fig.add_axes([fig_left, fig_bottom, fig_w, fig_h])
         chart_ax.tick_params(labelsize=6)
         for spine in chart_ax.spines.values():
@@ -1550,9 +1566,6 @@ class SlideRenderer:
         if is_tableau:
             _apply_tableau_chart_style(chart_ax, el)
 
-        ct = (el.chart_type or "").upper()
-        mark = _MARK_TYPE_MAP.get(ct, "bar_v")
-
         cats  = el.categories.categories or el.categories.categories_raw or []
         series = el.series
 
@@ -1561,8 +1574,8 @@ class SlideRenderer:
                 self._chart_bar(chart_ax, el, cats, series, horizontal=False, mark=mark, is_tableau=is_tableau)
             elif mark in ("bar_h", "bar_h_stacked", "bar_h_pct"):
                 self._chart_bar(chart_ax, el, cats, series, horizontal=True, mark=mark, is_tableau=is_tableau)
-            elif mark in ("line", "area"):
-                self._chart_line(chart_ax, el, cats, series, filled=(mark == "area"), is_tableau=is_tableau)
+            elif mark in ("line", "area", "area_stacked"):
+                self._chart_line(chart_ax, el, cats, series, filled=(mark in ("area", "area_stacked")), stacked=(mark == "area_stacked"), is_tableau=is_tableau)
             elif mark == "pie":
                 self._chart_pie(chart_ax, el, series, is_tableau=is_tableau)
             elif mark == "doughnut":
@@ -1618,8 +1631,8 @@ class SlideRenderer:
             return
 
         x = np.arange(n)
-        width = 0.8 / k if "stacked" not in mark else 0.7
         stacked = "stacked" in mark or "pct" in mark
+        width = 0.8 / k if not stacked else 0.7
 
         bottoms = np.zeros(n)
         for i, s in enumerate(series):
@@ -1661,18 +1674,27 @@ class SlideRenderer:
 
     def _chart_line(
         self, ax: plt.Axes, el: BridgeChart,
-        cats: list, series: list, filled: bool, is_tableau: bool = False,
+        cats: list, series: list, filled: bool, stacked: bool = False, is_tableau: bool = False,
     ) -> None:
-        x = range(len(cats))
+        x = list(range(len(cats)))
+        bottoms = [0.0] * len(cats)
         for i, s in enumerate(series):
             vals = [v if v is not None else 0.0 for v in s.values]
+            n = min(len(x), len(vals))
             color = self._series_color(s, i, is_tableau=is_tableau)
             label = s.name or f"Series {i+1}"
             if filled:
-                ax.fill_between(list(x)[:len(vals)], vals, alpha=0.5, color=color, label=label)
+                y0 = bottoms[:n]
+                y1 = [bottoms[j] + vals[j] for j in range(n)]
+                ax.fill_between(x[:n], y0, y1, alpha=0.4, color=color, label=label)
+                # Recharts Area draws a solid stroke on the top boundary at full opacity
+                ax.plot(x[:n], y1, color=color, linewidth=1.5)
+                if stacked:
+                    for j in range(n):
+                        bottoms[j] += vals[j]
             else:
-                ax.plot(list(x)[:len(vals)], vals, color=color, label=label,
-                        linewidth=1.5, marker="o" if len(vals) <= 20 else None, markersize=3)
+                ax.plot(x[:n], vals[:n], color=color, label=label,
+                        linewidth=1.5, marker="o" if n <= 20 else None, markersize=3)
         if cats:
             ax.set_xticks(range(len(cats)))
             ax.set_xticklabels([str(c) for c in cats], rotation=30, ha="right", fontsize=6)
@@ -1789,8 +1811,11 @@ class SlideRenderer:
         p = el.position
         z = el.stacking.z_index
         ftype = (el.fill.fill_type or "").lower()
-        is_gradient = ftype == "gradient" and el.fill.gradient_stops
-        fc = self._c(el.fill.fill_color) if ftype == "solid" else "none"
+        is_gradient = ftype in ("gradient", "gradfill") and el.fill.gradient_stops
+        is_solid = ftype in ("solid", "solidfill") \
+            or (not ftype and bool(el.fill.fill_color)) \
+            or (ftype == "background" and bool(el.fill.fill_color))
+        fc = self._c(el.fill.fill_color) if is_solid else "none"
         ec = self._c(el.line.line_color, "none")
         lw = max((el.line.line_width or 1.0) / 72 * self.dpi * 0.4, 0.5)
         alpha = max(0.0, 1.0 - (el.fill.transparency or 0.0))
@@ -1929,7 +1954,7 @@ class SlideRenderer:
             # Check if any run has a baseline shift (super/subscript) OR if runs
             # differ in bold/italic/color/size — both cases need per-run rendering.
             has_baseline_shift = any(
-                getattr(r, "baseline_shift", None) is not None
+                (getattr(r, "baseline_shift", None) or 0) != 0
                 for r in para.runs if not r.is_line_break
             )
             content_runs = [r for r in para.runs if not r.is_line_break and not _is_icon_font(r.font_name) and r.text]
@@ -1996,6 +2021,8 @@ class SlideRenderer:
                     if _is_icon_font(run.font_name):
                         continue
                     text = _filter_pua(run.text)
+                    if caps in ("all", "small"):
+                        text = text.upper()
                     if not text:
                         continue
                     rfs  = (run.font_size or (fs_pt / font_scale)) * font_scale
@@ -2605,6 +2632,7 @@ def _wrap_text(
         if current:
             result.append(" ".join(current))
     return result or [""]
+
 
 
 def _legend_loc(position: str | None) -> str:

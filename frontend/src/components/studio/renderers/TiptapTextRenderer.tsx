@@ -35,6 +35,8 @@ interface ElementStyleLite {
   line_color?:    string | null
   line_width?:    number | null
   opacity?:       number | null
+  vertical_anchor?: string | null
+  text_insets?:   { left?: number; right?: number; top?: number; bottom?: number } | null
 }
 
 function TiptapTextRendererImpl({
@@ -103,11 +105,28 @@ function TiptapTextRendererImpl({
   }, [editing, element.id])
 
   if (error)    return <div style={ERR_STYLE}>! text load failed</div>
-  if (!content) return <div style={{ width: "100%", height: "100%" }} />
+  if (!content) return <div style={{ width: "100%", height: "100%" }} data-percy-loading="text" />
 
   const isEmpty = !content || (content.kind === "paragraphs" && content.paragraphs.every((p) =>
     !p.runs?.length || p.runs.every((run) => !run.text),
   ))
+  const insets   = style?.text_insets
+  const W = element.width_in  > 0 ? element.width_in  : 1
+  const H = element.height_in > 0 ? element.height_in : 1
+  const padLeft  = `${((insets?.left   ?? 0.1 ) / W * 100).toFixed(2)}%`
+  const padRight = `${((insets?.right  ?? 0.1 ) / W * 100).toFixed(2)}%`
+  const padTop   = `${((insets?.top    ?? 0.05) / H * 100).toFixed(2)}%`
+  const padBot   = `${((insets?.bottom ?? 0.05) / H * 100).toFixed(2)}%`
+  const anchorLc = style?.vertical_anchor?.toLowerCase()
+  const justifyContent = anchorLc === "middle" || anchorLc === "ctr" || anchorLc === "center" ? "center" : anchorLc === "bottom" || anchorLc === "b" ? "flex-end" : "flex-start"
+
+  // Apply normAutoFit font_scale (e.g. 92500 = 92.5%) using CSS zoom on the
+  // text content (not the container) so layout is affected without shrinking the
+  // element's visible background/border. This prevents bottom-anchor overflow.
+  const textZoom = style?.font_scale != null && style.font_scale < 100000
+    ? style.font_scale / 100000
+    : undefined
+
   const containerStyle: React.CSSProperties = {
     width:          "100%",
     height:         "100%",
@@ -115,15 +134,15 @@ function TiptapTextRendererImpl({
     background:     style?.fill_color || "transparent",
     border:         style?.line_color
       ? `${style.line_width ?? 1}px solid ${style.line_color}`
-      : isEmpty
+      : selected && isEmpty
         ? "1.5px dashed rgba(99,102,241,0.55)"
         : undefined,
     opacity:        style?.opacity ?? 1,
-    padding:        "0.12em 0.18em",
-    overflow:       "hidden",
+    padding:        `${padTop} ${padRight} ${padBot} ${padLeft}`,
+    overflow:       "visible",
     display:        "flex",
     flexDirection:  "column",
-    justifyContent: "flex-start",
+    justifyContent,
   }
 
   if (editing) {
@@ -146,6 +165,7 @@ function TiptapTextRendererImpl({
   return (
     <div
       style={containerStyle}
+      className="tiptap-text-idle"
       // PowerPoint-style: a single click on a text box enters edit mode
       // immediately. We intentionally DON'T stopPropagation so the click
       // also bubbles up to ElementOverlay's onSelect — that way the
@@ -155,8 +175,12 @@ function TiptapTextRendererImpl({
         e.stopPropagation()
         setEditing(true)
       }}
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    >
+      <div
+        style={textZoom != null ? { zoom: textZoom } as React.CSSProperties : undefined}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    </div>
   )
 }
 
@@ -171,11 +195,14 @@ function emptyParagraphs(): ParagraphsTextContent {
     kind: "paragraphs",
     paragraphs: [{
       idx: 0, alignment: null, space_before: null, space_after: null,
+      line_spacing: null, indent_level: null, left_indent: null,
+      bullet_type: null, bullet_char: null,
       runs: [{
         idx: 0, text: "", is_line_break: false,
         font_name: null, font_size: null,
         font_bold: null, font_italic: null, font_underline: null,
         font_color: null, strikethrough: null, font_caps: null,
+        baseline_shift: null, char_spacing: null,
       }],
     }],
   }
