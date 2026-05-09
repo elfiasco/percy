@@ -480,9 +480,16 @@ export async function createTableElement(
   slideN: number,
   opts: { rows?: number; cols?: number; left_in?: number; top_in?: number; width_in?: number; height_in?: number } = {},
 ): Promise<StudioElement> {
+  const { rows, cols, left_in, top_in, width_in, height_in } = opts
+  const body: Record<string, unknown> = { rows: rows ?? 4, cols: cols ?? 3 }
+  if (left_in !== undefined || top_in !== undefined || width_in !== undefined || height_in !== undefined) {
+    body.position = { left_in: left_in ?? 1.5, top_in: top_in ?? 2, width_in: width_in ?? 7, height_in: height_in ?? 3 }
+  } else {
+    body.position = { left_in: 1.5, top_in: 2, width_in: 7, height_in: 3 }
+  }
   return apiFetch<StudioElement>(
     `${BASE}/docs/${docId}/slides/${slideN}/elements/table`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts) },
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
   )
 }
 

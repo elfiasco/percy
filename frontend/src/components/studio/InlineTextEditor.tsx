@@ -1,6 +1,7 @@
 /**
- * InlineTextEditor — absolutely-positioned textarea over a slide element.
- * Fetches current text on mount, saves on blur or Ctrl+Enter, cancels on Escape.
+ * InlineTextEditor — transparent textarea overlaid on a slide element.
+ * Mimics PowerPoint / Google Slides editing: the shape stays visible beneath,
+ * a dashed cursor ring shows you're editing, Ctrl+Enter saves, Esc cancels.
  */
 
 import { useEffect, useRef, useState, useCallback } from "react"
@@ -11,7 +12,7 @@ interface Props {
   element: StudioElement
   docId: string
   slideN: number
-  onCommit: () => void   // called after a successful save → triggers re-render
+  onCommit: () => void
   onCancel: () => void
 }
 
@@ -39,7 +40,9 @@ export default function InlineTextEditor({ element, docId, slideN, onCommit, onC
           const ta = textareaRef.current
           if (ta) {
             ta.focus()
-            ta.select()
+            // Move cursor to end for existing text, or start for empty
+            const len = ta.value.length
+            ta.setSelectionRange(len, len)
           }
         }, 0)
       })
@@ -80,9 +83,8 @@ export default function InlineTextEditor({ element, docId, slideN, onCommit, onC
       }}
     >
       {loading ? (
-        <div className="w-full h-full flex items-center justify-center bg-black/50 text-white text-xs animate-pulse">
-          …
-        </div>
+        // Transparent while loading — don't flash a dark overlay
+        <div className="w-full h-full" style={{ outline: "2px dashed rgba(99,102,241,0.6)" }} />
       ) : (
         <textarea
           ref={textareaRef}
@@ -91,12 +93,44 @@ export default function InlineTextEditor({ element, docId, slideN, onCommit, onC
           onBlur={save}
           onKeyDown={handleKeyDown}
           onClick={(e) => e.stopPropagation()}
-          className="w-full h-full resize-none bg-black/60 text-white text-sm
-                     border-2 border-paper rounded-sm p-1
-                     focus:outline-none focus:border-paper"
-          style={{ fontFamily: "inherit", lineHeight: "1.3" }}
-          placeholder="Type text… (Ctrl+Enter to save, Esc to cancel)"
+          placeholder="Type here…"
+          style={{
+            // Transparent so the rendered shape shows through
+            background: "rgba(255,255,255,0.15)",
+            // Subtle editing ring — matches PowerPoint's dotted selection
+            outline: "2px dashed rgba(99,102,241,0.75)",
+            outlineOffset: "1px",
+            border: "none",
+            // Fill the shape bounds exactly
+            width:    "100%",
+            height:   "100%",
+            resize:   "none",
+            // Typography: slide text is typically dark on white
+            color:       "#111",
+            fontSize:    "clamp(11px, 1.8vh, 18px)",
+            lineHeight:  "1.4",
+            fontFamily:  "'Segoe UI', system-ui, sans-serif",
+            padding:     "4px 6px",
+            boxSizing:   "border-box",
+          }}
         />
+      )}
+      {/* Hint badge — bottom-right, like Google Slides */}
+      {!loading && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: "-20px",
+            right: 0,
+            fontSize: "9px",
+            color: "rgba(99,102,241,0.8)",
+            whiteSpace: "nowrap",
+            pointerEvents: "none",
+            userSelect: "none",
+          }}
+        >
+          Ctrl+Enter to save · Esc to cancel
+        </div>
       )}
     </div>
   )

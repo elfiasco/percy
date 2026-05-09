@@ -730,11 +730,63 @@ function InsertRibbon({
   onPickImage: () => void
 }) {
   const [galleryTab, setGalleryTab] = useState(0)
+  const [tableGridOpen, setTableGridOpen] = useState(false)
+  const [tableHover, setTableHover] = useState<[number, number]>([0, 0])
+  const GRID_ROWS = 8, GRID_COLS = 10
+
   return (
     <div className="flex h-[88px] items-stretch">
-      {/* Tables */}
+      {/* Tables — PowerPoint-style hover grid picker */}
       <GroupBox title="Tables">
-        <RibbonBtn primary icon="▦" label="Table" onClick={() => onInsertTable?.()} title="Insert blank table" />
+        <div className="relative">
+          <button
+            onClick={() => setTableGridOpen((o) => !o)}
+            className="flex flex-col items-center justify-center gap-0.5 w-14 h-[58px] rounded text-gray-700 hover:bg-gray-200 transition-colors"
+            title="Insert Table"
+          >
+            <span className="text-[20px] leading-none">▦</span>
+            <span className="text-[10px] leading-tight">Table ▾</span>
+          </button>
+          {tableGridOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setTableGridOpen(false)} />
+              <div
+                className="absolute z-50 left-0 top-full mt-1 bg-white border border-gray-300 rounded shadow-xl p-2"
+                onMouseLeave={() => setTableHover([0, 0])}
+              >
+                <div className="text-[10px] text-gray-500 mb-1 text-center">
+                  {tableHover[0] > 0 && tableHover[1] > 0
+                    ? `${tableHover[1]} × ${tableHover[0]} Table`
+                    : "Insert Table"}
+                </div>
+                <div
+                  className="grid gap-0.5"
+                  style={{ gridTemplateColumns: `repeat(${GRID_COLS}, 16px)` }}
+                >
+                  {Array.from({ length: GRID_ROWS }, (_, r) =>
+                    Array.from({ length: GRID_COLS }, (_, c) => {
+                      const active = r < tableHover[0] && c < tableHover[1]
+                      return (
+                        <div
+                          key={`${r}-${c}`}
+                          className={`w-4 h-4 border cursor-pointer transition-colors ${
+                            active ? "bg-blue-100 border-blue-400" : "bg-white border-gray-300 hover:border-gray-400"
+                          }`}
+                          onMouseEnter={() => setTableHover([r + 1, c + 1])}
+                          onClick={() => {
+                            setTableGridOpen(false)
+                            setTableHover([0, 0])
+                            onInsertTable?.(tableHover[0], tableHover[1])
+                          }}
+                        />
+                      )
+                    })
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
       </GroupBox>
 
       <GroupDivider />
