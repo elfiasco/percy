@@ -474,17 +474,15 @@ export default function ElementOverlay({
       }}
       onDoubleClick={(e) => {
         e.stopPropagation()
-        // eslint-disable-next-line no-console
-        console.log("[Percy] ElementOverlay dblclick", { id: element.id, type: element.type, selected, locked: isLocked })
         if (isLocked) return
-        // Native edit types (Tiptap-backed): atomically select + signal edit.
-        // Done synchronously here (not via React state in inner renderers) to
-        // dodge the click1+click2 race where 'selected' hasn't propagated yet.
+        // Native-edit types (BridgeTable, BridgeText, BridgeShape) are
+        // ALWAYS-EDITABLE — selection alone activates their inline editor.
+        // We just need to ensure the element is selected; the renderer will
+        // focus the cell/text at the click point.
         if (NATIVE_EDIT_TYPES.has(element.type)) {
           if (!selected) onSelect(element.id, false)
+          // Still emit the signal for BridgeShape (which uses the toggle).
           studioStore.setEditingElement(element.id)
-          // eslint-disable-next-line no-console
-          console.log("[Percy] setEditingElement called", element.id)
           return
         }
         // Legacy inline editor for non-native text-bearing types (BridgeFreeform etc.)
