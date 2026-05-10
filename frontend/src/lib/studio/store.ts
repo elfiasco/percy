@@ -36,6 +36,10 @@ export interface StudioSessionState {
   elements: StudioElement[]
   payloads: Record<string, StudioElementPayloadState>
   selectedIds: string[]
+  /** Element ID currently in inline edit mode (table cells, shape text, etc.).
+      When set, the matching renderer flips to its editor. Cleared on blur or
+      when another element is selected. */
+  editingElementId: string | null
   renderKeys: Record<string, number>
   dirtySlides: number[]
   loading: boolean
@@ -54,6 +58,7 @@ const EMPTY_STATE: StudioSessionState = {
   elements: [],
   payloads: {},
   selectedIds: [],
+  editingElementId: null,
   renderKeys: {},
   dirtySlides: [],
   loading: false,
@@ -203,15 +208,33 @@ class StudioStore {
   }
 
   setSelectedIds(ids: Iterable<string>): void {
-    this.patch({ selectedIds: sortedUnique(ids) })
+    const next = sortedUnique(ids)
+    // If selection changed and an element was being edited, exit edit mode
+    // unless that element is part of the new selection.
+    const editing = this.state.editingElementId
+    const editingStill = editing && next.includes(editing)
+    this.patch({
+      selectedIds: next,
+      editingElementId: editingStill ? editing : null,
+    })
   }
 
   clearSelection(): void {
-    this.patch({ selectedIds: [] })
+    this.patch({ selectedIds: [], editingElementId: null })
   }
 
   selectOne(id: string | null): void {
-    this.patch({ selectedIds: id ? [id] : [] })
+    this.patch({
+      selectedIds: id ? [id] : [],
+      editingElementId: id === this.state.editingElementId ? this.state.editingElementId : null,
+    })
+  }
+
+  /** Activate inline edit mode for an element (table cells, shape text, etc.).
+      Renderers subscribe via `useEditingElementId()` and flip to their inline
+      editor when their element id matches. Set to null to deactivate. */
+  setEditingElement(id: string | null): void {
+    this.patch({ editingElementId: id })
   }
 
   markDirty(slideN = this.state.slideN): void {
@@ -380,6 +403,11 @@ export function useSelectedElement(): StudioElement | null {
 export function useElementRenderKey(elementId: string): number {
   const state = useStudioStore()
   return state.renderKeys[elementId] ?? 0
+}
+
+/** Element id that should be in inline edit mode, or null. */
+export function useEditingElementId(): string | null {
+  return useStudioStore().editingElementId
 }
 
 /** True if the slide data is currently loading. */

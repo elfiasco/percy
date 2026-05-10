@@ -3,7 +3,7 @@ import { useEditor, EditorContent, generateHTML } from "@tiptap/react"
 import { updateElementText } from "../../../lib/studioApi"
 import type { ParagraphData, TableTextContent, ElementStyleData } from "../../../lib/studioTypes"
 import { useStudioTextStylePayload } from "../../../lib/studio/payloadHooks"
-import { studioStore } from "../../../lib/studio/store"
+import { studioStore, useEditingElementId } from "../../../lib/studio/store"
 import { tableToTiptap, tiptapToTable } from "../../../lib/bridge/tableTiptapAdapter"
 import { bridgeTableExtensions } from "../../../lib/bridge/extensions/bridgeTableKit"
 import { setActiveTiptapEditor } from "../../../lib/bridge/activeEditor"
@@ -30,6 +30,10 @@ function TiptapTableRendererImpl({
   const [editing, setEditing] = useState(false)
   const [error, setError]     = useState<string | null>(null)
   const payload = useStudioTextStylePayload(docId, slideN, element.id, renderKey)
+  // Subscribe to global "edit this element" signal — set by ElementOverlay's
+  // onDoubleClick. This avoids the React batching race where setEditing(true)
+  // inside a click handler doesn't see fresh `selected` state.
+  const editingElementId = useEditingElementId()
 
   useEffect(() => {
     setError(payload.error)
@@ -38,6 +42,15 @@ function TiptapTableRendererImpl({
   }, [payload.error, payload.text, payload.style])
 
   useEffect(() => { if (!selected && editing) setEditing(false) }, [selected, editing])
+
+  // When the global signal targets this element, flip into edit mode.
+  useEffect(() => {
+    if (editingElementId === element.id && !editing) {
+      setEditing(true)
+      // Consume the signal so re-renders don't re-fire it.
+      studioStore.setEditingElement(null)
+    }
+  }, [editingElementId, element.id, editing])
 
   if (error)    return <div style={ERR_STYLE}>! table load failed</div>
   if (!content) return <div style={{ width: "100%", height: "100%" }} />

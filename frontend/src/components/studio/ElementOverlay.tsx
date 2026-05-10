@@ -3,6 +3,12 @@ import type { StudioElement, ResizeHandle } from "../../lib/studioTypes"
 import { useCanvas } from "./CanvasContext"
 import { getRenderer } from "./renderers/RendererRegistry"
 import ElementErrorBoundary from "./ElementErrorBoundary"
+import { studioStore } from "../../lib/studio/store"
+
+// Element types whose native renderers handle inline editing themselves —
+// dblclick should signal them to enter edit mode rather than open the legacy
+// InlineTextEditor.
+const NATIVE_EDIT_TYPES = new Set(["BridgeTable", "BridgeText", "BridgeShape"])
 
 // ── Google Slides design tokens ───────────────────────────────────────────────
 const GS_BLUE        = "#1a73e8"          // primary selection color
@@ -464,8 +470,17 @@ export default function ElementOverlay({
       }}
       onDoubleClick={(e) => {
         e.stopPropagation()
-        if (element.type === "BridgeText" || element.type === "BridgeShape") return
-        if (!isLocked && onInlineEdit && TEXT_TYPES.has(element.type)) onInlineEdit(element.id)
+        if (isLocked) return
+        // Native edit types (Tiptap-backed): atomically select + signal edit.
+        // Done synchronously here (not via React state in inner renderers) to
+        // dodge the click1+click2 race where 'selected' hasn't propagated yet.
+        if (NATIVE_EDIT_TYPES.has(element.type)) {
+          if (!selected) onSelect(element.id, false)
+          studioStore.setEditingElement(element.id)
+          return
+        }
+        // Legacy inline editor for non-native text-bearing types (BridgeFreeform etc.)
+        if (onInlineEdit && TEXT_TYPES.has(element.type)) onInlineEdit(element.id)
       }}
       onContextMenu={(e) => {
         e.preventDefault()

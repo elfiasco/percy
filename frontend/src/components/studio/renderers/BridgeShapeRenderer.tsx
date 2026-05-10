@@ -5,7 +5,7 @@ import Collaboration from "@tiptap/extension-collaboration"
 import type { ElementStyleData, ParagraphsTextContent } from "../../../lib/studioTypes"
 import { updateElementText } from "../../../lib/studioApi"
 import { useStudioTextStylePayload } from "../../../lib/studio/payloadHooks"
-import { studioStore } from "../../../lib/studio/store"
+import { studioStore, useEditingElementId } from "../../../lib/studio/store"
 import { paragraphsToTiptap, tiptapToParagraphs } from "../../../lib/bridge/tiptapAdapter"
 import { bridgeExtensions } from "../../../lib/bridge/extensions"
 import { setActiveTiptapEditor } from "../../../lib/bridge/activeEditor"
@@ -383,6 +383,16 @@ function BridgeShapeRendererImpl({
   useEffect(() => {
     if (consumePendingAutoEdit(element.id)) setEditing(true)
   }, [element.id])
+
+  // Listen for the global "enter edit mode" signal set by ElementOverlay's
+  // onDoubleClick — atomic, race-free activation.
+  const editingElementId = useEditingElementId()
+  useEffect(() => {
+    if (editingElementId === element.id && !editing) {
+      setEditing(true)
+      studioStore.setEditingElement(null)
+    }
+  }, [editingElementId, element.id, editing])
 
   useEffect(() => {
     const collab = getCollabContext()
