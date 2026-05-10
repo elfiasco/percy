@@ -1361,12 +1361,26 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         setSelectedElement(null)
         return
       }
+      if (e.key === "Home" && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault()
+        setSelectedSlide(1)
+        setSelectedElement(null)
+        return
+      }
+      if (e.key === "End" && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault()
+        setSelectedSlide(localSlideCountRef.current)
+        setSelectedElement(null)
+        return
+      }
 
       if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return
       const el = selectedElementRef.current
       if (!el || el.locked) return
       e.preventDefault()
-      const step = e.shiftKey ? 1.0 : 0.1
+      // 1pt nudge; Shift = 8pt nudge (matching Google Slides behavior)
+      const PT = 1 / 72
+      const step = e.shiftKey ? 8 * PT : PT
       const dl = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0
       const dt = e.key === "ArrowUp"   ? -step : e.key === "ArrowDown"  ? step : 0
       handleCommitPosition(
@@ -1630,6 +1644,20 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
               markDirty(selectedSlideRef.current)
               setRefreshKey((k) => k + 1)
               console.info(`Broadcast pushed element to ${pushedTo} slides`)
+            }}
+            onAltDuplicate={async (id, leftIn, topIn, widthIn, heightIn) => {
+              const orig = slideElements.find((e) => e.id === id)
+              if (!orig) return
+              try {
+                const copy = await copyElementToSlide(
+                  doc.doc_id, selectedSlideRef.current, id, selectedSlideRef.current,
+                  leftIn - orig.left_in, topIn - orig.top_in,
+                )
+                studioStore.upsertElement(copy)
+                setSelectedElement(copy)
+                markDirty(selectedSlideRef.current)
+                setRefreshKey((k) => k + 1)
+              } catch (e) { console.error("alt-drag duplicate failed:", e) }
             }}
             onSplitElement={handleSplitElement}
             onEditConnect={(id) => setConnectModalElementId(id)}

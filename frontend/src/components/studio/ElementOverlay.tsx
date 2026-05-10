@@ -39,6 +39,7 @@ interface DragState {
   startHeightPct: number
   containerW: number
   containerH: number
+  altHeld: boolean   // true if Alt was held at drag start; updated each move
 }
 
 interface SnapLine { type: "h" | "v"; pos: number }
@@ -60,13 +61,15 @@ interface Props {
   onInlineEdit?: (id: string) => void
   onContextMenu?: (id: string, x: number, y: number) => void
   onDragInfo?: (info: { x: number; y: number; w: number; h: number } | null) => void
-  hasConnect?: boolean   // show a corner badge if element has a Python connect attached
+  hasConnect?: boolean
+  /** Called instead of onCommit when Alt is held during drag — parent creates a copy at the new position */
+  onAltDuplicate?: (id: string, leftIn: number, topIn: number, widthIn: number, heightIn: number) => void
 }
 
 const TEXT_TYPES = new Set(["BridgeText", "BridgeShape"])
 
 export default function ElementOverlay({
-  element, selected, isMultiSelected, snapEnabled, otherElements, docId, slideN, renderKey, onSelect, onCommit, onMultiMove, onRotate, onSnapLines, onInlineEdit, onContextMenu, onDragInfo, hasConnect,
+  element, selected, isMultiSelected, snapEnabled, otherElements, docId, slideN, renderKey, onSelect, onCommit, onMultiMove, onRotate, onSnapLines, onInlineEdit, onContextMenu, onDragInfo, hasConnect, onAltDuplicate,
 }: Props) {
   const { containerRef, slideWidthIn, slideHeightIn } = useCanvas()
   const overlayRef   = useRef<HTMLDivElement>(null)
@@ -110,6 +113,7 @@ export default function ElementOverlay({
       startHeightPct: element.height_pct,
       containerW:     rect.width,
       containerH:     rect.height,
+      altHeld:        e.altKey,
     }
     if (mode === "resize") setActiveResize(true)
     ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
@@ -129,12 +133,17 @@ export default function ElementOverlay({
     let h = ds.startHeightPct
 
     if (ds.mode === "move") {
+      // Track live altKey so we know at pointerUp whether to duplicate or move
+      ds.altHeld = e.altKey
+
       l = Math.max(0, Math.min(100 - w, l + dxPct))
       t = Math.max(0, Math.min(100 - h, t + dyPct))
 
       // snap to other element edges/centers + slide guides when snap is enabled
       if (snapEnabled && !isMultiSelected) {
-        const THRESH = 1.0  // percent
+        // Google Slides uses 5 screen pixels as snap threshold, scaled by zoom.
+        // Translate 5px → percentage of slide container width.
+        const THRESH = (5 / ds.containerW) * 100
         const elRight  = l + w
         const elCenterX = l + w / 2
         const elBottom = t + h
@@ -196,16 +205,37 @@ export default function ElementOverlay({
       }
     } else {
       const dir = ds.handle!
-      if (dir.includes("e")) { w = Math.min(Math.max(1, ds.startWidthPct  + dxPct), 100 - l) }
-      if (dir.includes("s")) { h = Math.min(Math.max(1, ds.startHeightPct + dyPct), 100 - t) }
-      if (dir.includes("w")) {
-        const newL = Math.max(0, Math.min(l + w - 1, l + dxPct))
-        w = w + (l - newL); l = newL
+
+      if (e.ctrlKey || e.metaKey) {
+        // Ctrl+resize: resize from center (both sides expand/contract symmetrically).
+        // Google Slides: hold Ctrl while resizing to keep the element centered.
+        const startCX = ds.startLeftPct  + ds.startWidthPct  / 2
+        const startCY = ds.startTopPct   + ds.startHeightPct / 2
+        if (dir.includes("e") || dir.includes("w")) {
+          const sign = dir.includes("e") ? 1 : -1
+          const halfW = Math.max(0.5, ds.startWidthPct / 2 + sign * dxPct / 2)
+          w = halfW * 2
+          l = Math.max(0, startCX - halfW)
+        }
+        if (dir.includes("s") || dir.includes("n")) {
+          const sign = dir.includes("s") ? 1 : -1
+          const halfH = Math.max(0.5, ds.startHeightPct / 2 + sign * dyPct / 2)
+          h = halfH * 2
+          t = Math.max(0, startCY - halfH)
+        }
+      } else {
+        if (dir.includes("e")) { w = Math.min(Math.max(1, ds.startWidthPct  + dxPct), 100 - l) }
+        if (dir.includes("s")) { h = Math.min(Math.max(1, ds.startHeightPct + dyPct), 100 - t) }
+        if (dir.includes("w")) {
+          const newL = Math.max(0, Math.min(l + w - 1, l + dxPct))
+          w = w + (l - newL); l = newL
+        }
+        if (dir.includes("n")) {
+          const newT = Math.max(0, Math.min(t + h - 1, t + dyPct))
+          h = h + (t - newT); t = newT
+        }
       }
-      if (dir.includes("n")) {
-        const newT = Math.max(0, Math.min(t + h - 1, t + dyPct))
-        h = h + (t - newT); t = newT
-      }
+
       // Shift-resize: lock aspect ratio (use width as the leading axis)
       if (e.shiftKey && ds.startHeightPct > 0) {
         const ar = ds.startWidthPct / ds.startHeightPct
@@ -336,20 +366,27 @@ export default function ElementOverlay({
 
     if (!moved) return
 
+    const leftIn  = lPct / 100 * slideWidthIn
+    const topIn   = tPct / 100 * slideHeightIn
+    const widthIn = wPct / 100 * slideWidthIn
+    const heightIn = hPct / 100 * slideHeightIn
+
     if (ds.mode === "move" && isMultiSelected && onMultiMove) {
-      const deltaLeftIn  = (lPct - ds.startLeftPct)  / 100 * slideWidthIn
-      const deltaTopIn   = (tPct - ds.startTopPct)   / 100 * slideHeightIn
+      const deltaLeftIn = (lPct - ds.startLeftPct) / 100 * slideWidthIn
+      const deltaTopIn  = (tPct - ds.startTopPct)  / 100 * slideHeightIn
       onMultiMove(deltaLeftIn, deltaTopIn)
+    } else if (ds.mode === "move" && ds.altHeld && onAltDuplicate) {
+      // Alt+drag: keep original in place, create a copy at the new position.
+      // Reset overlay to original position so the source element doesn't move.
+      el.style.left   = `${ds.startLeftPct}%`
+      el.style.top    = `${ds.startTopPct}%`
+      el.style.width  = `${ds.startWidthPct}%`
+      el.style.height = `${ds.startHeightPct}%`
+      onAltDuplicate(element.id, leftIn, topIn, widthIn, heightIn)
     } else {
-      onCommit(
-        element.id,
-        lPct / 100 * slideWidthIn,
-        tPct / 100 * slideHeightIn,
-        wPct / 100 * slideWidthIn,
-        hPct / 100 * slideHeightIn,
-      )
+      onCommit(element.id, leftIn, topIn, widthIn, heightIn)
     }
-  }, [element.id, isMultiSelected, slideWidthIn, slideHeightIn, onCommit, onMultiMove])
+  }, [element.id, isMultiSelected, slideWidthIn, slideHeightIn, onCommit, onMultiMove, onAltDuplicate])
 
   const isLocked = element.locked
   const isHidden = element.hidden

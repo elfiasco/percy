@@ -40,8 +40,9 @@ interface Props {
   onBroadcastElement?: (pushedTo: number) => void
   onSplitElement?: (elementId: string) => void
   onEditConnect?: (elementId: string) => void
-  connectIds?: Set<string>   // element IDs (on this slide) that have a Python connect attached
+  connectIds?: Set<string>
   colorBlindMode?: string | null
+  onAltDuplicate?: (id: string, leftIn: number, topIn: number, widthIn: number, heightIn: number) => void
   // Placement mode
   placingShapeType?: string | null
   onPlaceShape?: (leftIn: number, topIn: number, widthIn: number, heightIn: number) => void
@@ -52,7 +53,7 @@ interface Props {
   onCancelDraw?: () => void
 }
 
-export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightIn, refreshKey, onSelectElement, onMultiSelect, onElementRotated, onDeleteElement, onDuplicateElement, onToggleLockElement, onToggleHiddenElement, onZIndexChange, onGroupElements, onUngroupElement, focusMode, onToggleFocusMode, onSlideContextMenu, onBroadcastElement, onSplitElement, onEditConnect, connectIds, colorBlindMode, placingShapeType, onPlaceShape, onCancelPlace, drawMode, onFinishFreeform, onCancelDraw }: Props) {
+export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightIn, refreshKey, onSelectElement, onMultiSelect, onElementRotated, onDeleteElement, onDuplicateElement, onToggleLockElement, onToggleHiddenElement, onZIndexChange, onGroupElements, onUngroupElement, focusMode, onToggleFocusMode, onSlideContextMenu, onBroadcastElement, onSplitElement, onEditConnect, connectIds, colorBlindMode, onAltDuplicate, placingShapeType, onPlaceShape, onCancelPlace, drawMode, onFinishFreeform, onCancelDraw }: Props) {
   const containerRef               = useRef<HTMLDivElement>(null)
   const studio                      = useStudioStore()
   const elements                    = studio.elements
@@ -191,7 +192,8 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
         onMultiSelect?.(all)
         studioStore.setSelectedIds(all)
       }
-      // Ctrl+[ send backward, Ctrl+] bring forward
+      // Ctrl+[ / Ctrl+] send backward / bring forward
+      // Ctrl+Shift+[ / Ctrl+Shift+] send to back / bring to front
       if ((e.key === "[" || e.key === "]") && (e.ctrlKey || e.metaKey)) {
         e.preventDefault()
         const elsList = elementsRef.current
@@ -204,11 +206,9 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
           const minZ = Math.min(...sorted.map((e) => e.z_index))
           let newZ: number | null = null
           if (e.key === "]") {
-            const above = sorted[idx + 1]
-            newZ = above ? above.z_index + 0.5 : maxZ
+            newZ = e.shiftKey ? maxZ + 1 : (sorted[idx + 1]?.z_index ?? maxZ) + 0.5
           } else {
-            const below = sorted[idx - 1]
-            newZ = below ? below.z_index - 0.5 : minZ
+            newZ = e.shiftKey ? minZ - 1 : (sorted[idx - 1]?.z_index ?? minZ) - 0.5
           }
           if (newZ !== null && newZ !== el.z_index) {
             if (room) {
@@ -705,6 +705,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
                 onContextMenu={(id, x, y) => setCtxMenu({ id, x, y })}
                 onDragInfo={setDragInfo}
                 hasConnect={connectIds?.has(el.id) ?? false}
+                onAltDuplicate={onAltDuplicate}
               />
             ))}
             {/* multi-select bounding box */}

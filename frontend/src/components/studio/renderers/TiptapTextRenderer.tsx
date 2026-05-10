@@ -166,20 +166,36 @@ function TiptapTextRendererImpl({
     <div
       style={containerStyle}
       className="tiptap-text-idle"
-      // PowerPoint-style: a single click on a text box enters edit mode
-      // immediately. We intentionally DON'T stopPropagation so the click
-      // also bubbles up to ElementOverlay's onSelect — that way the
-      // resize/rotate handles appear at the same time as the cursor.
       onClick={() => { setEditing(true) }}
       onDoubleClick={(e) => {
         e.stopPropagation()
         setEditing(true)
       }}
     >
-      <div
-        style={textZoom != null ? { zoom: textZoom } as React.CSSProperties : undefined}
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
+      {isEmpty ? (
+        // Google Slides–style placeholder: visible when selected and empty
+        <div
+          style={{
+            position: "absolute", inset: 0,
+            display: "flex", alignItems: justifyContent === "flex-end" ? "flex-end" : justifyContent === "center" ? "center" : "flex-start",
+            padding: `${padTop} ${padRight} ${padBot} ${padLeft}`,
+            color: "rgba(0,0,0,0.3)",
+            fontSize: "clamp(9px, 1.4vh, 14px)",
+            fontFamily: "'Segoe UI', system-ui, sans-serif",
+            fontStyle: "italic",
+            pointerEvents: "none",
+            userSelect: "none",
+            boxSizing: "border-box",
+          }}
+        >
+          Click to add text
+        </div>
+      ) : (
+        <div
+          style={textZoom != null ? { zoom: textZoom } as React.CSSProperties : undefined}
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      )}
     </div>
   )
 }
