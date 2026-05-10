@@ -926,14 +926,15 @@ function ChartToolbar({ elementId, data }: { elementId: string; data: ChartData 
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
       style={{
-        position: "absolute", top: -34, left: 0,
+        position: "absolute", top: 4, left: 4,
         zIndex: 6,
         display: "flex", gap: 4,
-        background: "#fff",
+        background: "rgba(255,255,255,0.95)",
         border: "1px solid #dadce0", borderRadius: 6,
         padding: 3,
-        boxShadow: "0 2px 8px rgba(0,0,0,0.10)",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
         fontFamily: "'Google Sans', system-ui, sans-serif",
+        backdropFilter: "blur(6px)",
       }}
     >
       <ChartTypePicker elementId={elementId} currentType={data.chart_type} />
