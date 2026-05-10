@@ -487,8 +487,9 @@ function BridgeShapeRendererImpl({
   return (
     <div
       style={{ width: "100%", height: "100%", position: "relative", cursor: selected ? "text" : undefined }}
-      onClick={() => { if (selected) setEditing(true) }}
-      onDoubleClick={(e) => { e.stopPropagation(); setEditing(true) }}
+      // ElementOverlay's onDoubleClick fires the edit signal atomically.
+      // Single-click on already-selected shape triggers the same path.
+      onClick={() => { if (selected) studioStore.setEditingElement(element.id) }}
     >
       {/* SVG shape body */}
       <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
