@@ -18,6 +18,10 @@ export function bridgeExtensions(opts: { collab?: boolean } = {}) {
   return [
     StarterKit.configure({
       paragraph: false,
+      // Disable StarterKit's built-in Link so our explicit Link.configure()
+      // below wins (StarterKit 3 bundles Link; without disabling we get
+      // duplicate-extension warnings and Tiptap may fail to init the editor).
+      link: false,
       // Collaboration provides its own history (Y.UndoManager). Including
       // StarterKit's history alongside it crashes y-prosemirror's plugin
       // init with "Cannot read properties of undefined (reading 'doc')"
