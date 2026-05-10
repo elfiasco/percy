@@ -768,6 +768,10 @@ function ChartRendererImpl({ element, docId, slideN, renderKey, selected }: Nati
       {/* Click-to-edit overlays (visible only when chart is selected) */}
       {selected && (
         <>
+          <ChartTypePicker
+            elementId={element.id}
+            currentType={data.chart_type}
+          />
           <AxisTitleOverlay
             elementId={element.id}
             position="bottom"
@@ -790,6 +794,14 @@ function ChartRendererImpl({ element, docId, slideN, renderKey, selected }: Nati
             elementId={element.id}
             series={data.series}
           />
+          <AxisRangeOverlay
+            elementId={element.id}
+            valueAxis={data.value_axis}
+          />
+          <DataLabelsToggle
+            elementId={element.id}
+            series={data.series}
+          />
         </>
       )}
 
@@ -807,6 +819,114 @@ function ChartRendererImpl({ element, docId, slideN, renderKey, selected }: Nati
         />
       )}
     </div>
+  )
+}
+
+// ── Chart type quick-switch picker ──────────────────────────────────────────
+// A small chip at the top-left of the chart that opens a grid of chart-type
+// icons. Click any icon → updates chart_type. Matches Google Sheets' chart
+// editor "Setup" tab type picker.
+
+const CHART_TYPE_OPTIONS: Array<{ value: string; label: string; icon: string }> = [
+  { value: "COLUMN_CLUSTERED",           label: "Column",           icon: "📊" },
+  { value: "COLUMN_STACKED",             label: "Stacked column",   icon: "▭" },
+  { value: "COLUMN_100_PERCENT_STACKED", label: "100% column",      icon: "▬" },
+  { value: "BAR_CLUSTERED",              label: "Bar",              icon: "📉" },
+  { value: "BAR_STACKED",                label: "Stacked bar",      icon: "▤" },
+  { value: "LINE",                       label: "Line",             icon: "📈" },
+  { value: "LINE_MARKERS",               label: "Line + markers",   icon: "⋲" },
+  { value: "AREA",                       label: "Area",             icon: "◢" },
+  { value: "AREA_STACKED",               label: "Stacked area",     icon: "◣" },
+  { value: "PIE",                        label: "Pie",              icon: "⬤" },
+  { value: "DOUGHNUT",                   label: "Donut",            icon: "◎" },
+  { value: "XY_SCATTER",                 label: "Scatter",          icon: "⁙" },
+]
+
+function chartTypeIcon(type: string): { icon: string; label: string } {
+  const t = (type || "").toUpperCase()
+  const opt = CHART_TYPE_OPTIONS.find((o) => o.value === t)
+  return opt ? { icon: opt.icon, label: opt.label } : { icon: "📊", label: "Column" }
+}
+
+function ChartTypePicker({ elementId, currentType }: { elementId: string; currentType: string }) {
+  const [open, setOpen] = useState(false)
+  const { icon, label } = chartTypeIcon(currentType)
+  const pick = (value: string) => {
+    if (value.toUpperCase() === (currentType || "").toUpperCase()) { setOpen(false); return }
+    // The backend accepts chart_type as snake_case lowercase
+    commitChartData(elementId, { chart_type: value.toLowerCase() } as unknown as Partial<ChartData>)
+      .catch((e) => console.error("[Percy] chart type change failed:", e))
+    setOpen(false)
+  }
+
+  return (
+    <>
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v) }}
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          position: "absolute", top: 4, left: 4, zIndex: 5,
+          padding: "2px 8px",
+          background: open ? "#e8f0fe" : "#fff",
+          border: "1px solid #dadce0", borderRadius: 4,
+          color: "#3c4043", fontSize: 11,
+          fontFamily: "'Google Sans', system-ui, sans-serif",
+          cursor: "pointer", whiteSpace: "nowrap",
+          display: "flex", alignItems: "center", gap: 4,
+          boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
+        }}
+        title="Change chart type"
+      >
+        <span style={{ fontSize: 12 }}>{icon}</span>
+        <span>{label}</span>
+        <span style={{ fontSize: 9, color: "#5f6368", marginLeft: 2 }}>▾</span>
+      </button>
+      {open && (
+        <>
+          <div
+            style={{ position: "absolute", inset: 0, zIndex: 8 }}
+            onClick={(e) => { e.stopPropagation(); setOpen(false) }}
+          />
+          <div
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "absolute", top: 32, left: 4, zIndex: 10,
+              background: "#fff", border: "1px solid #dadce0", borderRadius: 6,
+              boxShadow: "0 4px 14px rgba(0,0,0,0.18)",
+              padding: 6, minWidth: 220,
+              fontFamily: "'Google Sans', system-ui, sans-serif",
+              display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 2,
+            }}
+          >
+            {CHART_TYPE_OPTIONS.map((o) => {
+              const active = o.value === (currentType || "").toUpperCase()
+              return (
+                <button
+                  key={o.value}
+                  onClick={() => pick(o.value)}
+                  title={o.label}
+                  style={{
+                    display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+                    padding: "6px 4px",
+                    background: active ? "#e8f0fe" : "transparent",
+                    color: active ? "#1a73e8" : "#3c4043",
+                    border: active ? "1px solid #1a73e8" : "1px solid transparent",
+                    borderRadius: 4, cursor: "pointer",
+                    fontSize: 10, fontFamily: "inherit",
+                  }}
+                  onMouseEnter={(e) => { if (!active) (e.currentTarget as HTMLButtonElement).style.background = "#f1f3f4" }}
+                  onMouseLeave={(e) => { if (!active) (e.currentTarget as HTMLButtonElement).style.background = "transparent" }}
+                >
+                  <span style={{ fontSize: 16 }}>{o.icon}</span>
+                  <span style={{ whiteSpace: "nowrap" }}>{o.label}</span>
+                </button>
+              )
+            })}
+          </div>
+        </>
+      )}
+    </>
   )
 }
 
@@ -1070,6 +1190,138 @@ function LegendRenameOverlay({
         />
       ))}
     </div>
+  )
+}
+
+// ── Y-axis range inline edit ────────────────────────────────────────────────
+// Small "↕ y-range" chip at bottom-right; opens flyout with min/max inputs.
+// Empty = "auto" (Recharts default).
+
+function AxisRangeOverlay({
+  elementId, valueAxis,
+}: { elementId: string; valueAxis: ChartData["value_axis"] }) {
+  const [open, setOpen] = useState(false)
+  const [minDraft, setMinDraft] = useState(valueAxis.min !== null ? String(valueAxis.min) : "")
+  const [maxDraft, setMaxDraft] = useState(valueAxis.max !== null ? String(valueAxis.max) : "")
+
+  useEffect(() => {
+    setMinDraft(valueAxis.min !== null ? String(valueAxis.min) : "")
+    setMaxDraft(valueAxis.max !== null ? String(valueAxis.max) : "")
+  }, [valueAxis.min, valueAxis.max])
+
+  const save = () => {
+    const minNum = minDraft.trim() === "" ? null : parseFloat(minDraft)
+    const maxNum = maxDraft.trim() === "" ? null : parseFloat(maxDraft)
+    const minVal = Number.isFinite(minNum) ? minNum : null
+    const maxVal = Number.isFinite(maxNum) ? maxNum : null
+    if (minVal === valueAxis.min && maxVal === valueAxis.max) return
+    commitChartData(elementId, {
+      value_axis: { ...valueAxis, min: minVal, max: maxVal },
+    }).catch((e) => console.error("[Percy] axis range save failed:", e))
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen(true) }}
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          position: "absolute", bottom: 22, right: 4, zIndex: 5,
+          padding: "1px 6px", background: "transparent",
+          border: "1px dashed #bdc1c6", borderRadius: 3,
+          color: "#80868b", fontSize: 10,
+          fontFamily: "'Google Sans', system-ui, sans-serif",
+          cursor: "pointer", whiteSpace: "nowrap",
+        }}
+        title="Set Y-axis min/max"
+      >
+        ↕ y-range
+      </button>
+    )
+  }
+
+  return (
+    <div
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: "absolute", bottom: 22, right: 4, zIndex: 10,
+        background: "#fff", border: "1px solid #dadce0", borderRadius: 6,
+        boxShadow: "0 4px 14px rgba(0,0,0,0.15)",
+        padding: 10, minWidth: 180,
+        fontFamily: "'Google Sans', system-ui, sans-serif",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+        <span style={{ fontSize: 11, color: "#5f6368", fontWeight: 500 }}>Y-axis range</span>
+        <button onClick={() => setOpen(false)} style={{ fontSize: 12, color: "#80868b", background: "none", border: "none", cursor: "pointer" }}>×</button>
+      </div>
+      <label style={{ fontSize: 10, color: "#5f6368", display: "block", marginTop: 2 }}>Min</label>
+      <input
+        type="number"
+        value={minDraft}
+        placeholder="auto"
+        onChange={(e) => setMinDraft(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur() }}
+        style={{
+          display: "block", width: "100%", margin: "2px 0 6px",
+          padding: "3px 6px", fontSize: 12,
+          border: "1px solid #dadce0", borderRadius: 3, outline: "none",
+        }}
+      />
+      <label style={{ fontSize: 10, color: "#5f6368", display: "block" }}>Max</label>
+      <input
+        type="number"
+        value={maxDraft}
+        placeholder="auto"
+        onChange={(e) => setMaxDraft(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur() }}
+        style={{
+          display: "block", width: "100%", margin: "2px 0",
+          padding: "3px 6px", fontSize: 12,
+          border: "1px solid #dadce0", borderRadius: 3, outline: "none",
+        }}
+      />
+    </div>
+  )
+}
+
+// ── Data labels toggle ──────────────────────────────────────────────────────
+// One-click button that toggles data_labels.show on ALL series.
+
+function DataLabelsToggle({
+  elementId, series,
+}: { elementId: string; series: ChartData["series"] }) {
+  const anyOn = series.some((s) => s.data_labels?.show)
+  const toggle = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    const next = !anyOn
+    const updatedSeries = series.map((s) => ({
+      ...s,
+      data_labels: { ...s.data_labels, show: next },
+    }))
+    commitChartData(elementId, { series: updatedSeries }).catch((err) => console.error("[Percy] data labels toggle failed:", err))
+  }
+  return (
+    <button
+      onClick={toggle}
+      onMouseDown={(e) => e.stopPropagation()}
+      style={{
+        position: "absolute", top: 4, right: 220, zIndex: 5,
+        padding: "1px 6px",
+        background: anyOn ? "#e8f0fe" : "transparent",
+        border: anyOn ? "1px solid #1a73e8" : "1px dashed #bdc1c6",
+        color: anyOn ? "#1a73e8" : "#80868b",
+        borderRadius: 3, fontSize: 10,
+        fontFamily: "'Google Sans', system-ui, sans-serif",
+        cursor: "pointer", whiteSpace: "nowrap",
+      }}
+      title="Toggle data labels on bars"
+    >
+      # values
+    </button>
   )
 }
 
