@@ -385,7 +385,10 @@ function dashArray(dash: string | null | undefined): string | undefined {
   return undefined
 }
 
-function PieOrDonutChart({ data, donut, exploded }: { data: ChartData; donut: boolean; exploded: boolean }) {
+function PieOrDonutChart({ data, donut, exploded, onPointClick }: {
+  data: ChartData; donut: boolean; exploded: boolean
+  onPointClick?: (seriesIdx: number, pointIdx: number, evt: { clientX: number; clientY: number }) => void
+}) {
   const pieData = buildPieData(data)
   const lp = legendProps(data.legend)
   const total = pieData.reduce((s, d) => s + (d.value || 0), 0)
@@ -431,6 +434,11 @@ function PieOrDonutChart({ data, donut, exploded }: { data: ChartData; donut: bo
           paddingAngle={exploded ? 3 : 1}
           strokeWidth={1}
           stroke="#fff"
+          onClick={onPointClick ? (_d: unknown, idx: number, evt: React.MouseEvent) => {
+            evt.stopPropagation()
+            onPointClick(0, idx, { clientX: evt.clientX, clientY: evt.clientY })
+          } : undefined}
+          cursor={onPointClick ? "pointer" : undefined}
         >
           {pieData.map((entry, i) => (
             <Cell key={i} fill={entry.color || DEFAULT_PALETTE[i % DEFAULT_PALETTE.length]} />
@@ -541,10 +549,10 @@ function ChartByType({ data, onPointClick, elementId }: ChartByTypeProps) {
     case "LINE_MARKERS":                return <LineOrAreaChart data={data} area={false} stacked={false} />
     case "AREA":                        return <LineOrAreaChart data={data} area={true}  stacked={false} />
     case "AREA_STACKED":                return <LineOrAreaChart data={data} area={true}  stacked={true}  />
-    case "PIE":                         return <PieOrDonutChart data={data} donut={false} exploded={false} />
-    case "PIE_EXPLODED":                return <PieOrDonutChart data={data} donut={false} exploded={true}  />
-    case "DOUGHNUT":                    return <PieOrDonutChart data={data} donut={true}  exploded={false} />
-    case "DOUGHNUT_EXPLODED":           return <PieOrDonutChart data={data} donut={true}  exploded={true}  />
+    case "PIE":                         return <PieOrDonutChart data={data} donut={false} exploded={false} onPointClick={onPointClick} />
+    case "PIE_EXPLODED":                return <PieOrDonutChart data={data} donut={false} exploded={true}  onPointClick={onPointClick} />
+    case "DOUGHNUT":                    return <PieOrDonutChart data={data} donut={true}  exploded={false} onPointClick={onPointClick} />
+    case "DOUGHNUT_EXPLODED":           return <PieOrDonutChart data={data} donut={true}  exploded={true}  onPointClick={onPointClick} />
     case "XY_SCATTER":                  return <ScatterOrBubbleChart data={data} withLines={false} bubble={false} />
     case "XY_SCATTER_LINES":
     case "XY_SCATTER_LINES_NO_MARKERS":
