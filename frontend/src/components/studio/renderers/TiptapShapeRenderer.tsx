@@ -265,12 +265,11 @@ function ShapeTextEditor({
       style={{
         width: "100%", height: "100%",
         boxSizing: "border-box",
-        outline: "1.5px solid rgb(var(--champagne) / 0.65)",
-        outlineOffset: "-1.5px",
-        // Solid background that hides the PNG underneath while editing,
-        // so the user sees only their live text. Use the surface color
-        // of the current theme so it doesn't look out of place.
-        background: "rgb(var(--surface))",
+        // Transparent so the shape PNG is visible underneath while editing,
+        // matching Google Slides behavior (shape geometry stays visible).
+        background: "transparent",
+        outline: "2px solid rgba(26,115,232,0.85)",
+        outlineOffset: "-1px",
         cursor: "text",
         userSelect: "text",
         padding: "0.18em 0.24em",

@@ -136,17 +136,24 @@
     content: "•";  /* fallback — proper numbering needs counter-reset */
   }
 
-  /* Bridge idle text rendering — reset browser <p> margins so space_before/after
-     attributes are the sole source of paragraph spacing, matching PPTX behavior.
+  /* Bridge idle + active text rendering — reset browser <p> margins so
+     space_before/after attrs are the sole source of paragraph spacing.
      Without this, browser default margin-top: 1em pushes text outside the
-     overflow:hidden container, making it invisible. */
+     container and causes a visible shift between idle and editing modes. */
   .tiptap-text-idle p,
   .tiptap-text-idle ul,
-  .tiptap-text-idle ol {
+  .tiptap-text-idle ol,
+  .tiptap-bridge-editor p,
+  .tiptap-bridge-editor ul,
+  .tiptap-bridge-editor ol {
     margin: 0;
     padding: 0;
     list-style: none;
   }
+
+  /* Focus ring: remove browser default outline — we set our own via inline style */
+  .tiptap-bridge-editor:focus-within { outline: none; }
+  .tiptap-bridge-editor .ProseMirror { outline: none; min-height: 1em; }
 
   /* Default table styling for BridgeTable Tiptap renderer.
      Element-style fills/borders override these per-element, but at minimum

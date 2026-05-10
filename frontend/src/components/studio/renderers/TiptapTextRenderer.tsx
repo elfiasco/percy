@@ -365,8 +365,8 @@ function RichTextEditor({
       onPointerDown={(e) => e.stopPropagation()}
       style={{
         ...containerStyle,
-        outline:       "1.5px solid rgb(var(--champagne) / 0.65)",
-        outlineOffset: "-1.5px",
+        outline:       "2px solid rgba(26,115,232,0.85)",
+        outlineOffset: "-1px",
         cursor:        "text",
         userSelect:    "text",
       }}
