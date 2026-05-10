@@ -822,10 +822,12 @@ function ChartRendererImpl({ element, docId, slideN, renderKey, selected }: Nati
       {/* Click-to-edit overlays (visible only when chart is selected) */}
       {selected && (
         <>
-          <ChartTypePicker
+          {/* Floating toolbar above the chart, like Google Sheets chart editor */}
+          <ChartToolbar
             elementId={element.id}
-            currentType={data.chart_type}
+            data={data}
           />
+          {/* In-place title overlays stay near their visual positions */}
           <AxisTitleOverlay
             elementId={element.id}
             position="bottom"
@@ -839,22 +841,6 @@ function ChartRendererImpl({ element, docId, slideN, renderKey, selected }: Nati
             currentTitle={data.value_axis.title.text}
             patchPath="value_axis"
             existingAxis={data.value_axis}
-          />
-          <CategoryRenameOverlay
-            elementId={element.id}
-            categories={data.categories}
-          />
-          <LegendRenameOverlay
-            elementId={element.id}
-            series={data.series}
-          />
-          <AxisRangeOverlay
-            elementId={element.id}
-            valueAxis={data.value_axis}
-          />
-          <DataLabelsToggle
-            elementId={element.id}
-            series={data.series}
           />
         </>
       )}
@@ -929,6 +915,41 @@ function parseChartTSV(text: string): { categories: string[]; series: Array<{ na
   }
 }
 
+// ── Consolidated chart toolbar (Google Sheets style) ───────────────────────
+// All chart-level edit actions live in ONE floating bar at the top of the
+// chart. Keeps the chart canvas uncluttered while making every action a
+// single click away. Each button opens its own popover when needed.
+
+function ChartToolbar({ elementId, data }: { elementId: string; data: ChartData }) {
+  return (
+    <div
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: "absolute", top: -34, left: 0,
+        zIndex: 6,
+        display: "flex", gap: 4,
+        background: "#fff",
+        border: "1px solid #dadce0", borderRadius: 6,
+        padding: 3,
+        boxShadow: "0 2px 8px rgba(0,0,0,0.10)",
+        fontFamily: "'Google Sans', system-ui, sans-serif",
+      }}
+    >
+      <ChartTypePicker elementId={elementId} currentType={data.chart_type} />
+      <ToolbarDivider />
+      <DataLabelsToggle elementId={elementId} series={data.series} />
+      <LegendRenameOverlay elementId={elementId} series={data.series} />
+      <CategoryRenameOverlay elementId={elementId} categories={data.categories} />
+      <AxisRangeOverlay elementId={elementId} valueAxis={data.value_axis} />
+    </div>
+  )
+}
+
+function ToolbarDivider() {
+  return <div style={{ width: 1, background: "#e0e0e0", margin: "2px 2px" }} />
+}
+
 // ── Chart type quick-switch picker ──────────────────────────────────────────
 // A small chip at the top-left of the chart that opens a grid of chart-type
 // icons. Click any icon → updates chart_type. Matches Google Sheets' chart
@@ -960,28 +981,17 @@ function ChartTypePicker({ elementId, currentType }: { elementId: string; curren
   const { icon, label } = chartTypeIcon(currentType)
   const pick = (value: string) => {
     if (value.toUpperCase() === (currentType || "").toUpperCase()) { setOpen(false); return }
-    // The backend accepts chart_type as snake_case lowercase
     commitChartData(elementId, { chart_type: value.toLowerCase() } as unknown as Partial<ChartData>)
       .catch((e) => console.error("[Percy] chart type change failed:", e))
     setOpen(false)
   }
 
   return (
-    <>
+    <div style={{ position: "relative" }}>
       <button
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v) }}
         onMouseDown={(e) => e.stopPropagation()}
-        style={{
-          position: "absolute", top: 4, left: 4, zIndex: 5,
-          padding: "2px 8px",
-          background: open ? "#e8f0fe" : "#fff",
-          border: "1px solid #dadce0", borderRadius: 4,
-          color: "#3c4043", fontSize: 11,
-          fontFamily: "'Google Sans', system-ui, sans-serif",
-          cursor: "pointer", whiteSpace: "nowrap",
-          display: "flex", alignItems: "center", gap: 4,
-          boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
-        }}
+        style={TOOLBAR_BTN(open)}
         title="Change chart type"
       >
         <span style={{ fontSize: 12 }}>{icon}</span>
@@ -991,14 +1001,14 @@ function ChartTypePicker({ elementId, currentType }: { elementId: string; curren
       {open && (
         <>
           <div
-            style={{ position: "absolute", inset: 0, zIndex: 8 }}
+            style={{ position: "fixed", inset: 0, zIndex: 8 }}
             onClick={(e) => { e.stopPropagation(); setOpen(false) }}
           />
           <div
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
             style={{
-              position: "absolute", top: 32, left: 4, zIndex: 10,
+              position: "absolute", top: 30, left: 0, zIndex: 10,
               background: "#fff", border: "1px solid #dadce0", borderRadius: 6,
               boxShadow: "0 4px 14px rgba(0,0,0,0.18)",
               padding: 6, minWidth: 220,
@@ -1033,9 +1043,21 @@ function ChartTypePicker({ elementId, currentType }: { elementId: string; curren
           </div>
         </>
       )}
-    </>
+    </div>
   )
 }
+
+// Shared toolbar button style helper.
+const TOOLBAR_BTN = (active: boolean): React.CSSProperties => ({
+  padding: "2px 8px",
+  background: active ? "#e8f0fe" : "transparent",
+  border: active ? "1px solid #1a73e8" : "1px solid transparent",
+  color: active ? "#1a73e8" : "#3c4043",
+  borderRadius: 3, fontSize: 11,
+  fontFamily: "'Google Sans', system-ui, sans-serif",
+  cursor: "pointer", whiteSpace: "nowrap",
+  display: "flex", alignItems: "center", gap: 4,
+})
 
 // ── Axis title click-to-edit overlay ────────────────────────────────────────
 // position="bottom" → centered under chart for X-axis title
@@ -1163,60 +1185,55 @@ function CategoryRenameOverlay({
     commitChartData(elementId, { categories: next }).catch((e) => console.error("[Percy] category save failed:", e))
   }
 
-  if (!open) {
-    return (
+  return (
+    <div style={{ position: "relative" }}>
       <button
-        onClick={(e) => { e.stopPropagation(); setOpen(true) }}
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v) }}
         onMouseDown={(e) => e.stopPropagation()}
-        style={{
-          position: "absolute", top: 4, right: 4, zIndex: 2,
-          padding: "1px 6px", background: "transparent",
-          border: "1px dashed #bdc1c6", borderRadius: 3,
-          color: "#80868b", fontSize: 10,
-          fontFamily: "'Google Sans', system-ui, sans-serif",
-          cursor: "pointer", whiteSpace: "nowrap",
-        }}
+        style={TOOLBAR_BTN(open)}
         title="Rename X-axis categories"
       >
         ✎ categories
       </button>
-    )
-  }
-
-  return (
-    <div
-      onMouseDown={(e) => e.stopPropagation()}
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        position: "absolute", top: 4, right: 4, zIndex: 10,
-        background: "#fff", border: "1px solid #dadce0", borderRadius: 6,
-        boxShadow: "0 4px 14px rgba(0,0,0,0.15)",
-        padding: 10, minWidth: 200,
-        fontFamily: "'Google Sans', system-ui, sans-serif",
-      }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-        <span style={{ fontSize: 11, color: "#5f6368", fontWeight: 500 }}>Categories</span>
-        <button onClick={() => setOpen(false)} style={{ fontSize: 12, color: "#80868b", background: "none", border: "none", cursor: "pointer" }}>×</button>
-      </div>
-      {drafts.map((d, i) => (
-        <input
-          key={i}
-          value={d}
-          onChange={(e) => setDrafts((arr) => arr.map((v, j) => j === i ? e.target.value : v))}
-          onBlur={() => save(i, drafts[i])}
-          onKeyDown={(e) => {
-            e.stopPropagation()
-            if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur()
-          }}
-          style={{
-            display: "block", width: "100%", margin: "3px 0",
-            padding: "3px 6px", fontSize: 12, color: "#3c4043",
-            border: "1px solid #dadce0", borderRadius: 3, outline: "none",
-            fontFamily: "inherit",
-          }}
-        />
-      ))}
+      {open && (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 8 }} onClick={(e) => { e.stopPropagation(); setOpen(false) }} />
+          <div
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "absolute", top: 30, left: 0, zIndex: 10,
+              background: "#fff", border: "1px solid #dadce0", borderRadius: 6,
+              boxShadow: "0 4px 14px rgba(0,0,0,0.15)",
+              padding: 10, minWidth: 200,
+              fontFamily: "'Google Sans', system-ui, sans-serif",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+              <span style={{ fontSize: 11, color: "#5f6368", fontWeight: 500 }}>Categories</span>
+              <button onClick={() => setOpen(false)} style={{ fontSize: 12, color: "#80868b", background: "none", border: "none", cursor: "pointer" }}>×</button>
+            </div>
+            {drafts.map((d, i) => (
+              <input
+                key={i}
+                value={d}
+                onChange={(e) => setDrafts((arr) => arr.map((v, j) => j === i ? e.target.value : v))}
+                onBlur={() => save(i, drafts[i])}
+                onKeyDown={(e) => {
+                  e.stopPropagation()
+                  if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur()
+                }}
+                style={{
+                  display: "block", width: "100%", margin: "3px 0",
+                  padding: "3px 6px", fontSize: 12, color: "#3c4043",
+                  border: "1px solid #dadce0", borderRadius: 3, outline: "none",
+                  fontFamily: "inherit",
+                }}
+              />
+            ))}
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -1242,60 +1259,55 @@ function LegendRenameOverlay({
       .catch((e) => console.error("[Percy] series rename failed:", e))
   }
 
-  if (!open) {
-    return (
+  return (
+    <div style={{ position: "relative" }}>
       <button
-        onClick={(e) => { e.stopPropagation(); setOpen(true) }}
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v) }}
         onMouseDown={(e) => e.stopPropagation()}
-        style={{
-          position: "absolute", top: 4, right: 110, zIndex: 2,
-          padding: "1px 6px", background: "transparent",
-          border: "1px dashed #bdc1c6", borderRadius: 3,
-          color: "#80868b", fontSize: 10,
-          fontFamily: "'Google Sans', system-ui, sans-serif",
-          cursor: "pointer", whiteSpace: "nowrap",
-        }}
+        style={TOOLBAR_BTN(open)}
         title="Rename legend / series"
       >
         ✎ series
       </button>
-    )
-  }
-
-  return (
-    <div
-      onMouseDown={(e) => e.stopPropagation()}
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        position: "absolute", top: 4, right: 110, zIndex: 10,
-        background: "#fff", border: "1px solid #dadce0", borderRadius: 6,
-        boxShadow: "0 4px 14px rgba(0,0,0,0.15)",
-        padding: 10, minWidth: 200,
-        fontFamily: "'Google Sans', system-ui, sans-serif",
-      }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-        <span style={{ fontSize: 11, color: "#5f6368", fontWeight: 500 }}>Series</span>
-        <button onClick={() => setOpen(false)} style={{ fontSize: 12, color: "#80868b", background: "none", border: "none", cursor: "pointer" }}>×</button>
-      </div>
-      {drafts.map((d, i) => (
-        <input
-          key={i}
-          value={d}
-          onChange={(e) => setDrafts((arr) => arr.map((v, j) => j === i ? e.target.value : v))}
-          onBlur={() => save(i, drafts[i])}
-          onKeyDown={(e) => {
-            e.stopPropagation()
-            if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur()
-          }}
-          style={{
-            display: "block", width: "100%", margin: "3px 0",
-            padding: "3px 6px", fontSize: 12, color: "#3c4043",
-            border: "1px solid #dadce0", borderRadius: 3, outline: "none",
-            fontFamily: "inherit",
-          }}
-        />
-      ))}
+      {open && (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 8 }} onClick={(e) => { e.stopPropagation(); setOpen(false) }} />
+          <div
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "absolute", top: 30, left: 0, zIndex: 10,
+              background: "#fff", border: "1px solid #dadce0", borderRadius: 6,
+              boxShadow: "0 4px 14px rgba(0,0,0,0.15)",
+              padding: 10, minWidth: 200,
+              fontFamily: "'Google Sans', system-ui, sans-serif",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+              <span style={{ fontSize: 11, color: "#5f6368", fontWeight: 500 }}>Series</span>
+              <button onClick={() => setOpen(false)} style={{ fontSize: 12, color: "#80868b", background: "none", border: "none", cursor: "pointer" }}>×</button>
+            </div>
+            {drafts.map((d, i) => (
+              <input
+                key={i}
+                value={d}
+                onChange={(e) => setDrafts((arr) => arr.map((v, j) => j === i ? e.target.value : v))}
+                onBlur={() => save(i, drafts[i])}
+                onKeyDown={(e) => {
+                  e.stopPropagation()
+                  if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur()
+                }}
+                style={{
+                  display: "block", width: "100%", margin: "3px 0",
+                  padding: "3px 6px", fontSize: 12, color: "#3c4043",
+                  border: "1px solid #dadce0", borderRadius: 3, outline: "none",
+                  fontFamily: "inherit",
+                }}
+              />
+            ))}
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -1327,70 +1339,65 @@ function AxisRangeOverlay({
     }).catch((e) => console.error("[Percy] axis range save failed:", e))
   }
 
-  if (!open) {
-    return (
+  return (
+    <div style={{ position: "relative" }}>
       <button
-        onClick={(e) => { e.stopPropagation(); setOpen(true) }}
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v) }}
         onMouseDown={(e) => e.stopPropagation()}
-        style={{
-          position: "absolute", bottom: 22, right: 4, zIndex: 5,
-          padding: "1px 6px", background: "transparent",
-          border: "1px dashed #bdc1c6", borderRadius: 3,
-          color: "#80868b", fontSize: 10,
-          fontFamily: "'Google Sans', system-ui, sans-serif",
-          cursor: "pointer", whiteSpace: "nowrap",
-        }}
+        style={TOOLBAR_BTN(open)}
         title="Set Y-axis min/max"
       >
         ↕ y-range
       </button>
-    )
-  }
-
-  return (
-    <div
-      onMouseDown={(e) => e.stopPropagation()}
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        position: "absolute", bottom: 22, right: 4, zIndex: 10,
-        background: "#fff", border: "1px solid #dadce0", borderRadius: 6,
-        boxShadow: "0 4px 14px rgba(0,0,0,0.15)",
-        padding: 10, minWidth: 180,
-        fontFamily: "'Google Sans', system-ui, sans-serif",
-      }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-        <span style={{ fontSize: 11, color: "#5f6368", fontWeight: 500 }}>Y-axis range</span>
-        <button onClick={() => setOpen(false)} style={{ fontSize: 12, color: "#80868b", background: "none", border: "none", cursor: "pointer" }}>×</button>
-      </div>
-      <label style={{ fontSize: 10, color: "#5f6368", display: "block", marginTop: 2 }}>Min</label>
-      <input
-        type="number"
-        value={minDraft}
-        placeholder="auto"
-        onChange={(e) => setMinDraft(e.target.value)}
-        onBlur={save}
-        onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur() }}
-        style={{
-          display: "block", width: "100%", margin: "2px 0 6px",
-          padding: "3px 6px", fontSize: 12,
-          border: "1px solid #dadce0", borderRadius: 3, outline: "none",
-        }}
-      />
-      <label style={{ fontSize: 10, color: "#5f6368", display: "block" }}>Max</label>
-      <input
-        type="number"
-        value={maxDraft}
-        placeholder="auto"
-        onChange={(e) => setMaxDraft(e.target.value)}
-        onBlur={save}
-        onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur() }}
-        style={{
-          display: "block", width: "100%", margin: "2px 0",
-          padding: "3px 6px", fontSize: 12,
-          border: "1px solid #dadce0", borderRadius: 3, outline: "none",
-        }}
-      />
+      {open && (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 8 }} onClick={(e) => { e.stopPropagation(); setOpen(false) }} />
+          <div
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "absolute", top: 30, right: 0, zIndex: 10,
+              background: "#fff", border: "1px solid #dadce0", borderRadius: 6,
+              boxShadow: "0 4px 14px rgba(0,0,0,0.15)",
+              padding: 10, minWidth: 180,
+              fontFamily: "'Google Sans', system-ui, sans-serif",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+              <span style={{ fontSize: 11, color: "#5f6368", fontWeight: 500 }}>Y-axis range</span>
+              <button onClick={() => setOpen(false)} style={{ fontSize: 12, color: "#80868b", background: "none", border: "none", cursor: "pointer" }}>×</button>
+            </div>
+            <label style={{ fontSize: 10, color: "#5f6368", display: "block", marginTop: 2 }}>Min</label>
+            <input
+              type="number"
+              value={minDraft}
+              placeholder="auto"
+              onChange={(e) => setMinDraft(e.target.value)}
+              onBlur={save}
+              onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur() }}
+              style={{
+                display: "block", width: "100%", margin: "2px 0 6px",
+                padding: "3px 6px", fontSize: 12,
+                border: "1px solid #dadce0", borderRadius: 3, outline: "none",
+              }}
+            />
+            <label style={{ fontSize: 10, color: "#5f6368", display: "block" }}>Max</label>
+            <input
+              type="number"
+              value={maxDraft}
+              placeholder="auto"
+              onChange={(e) => setMaxDraft(e.target.value)}
+              onBlur={save}
+              onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur() }}
+              style={{
+                display: "block", width: "100%", margin: "2px 0",
+                padding: "3px 6px", fontSize: 12,
+                border: "1px solid #dadce0", borderRadius: 3, outline: "none",
+              }}
+            />
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -1415,19 +1422,10 @@ function DataLabelsToggle({
     <button
       onClick={toggle}
       onMouseDown={(e) => e.stopPropagation()}
-      style={{
-        position: "absolute", top: 4, right: 220, zIndex: 5,
-        padding: "1px 6px",
-        background: anyOn ? "#e8f0fe" : "transparent",
-        border: anyOn ? "1px solid #1a73e8" : "1px dashed #bdc1c6",
-        color: anyOn ? "#1a73e8" : "#80868b",
-        borderRadius: 3, fontSize: 10,
-        fontFamily: "'Google Sans', system-ui, sans-serif",
-        cursor: "pointer", whiteSpace: "nowrap",
-      }}
-      title="Toggle data labels on bars"
+      style={TOOLBAR_BTN(anyOn)}
+      title="Toggle data labels on bars/points"
     >
-      # values
+      <span>#</span><span>values</span>
     </button>
   )
 }
