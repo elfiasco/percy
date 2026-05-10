@@ -2,7 +2,7 @@
 FROM node:22-slim AS frontend-build
 WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci --silent
+RUN npm ci --silent --legacy-peer-deps
 COPY frontend/ ./
 # VITE_YJS_WS_URL is baked into the bundle at build time. Set via Docker
 # build args (or leave empty for single-user mode + BroadcastChannel demo).
