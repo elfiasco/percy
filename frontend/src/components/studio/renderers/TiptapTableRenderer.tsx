@@ -45,7 +45,11 @@ function TiptapTableRendererImpl({
 
   // When the global signal targets this element, flip into edit mode.
   useEffect(() => {
+    // eslint-disable-next-line no-console
+    console.log("[Percy] TiptapTableRenderer effect", { editingElementId, elementId: element.id, editing })
     if (editingElementId === element.id && !editing) {
+      // eslint-disable-next-line no-console
+      console.log("[Percy] -> setEditing(true) for table", element.id)
       setEditing(true)
       // Consume the signal so re-renders don't re-fire it.
       studioStore.setEditingElement(null)
