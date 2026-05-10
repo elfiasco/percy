@@ -526,7 +526,9 @@ export default function ElementOverlay({
       {/* inner content — clipped to element bounds */}
       <div style={{
         position: "absolute", inset: 0,
-        overflow: element.type === "BridgeConnector" ? "visible" : "hidden",
+        // Connectors and (when selected) charts allow overlay chips to escape
+        // the element bounds for in-place editing controls.
+        overflow: element.type === "BridgeConnector" || (element.type === "BridgeChart" && selected) ? "visible" : "hidden",
       }}>
         {renderContent()}
       </div>
