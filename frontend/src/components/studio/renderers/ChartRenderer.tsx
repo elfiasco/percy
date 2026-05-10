@@ -835,16 +835,18 @@ function AxisTitleOverlay({
     setEditing(false)
   }
 
+  // X-axis title sits to the LEFT of the legend (which is at bottom-center)
+  // so the two don't collide. Y-axis title sits rotated on the left edge.
   const baseStyle: React.CSSProperties = position === "bottom"
     ? {
-        position: "absolute", bottom: 2, left: "50%", transform: "translateX(-50%)",
-        zIndex: 2,
+        position: "absolute", bottom: 4, left: 80,
+        zIndex: 5,
       }
     : {
-        position: "absolute", top: "50%", left: 2,
+        position: "absolute", top: "50%", left: 0,
         transform: "translateY(-50%) rotate(-90deg)",
         transformOrigin: "center",
-        zIndex: 2,
+        zIndex: 5,
       }
 
   if (editing) {
