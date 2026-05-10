@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import type { StudioElement } from "../../lib/studioTypes"
 import type { DocInfo } from "../../lib/types"
+import { useStudioStore } from "../../lib/studio/store"
 import {
   exportPptxUrl, exportPdfUrl, exportPngZipUrl,
   notesExportUrl, notesHtmlExportUrl, exportHtmlUrl, exportMarkdownUrl,
@@ -315,6 +316,42 @@ interface GMenuItem {
   disabled?: boolean
   separator?: boolean
   active?: boolean
+}
+
+// ── Auto-save indicator (Google Slides parity) ──────────────────────────────
+// Watches the studio store for dirty slides and shows a small status chip:
+//   "Saving…" (cloud icon, animating) while edits are flushing
+//   "All changes saved" (check) when up-to-date
+// Subscribes to studio.dirtySlides and the version counter to detect changes.
+
+function SaveIndicator() {
+  const dirty = useStudioStore().dirtySlides
+  const isDirty = dirty.length > 0
+  const [showSaved, setShowSaved] = useState(false)
+  const prevDirtyRef = useRef(isDirty)
+
+  useEffect(() => {
+    if (prevDirtyRef.current && !isDirty) {
+      setShowSaved(true)
+      const t = setTimeout(() => setShowSaved(false), 2500)
+      prevDirtyRef.current = false
+      return () => clearTimeout(t)
+    }
+    prevDirtyRef.current = isDirty
+  }, [isDirty])
+
+  const text  = isDirty ? "Saving…" : showSaved ? "All changes saved" : "Saved"
+  const color = isDirty ? "#80868b" : "#1e8e3e"
+  const icon  = isDirty ? "◌" : "✓"
+  return (
+    <span
+      className="text-[11px] shrink-0 mr-3 select-none"
+      style={{ color, fontFamily: "'Google Sans', system-ui, sans-serif" }}
+      title={isDirty ? "Saving your changes to the cloud" : "All changes saved"}
+    >
+      <span style={{ marginRight: 4 }}>{icon}</span>{text}
+    </span>
+  )
 }
 
 function GMenuBtn({ label, items, disabled }: { label: string; items: GMenuItem[]; disabled?: boolean }) {
@@ -773,6 +810,9 @@ export default function StudioRibbon(props: Props) {
 
         {/* Spacer */}
         <div className="flex-1" />
+
+        {/* Auto-save indicator (Google Slides parity: "All changes saved in Drive") */}
+        <SaveIndicator />
 
         {/* Slide counter */}
         <span className="text-[11px] text-[#80868b] shrink-0 mr-3">
