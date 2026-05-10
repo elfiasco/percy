@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import {
   ResponsiveContainer,
   BarChart, Bar,
@@ -764,6 +764,35 @@ function ChartRendererImpl({ element, docId, slideN, renderKey, selected }: Nati
         />
       )}
       <ChartByType data={data} onPointClick={onPointClick} elementId={element.id} />
+
+      {/* Click-to-edit overlays (visible only when chart is selected) */}
+      {selected && (
+        <>
+          <AxisTitleOverlay
+            elementId={element.id}
+            position="bottom"
+            currentTitle={data.category_axis.title.text}
+            patchPath="category_axis"
+            existingAxis={data.category_axis}
+          />
+          <AxisTitleOverlay
+            elementId={element.id}
+            position="left"
+            currentTitle={data.value_axis.title.text}
+            patchPath="value_axis"
+            existingAxis={data.value_axis}
+          />
+          <CategoryRenameOverlay
+            elementId={element.id}
+            categories={data.categories}
+          />
+          <LegendRenameOverlay
+            elementId={element.id}
+            series={data.series}
+          />
+        </>
+      )}
+
       {recolorPopover && (
         <BarRecolorPopover
           x={recolorPopover.x}
@@ -777,6 +806,267 @@ function ChartRendererImpl({ element, docId, slideN, renderKey, selected }: Nati
           onClose={() => setRecolorPopover(null)}
         />
       )}
+    </div>
+  )
+}
+
+// ── Axis title click-to-edit overlay ────────────────────────────────────────
+// position="bottom" → centered under chart for X-axis title
+// position="left"   → vertically rotated -90° to the left for Y-axis title
+
+function AxisTitleOverlay({
+  elementId, position, currentTitle, patchPath, existingAxis,
+}: {
+  elementId:    string
+  position:     "bottom" | "left"
+  currentTitle: string | null
+  patchPath:    "category_axis" | "value_axis"
+  existingAxis: ChartData["category_axis"] | ChartData["value_axis"]
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft]     = useState("")
+
+  const save = (text: string) => {
+    if (text === (currentTitle ?? "")) { setEditing(false); return }
+    const update = {
+      [patchPath]: { ...existingAxis, title: { ...existingAxis.title, text: text || null } },
+    } as Partial<ChartData>
+    commitChartData(elementId, update).catch((e) => console.error("[Percy] axis title save failed:", e))
+    setEditing(false)
+  }
+
+  const baseStyle: React.CSSProperties = position === "bottom"
+    ? {
+        position: "absolute", bottom: 2, left: "50%", transform: "translateX(-50%)",
+        zIndex: 2,
+      }
+    : {
+        position: "absolute", top: "50%", left: 2,
+        transform: "translateY(-50%) rotate(-90deg)",
+        transformOrigin: "center",
+        zIndex: 2,
+      }
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => save(draft)}
+        onKeyDown={(e) => {
+          e.stopPropagation()
+          if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur()
+          if (e.key === "Escape") setEditing(false)
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        style={{
+          ...baseStyle,
+          padding: "1px 6px",
+          background: "#fff", border: "1.5px solid #1a73e8", borderRadius: 3,
+          fontSize: 11, color: "#3c4043",
+          fontFamily: "'Google Sans', system-ui, sans-serif",
+          outline: "none", textAlign: "center",
+          minWidth: 120, maxWidth: 200,
+        }}
+      />
+    )
+  }
+
+  if (currentTitle) {
+    return (
+      <div
+        onClick={(e) => { e.stopPropagation(); setDraft(currentTitle); setEditing(true) }}
+        onMouseDown={(e) => e.stopPropagation()}
+        title="Click to edit axis title"
+        style={{
+          ...baseStyle,
+          padding: "1px 6px", cursor: "text",
+          fontSize: 11, color: "#3c4043",
+          fontFamily: "'Google Sans', system-ui, sans-serif",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {currentTitle}
+      </div>
+    )
+  }
+
+  // No title yet — show the "+ Add … title" placeholder
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); setDraft(""); setEditing(true) }}
+      onMouseDown={(e) => e.stopPropagation()}
+      style={{
+        ...baseStyle,
+        padding: "1px 6px", background: "transparent",
+        border: "1px dashed #bdc1c6", borderRadius: 3,
+        color: "#80868b", fontSize: 10,
+        fontFamily: "'Google Sans', system-ui, sans-serif",
+        cursor: "pointer", whiteSpace: "nowrap",
+      }}
+    >
+      + Add {position === "bottom" ? "X-axis" : "Y-axis"} title
+    </button>
+  )
+}
+
+// ── Category rename overlay (X-axis tick labels) ────────────────────────────
+// Renders a small dashed "Rename categories" button under the chart that
+// opens a flyout with one input per category. Saves on each blur.
+
+function CategoryRenameOverlay({
+  elementId, categories,
+}: {
+  elementId:  string
+  categories: string[]
+}) {
+  const [open, setOpen] = useState(false)
+  const [drafts, setDrafts] = useState<string[]>(categories.map((c) => c ?? ""))
+
+  useEffect(() => { setDrafts(categories.map((c) => c ?? "")) }, [categories])
+
+  const save = (idx: number, text: string) => {
+    if (text === (categories[idx] ?? "")) return
+    const next = [...categories]
+    next[idx] = text
+    commitChartData(elementId, { categories: next }).catch((e) => console.error("[Percy] category save failed:", e))
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen(true) }}
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          position: "absolute", bottom: 22, right: 4, zIndex: 2,
+          padding: "1px 6px", background: "transparent",
+          border: "1px dashed #bdc1c6", borderRadius: 3,
+          color: "#80868b", fontSize: 10,
+          fontFamily: "'Google Sans', system-ui, sans-serif",
+          cursor: "pointer", whiteSpace: "nowrap",
+        }}
+        title="Rename X-axis categories"
+      >
+        ✎ categories
+      </button>
+    )
+  }
+
+  return (
+    <div
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: "absolute", bottom: 22, right: 4, zIndex: 10,
+        background: "#fff", border: "1px solid #dadce0", borderRadius: 6,
+        boxShadow: "0 4px 14px rgba(0,0,0,0.15)",
+        padding: 10, minWidth: 200,
+        fontFamily: "'Google Sans', system-ui, sans-serif",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+        <span style={{ fontSize: 11, color: "#5f6368", fontWeight: 500 }}>Categories</span>
+        <button onClick={() => setOpen(false)} style={{ fontSize: 12, color: "#80868b", background: "none", border: "none", cursor: "pointer" }}>×</button>
+      </div>
+      {drafts.map((d, i) => (
+        <input
+          key={i}
+          value={d}
+          onChange={(e) => setDrafts((arr) => arr.map((v, j) => j === i ? e.target.value : v))}
+          onBlur={() => save(i, drafts[i])}
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur()
+          }}
+          style={{
+            display: "block", width: "100%", margin: "3px 0",
+            padding: "3px 6px", fontSize: 12, color: "#3c4043",
+            border: "1px solid #dadce0", borderRadius: 3, outline: "none",
+            fontFamily: "inherit",
+          }}
+        />
+      ))}
+    </div>
+  )
+}
+
+// ── Legend series rename overlay ────────────────────────────────────────────
+// Small "✎ series" button bottom-left of chart; flyout with one input per series.
+
+function LegendRenameOverlay({
+  elementId, series,
+}: {
+  elementId: string
+  series:    Array<{ idx: number; name: string }>
+}) {
+  const [open, setOpen] = useState(false)
+  const [drafts, setDrafts] = useState<string[]>(series.map((s) => s.name ?? ""))
+
+  useEffect(() => { setDrafts(series.map((s) => s.name ?? "")) }, [series])
+
+  const save = (idx: number, text: string) => {
+    if (text === (series[idx]?.name ?? "")) return
+    const nextSeries = series.map((s, i) => i === idx ? { ...s, name: text } : s)
+    commitChartData(elementId, { series: nextSeries as unknown as ChartData["series"] })
+      .catch((e) => console.error("[Percy] series rename failed:", e))
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen(true) }}
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          position: "absolute", bottom: 22, left: 4, zIndex: 2,
+          padding: "1px 6px", background: "transparent",
+          border: "1px dashed #bdc1c6", borderRadius: 3,
+          color: "#80868b", fontSize: 10,
+          fontFamily: "'Google Sans', system-ui, sans-serif",
+          cursor: "pointer", whiteSpace: "nowrap",
+        }}
+        title="Rename legend / series"
+      >
+        ✎ series
+      </button>
+    )
+  }
+
+  return (
+    <div
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: "absolute", bottom: 22, left: 4, zIndex: 10,
+        background: "#fff", border: "1px solid #dadce0", borderRadius: 6,
+        boxShadow: "0 4px 14px rgba(0,0,0,0.15)",
+        padding: 10, minWidth: 200,
+        fontFamily: "'Google Sans', system-ui, sans-serif",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+        <span style={{ fontSize: 11, color: "#5f6368", fontWeight: 500 }}>Series</span>
+        <button onClick={() => setOpen(false)} style={{ fontSize: 12, color: "#80868b", background: "none", border: "none", cursor: "pointer" }}>×</button>
+      </div>
+      {drafts.map((d, i) => (
+        <input
+          key={i}
+          value={d}
+          onChange={(e) => setDrafts((arr) => arr.map((v, j) => j === i ? e.target.value : v))}
+          onBlur={() => save(i, drafts[i])}
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur()
+          }}
+          style={{
+            display: "block", width: "100%", margin: "3px 0",
+            padding: "3px 6px", fontSize: 12, color: "#3c4043",
+            border: "1px solid #dadce0", borderRadius: 3, outline: "none",
+            fontFamily: "inherit",
+          }}
+        />
+      ))}
     </div>
   )
 }
