@@ -474,6 +474,55 @@ function TableToolBtn({ onInsertTable }: { onInsertTable?: (rows?: number, cols?
   )
 }
 
+const CHART_TYPES = [
+  { type: "column_clustered", icon: "📊", label: "Column" },
+  { type: "bar_clustered",    icon: "📉", label: "Bar" },
+  { type: "line",             icon: "📈", label: "Line" },
+  { type: "area",             icon: "◭",  label: "Area" },
+  { type: "pie",              icon: "⬤",  label: "Pie" },
+  { type: "doughnut",         icon: "◎",  label: "Donut" },
+  { type: "scatter",          icon: "⁙",  label: "Scatter" },
+]
+
+function ChartToolBtn({ onInsertChart }: { onInsertChart?: (chartType?: string) => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="relative flex items-center">
+      <button
+        title="Insert column chart"
+        onClick={() => { onInsertChart?.("column_clustered") }}
+        className="h-8 flex items-center justify-center rounded-l text-[16px] text-[#3c4043] hover:bg-[#f1f3f4] px-1.5 transition-colors"
+      >
+        📊
+      </button>
+      <button
+        title="More chart types"
+        onClick={() => setOpen((o) => !o)}
+        className="h-8 flex items-center justify-center rounded-r text-[10px] text-[#3c4043] hover:bg-[#f1f3f4] px-0.5 transition-colors"
+      >
+        ▾
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-full mt-0.5 z-50 bg-white border border-[#dadce0] rounded shadow-[0_2px_10px_rgba(0,0,0,0.18)] py-1 min-w-[140px]"
+            style={{ fontFamily: "'Google Sans',Roboto,sans-serif" }}>
+            {CHART_TYPES.map((c) => (
+              <button key={c.type}
+                onClick={() => { setOpen(false); onInsertChart?.(c.type) }}
+                className="w-full text-left px-3 py-[6px] text-[13px] text-[#202124] hover:bg-[#f1f3f4] flex items-center gap-2"
+              >
+                <span className="text-base">{c.icon}</span>
+                <span>{c.label}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 // ── Top-level ─────────────────────────────────────────────────────────────────
 
 export default function StudioRibbon(props: Props) {
@@ -790,7 +839,7 @@ export default function StudioRibbon(props: Props) {
         <TBtn icon="🖼" title="Image" onClick={() => fileInputRef.current?.click()} />
         <ShapesToolBtn onInsertShape={onInsertShape} />
         <TableToolBtn onInsertTable={onInsertTable} />
-        <TBtn icon="📊" title="Chart" onClick={() => onInsertChart?.()} />
+        <ChartToolBtn onInsertChart={onInsertChart} />
 
         {/* Draw tools */}
         {onStartDraw && (

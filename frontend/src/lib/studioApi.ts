@@ -467,11 +467,31 @@ export async function copyElementToSlide(
 export async function createChartElement(
   docId: string,
   slideN: number,
-  opts: { chart_type?: string; left_in?: number; top_in?: number; width_in?: number; height_in?: number } = {},
+  opts: {
+    chart_type?: string
+    categories?: string[]
+    series?: Array<{ name: string; values: number[] }>
+    left_in?: number; top_in?: number; width_in?: number; height_in?: number
+  } = {},
 ): Promise<StudioElement> {
+  const { chart_type = "column_clustered", categories, series, left_in, top_in, width_in, height_in } = opts
+  const body: Record<string, unknown> = {
+    chart_type,
+    categories: categories ?? ["Category 1", "Category 2", "Category 3", "Category 4"],
+    series: series ?? [
+      { name: "Series 1", values: [10, 20, 30, 25] },
+      { name: "Series 2", values: [15, 25, 20, 35] },
+    ],
+    position: {
+      left_in:   left_in   ?? 1.5,
+      top_in:    top_in    ?? 1.5,
+      width_in:  width_in  ?? 8.0,
+      height_in: height_in ?? 4.5,
+    },
+  }
   return apiFetch<StudioElement>(
     `${BASE}/docs/${docId}/slides/${slideN}/elements/chart`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts) },
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
   )
 }
 

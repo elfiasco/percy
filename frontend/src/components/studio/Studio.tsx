@@ -1087,13 +1087,13 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
     setDrawMode(null)
   }, [])
 
-  const handleInsertChart = useCallback(async (chartType = "bar") => {
+  const handleInsertChart = useCallback(async (chartType = "column_clustered") => {
     const SLIDE_W = slideWidthIn || 13.33, SLIDE_H = slideHeightIn || 7.5
     try {
       const el = await createChartElement(doc.doc_id, selectedSlideRef.current, {
         chart_type: chartType,
-        left_in: Math.max(0, (SLIDE_W - 8) / 2),
-        top_in: Math.max(0, (SLIDE_H - 4.5) / 2),
+        left_in: Math.max(0.5, (SLIDE_W - 8) / 2),
+        top_in: Math.max(0.5, (SLIDE_H - 4.5) / 2),
         width_in: Math.min(8, SLIDE_W - 1),
         height_in: Math.min(4.5, SLIDE_H - 1),
       })
