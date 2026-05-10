@@ -10,6 +10,10 @@ import { studioStore } from "../../lib/studio/store"
 // InlineTextEditor.
 const NATIVE_EDIT_TYPES = new Set(["BridgeTable", "BridgeText", "BridgeShape"])
 
+// Module-load banner so we can verify the deployed bundle contains this code.
+// eslint-disable-next-line no-console
+if (typeof window !== "undefined") (window as Record<string, unknown>).__percy_overlay_loaded = true
+
 // ── Google Slides design tokens ───────────────────────────────────────────────
 const GS_BLUE        = "#1a73e8"          // primary selection color
 const GS_BLUE_ALPHA  = "rgba(26,115,232,0.12)"  // selection fill (unused on shapes, used on empty canvas)

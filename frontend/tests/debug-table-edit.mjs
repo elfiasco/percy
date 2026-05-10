@@ -28,14 +28,11 @@ await page.goto(`${BASE}/studio/${projId}`)
 await page.waitForLoadState("networkidle").catch(() => {})
 await page.waitForTimeout(2500)
 
-// Capture console + page errors — only Percy logs and errors
+// Capture ALL console output to debug
 page.on("console", (msg) => {
-  const text = msg.text()
-  if (text.includes("[Percy]") || msg.type() === "error" || text.includes("warn")) {
-    console.log(`  [browser ${msg.type()}]`, text.slice(0, 300))
-  }
+  console.log(`  [b/${msg.type()}]`, msg.text().slice(0, 300))
 })
-page.on("pageerror", (err) => console.log(`  [browser ERROR]`, err.message))
+page.on("pageerror", (err) => console.log(`  [b/ERROR]`, err.message))
 
 // Inject diagnostics: hook into the studio store
 await page.evaluate(() => {
@@ -50,8 +47,26 @@ const before = await page.evaluate(() => ({
   hasTable: !!document.querySelector(".bridge-table, table"),
   hasTiptapTableEditor: !!document.querySelector(".tiptap-bridge-table-editor"),
   elements: Array.from(document.querySelectorAll('[data-element="true"]')).length,
+  overlayLoaded: !!(window).__percy_overlay_loaded,
+  storeAvailable: typeof (window).__percy_store !== "undefined",
 }))
 console.log("before:", before)
+
+// Try a direct dispatch of native dblclick + manually call store
+const directProbe = await page.evaluate(() => {
+  const el = document.querySelector('[data-element="true"]')
+  if (!el) return { error: "no element" }
+  const evt = new MouseEvent("dblclick", { bubbles: true, cancelable: true, clientX: 500, clientY: 400 })
+  el.dispatchEvent(evt)
+  return { dispatched: true, classes: el.className }
+})
+console.log("direct dispatch:", directProbe)
+await page.waitForTimeout(500)
+const afterDirect = await page.evaluate(() => ({
+  hasTiptapTableEditor: !!document.querySelector(".tiptap-bridge-table-editor"),
+  hasProseMirror: !!document.querySelector(".ProseMirror"),
+}))
+console.log("after direct dispatch:", afterDirect)
 
 // Click table to select
 const tbl = page.locator(`[data-element="true"]`).first()
