@@ -776,7 +776,8 @@ function ChartRendererImpl({ element, docId, slideN, renderKey, selected }: Nati
           onClick={(e) => { e.stopPropagation(); setTitleDraft(""); setEditingTitle(true) }}
           onMouseDown={(e) => e.stopPropagation()}
           style={{
-            position: "absolute", top: 4, left: "50%", transform: "translateX(-50%)",
+            // sit below the toolbar (toolbar is at top:4 ~28px tall)
+            position: "absolute", top: 38, left: "50%", transform: "translateX(-50%)",
             zIndex: 2, padding: "2px 8px", background: "transparent",
             border: "1px dashed #80868b", borderRadius: 3,
             color: "#80868b", fontSize: 11, fontFamily: "'Google Sans', system-ui, sans-serif",
@@ -995,7 +996,6 @@ function ChartTypePicker({ elementId, currentType }: { elementId: string; curren
         style={TOOLBAR_BTN(open)}
         title="Change chart type"
       >
-        <span style={{ fontSize: 12 }}>{icon}</span>
         <span>{label}</span>
         <span style={{ fontSize: 9, color: "#5f6368", marginLeft: 2 }}>▾</span>
       </button>
