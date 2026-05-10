@@ -5,7 +5,7 @@ import {
   exportPptxUrl, exportPdfUrl, exportPngZipUrl,
   notesExportUrl, notesHtmlExportUrl, exportHtmlUrl, exportMarkdownUrl,
 } from "../../lib/studioApi"
-import TextFormatGroup, { isTextCapable } from "./TextFormatGroup"
+import { isTextCapable } from "./TextFormatGroup"
 
 // ── PPT-style color tokens (used as inline styles / arbitrary Tailwind values) ──
 // Ribbon bg:     #F3F3F3   Active tab bg: #FFFFFF   Tab accent: #2B579A
@@ -799,19 +799,6 @@ export default function StudioRibbon(props: Props) {
             <TBtn icon="✒" title="Draw pen path" onClick={() => onStartDraw("pen")} active={drawMode === "pen"} />
             <TBtn icon="⬡" title="Draw polygon" onClick={() => onStartDraw("polygon")} active={drawMode === "polygon"} />
             {drawMode && <TBtn icon="✕" title="Cancel drawing (Esc)" onClick={onCancelDraw} />}
-          </>
-        )}
-
-        {/* Text formatting — contextual, only when text element is selected */}
-        {selectedElement && isTextCapable(selectedElement) && (
-          <>
-            <TDivider />
-            <TextFormatGroup
-              element={selectedElement}
-              docId={doc.doc_id}
-              slideN={slideN}
-              onCommit={onTextFormatCommit}
-            />
           </>
         )}
 

@@ -766,8 +766,8 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
 
             {/* loading shimmer */}
             {loading && (
-              <div className="absolute inset-0 bg-base/60 flex items-center justify-center">
-                <span className="text-xs text-muted animate-pulse">Loading elements…</span>
+              <div className="absolute inset-0 bg-white/50 flex items-center justify-center">
+                <span className="inline-block w-5 h-5 border-2 border-[#1a73e8] border-t-transparent rounded-full animate-spin" />
               </div>
             )}
 

@@ -167,16 +167,36 @@
      enforce their height. min-height doesn't work on <tr> — use height. */
   .bridge-table tr { height: auto; }
   .bridge-table td, .bridge-table th {
-    border: 1px solid var(--edge);
+    border: 1px solid #c7c7c7;
     padding: 4px 6px;
     vertical-align: top;
     overflow: hidden;
     word-break: break-word;
   }
   .bridge-table th { font-weight: 600; }
-  /* Selected cell highlight when editing */
+
+  /* Tiptap table editor — cell borders and selection (Google Slides style) */
+  .tiptap-bridge-table-editor table {
+    border-collapse: collapse;
+    width: 100%;
+    table-layout: fixed;
+  }
+  .tiptap-bridge-table-editor td,
+  .tiptap-bridge-table-editor th {
+    border: 1px solid #c7c7c7;
+    padding: 4px 6px;
+    vertical-align: top;
+    min-width: 32px;
+    position: relative;
+    word-break: break-word;
+  }
+  .tiptap-bridge-table-editor .ProseMirror { outline: none; }
+
+  /* Selected cell highlight (Google blue tint) */
   .ProseMirror .selectedCell {
-    background: rgba(100, 162, 152, 0.15);
+    background: rgba(26,115,232,0.10);
+    outline: 1px solid rgba(26,115,232,0.6);
+    outline-offset: -1px;
   }
   /* Column resize handle */
   .ProseMirror .column-resize-handle {
@@ -185,7 +205,7 @@
     top: 0;
     bottom: 0;
     width: 4px;
-    background: rgb(var(--champagne) / 0.6);
+    background: rgba(26,115,232,0.4);
     pointer-events: none;
   }
   .ProseMirror.resize-cursor { cursor: col-resize; }

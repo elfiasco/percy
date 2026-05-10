@@ -293,11 +293,9 @@ function RichTableEditor({
       onPointerDown={(e) => e.stopPropagation()}
       style={{
         ...containerStyle,
-        outline:       "2px solid rgba(26,115,232,0.85)",
-        outlineOffset: "-1px",
-        cursor:        "text",
-        userSelect:    "text",
-        position:      "relative",
+        cursor:   "text",
+        userSelect: "text",
+        position: "relative",
       }}
     >
       <TableMergeSplitHint editor={editor} />
