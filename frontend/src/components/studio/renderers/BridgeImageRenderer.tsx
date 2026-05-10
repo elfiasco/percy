@@ -1,8 +1,10 @@
-import { useState, useMemo } from "react"
-import { elementPngUrl } from "../../../lib/studioApi"
+import { useState, useMemo, useRef } from "react"
+import { elementPngUrl, replaceImage } from "../../../lib/studioApi"
 import { useStudioTextStylePayload } from "../../../lib/studio/payloadHooks"
 import { buildImageFilter, buildDropShadowFilter, hasImageEffects, type RecolorPreset } from "../../../lib/studio/imageFilters"
-import { getMask } from "../../../lib/studio/maskShapes"
+import { getMask, MASKS } from "../../../lib/studio/maskShapes"
+import { studioStore } from "../../../lib/studio/store"
+import { commitElementStyle } from "../../../lib/studio/commands"
 import { registerRenderer, type NativeRendererProps } from "./RendererRegistry"
 
 const BASE = "/api"
@@ -25,9 +27,10 @@ function rawImageUrl(docId: string, slideN: number, elementId: string, v: number
  *         -> [clipPath mask shape] -> [shadow filter on outer wrapper]
  */
 function BridgeImageRendererImpl({
-  element, docId, slideN, renderKey,
+  element, docId, slideN, renderKey, selected,
 }: NativeRendererProps) {
   const [rawFailed, setRawFailed] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const payload = useStudioTextStylePayload(docId, slideN, element.id, renderKey)
   const style = payload.style
 
@@ -153,13 +156,145 @@ function BridgeImageRendererImpl({
     </div>
   ) : null
 
+  // Replace image via file picker
+  const onReplace = async (file: File) => {
+    try {
+      await replaceImage(docId, slideN, element.id, file)
+      studioStore.bumpRenderKeys([element.id])
+    } catch (e) {
+      console.error("[Percy] replace image failed:", e)
+    }
+  }
+
+  // Reset all image effects
+  const onResetEffects = () => {
+    commitElementStyle(element.id, {
+      brightness: 0, contrast: 0, transparency: 0,
+      recolor_preset: null, mask_shape: null,
+      reflection_on: false,
+    }).catch((e) => console.error("[Percy] reset image effects failed:", e))
+  }
+
   return (
     <div style={wrapStyle}>
       {defsSvg}
       {imgContent}
       {reflectionContent}
+      {selected && (
+        <ImageToolbar
+          onReplace={() => fileInputRef.current?.click()}
+          onResetEffects={onResetEffects}
+          onCycleMask={() => {
+            const cycle = ["rectangle", "circle", "rounded_rect", "triangle", "diamond", "hexagon"]
+            const cur  = style?.mask_shape ?? "rectangle"
+            const idx  = cycle.indexOf(cur)
+            const next = cycle[(idx + 1) % cycle.length]
+            commitElementStyle(element.id, { mask_shape: next === "rectangle" ? null : next })
+              .catch((e) => console.error("[Percy] mask cycle failed:", e))
+          }}
+          masks={MASKS}
+          currentMask={style?.mask_shape ?? null}
+          elementId={element.id}
+        />
+      )}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const f = e.target.files?.[0]
+          if (f) onReplace(f)
+          e.target.value = ""
+        }}
+      />
     </div>
   )
+}
+
+// ── Floating toolbar above selected image ──────────────────────────────────
+
+function ImageToolbar({
+  onReplace, onResetEffects, onCycleMask, masks, currentMask, elementId,
+}: {
+  onReplace:      () => void
+  onResetEffects: () => void
+  onCycleMask:    () => void
+  masks:          typeof MASKS
+  currentMask:    string | null
+  elementId:      string
+}) {
+  const [maskOpen, setMaskOpen] = useState(false)
+  return (
+    <div
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: "absolute", top: 4, left: 4, zIndex: 6,
+        display: "flex", gap: 4,
+        background: "rgba(255,255,255,0.95)",
+        border: "1px solid #dadce0", borderRadius: 6,
+        padding: 3,
+        boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
+        fontFamily: "'Google Sans', system-ui, sans-serif",
+        backdropFilter: "blur(6px)",
+        fontSize: 11, color: "#3c4043",
+      }}
+    >
+      <button onClick={onReplace} style={IMG_TBN_BTN} title="Replace image file">Replace</button>
+      <div style={{ position: "relative" }}>
+        <button onClick={() => setMaskOpen((v) => !v)} style={IMG_TBN_BTN} title="Mask to shape">
+          Mask ▾
+        </button>
+        {maskOpen && (
+          <>
+            <div style={{ position: "fixed", inset: 0, zIndex: 8 }} onClick={() => setMaskOpen(false)} />
+            <div style={{
+              position: "absolute", top: 30, left: 0, zIndex: 10,
+              background: "#fff", border: "1px solid #dadce0", borderRadius: 6,
+              boxShadow: "0 4px 14px rgba(0,0,0,0.15)",
+              padding: 6, width: 220,
+              display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 3,
+              maxHeight: 240, overflow: "auto",
+            }}>
+              {[{ value: "rectangle", label: "None" }, ...masks].map((m) => (
+                <button
+                  key={m.value}
+                  onClick={() => {
+                    commitElementStyle(elementId, { mask_shape: m.value === "rectangle" ? null : m.value })
+                      .catch((e) => console.error(e))
+                    setMaskOpen(false)
+                  }}
+                  title={"label" in m ? m.label : m.value}
+                  style={{
+                    padding: 4, fontSize: 9, cursor: "pointer",
+                    border: (currentMask ?? "rectangle") === m.value ? "1.5px solid #1a73e8" : "1px solid #dadce0",
+                    background: (currentMask ?? "rectangle") === m.value ? "#e8f0fe" : "#fff",
+                    borderRadius: 3, fontFamily: "inherit",
+                  }}
+                >
+                  {"label" in m ? m.label.slice(0, 8) : m.value.slice(0, 8)}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+      <button onClick={onCycleMask} style={IMG_TBN_BTN} title="Cycle through common mask shapes">⟳ Shape</button>
+      <button onClick={onResetEffects} style={IMG_TBN_BTN} title="Clear all image effects">Reset</button>
+    </div>
+  )
+}
+
+const IMG_TBN_BTN: React.CSSProperties = {
+  padding: "2px 8px",
+  background: "transparent",
+  border: "1px solid transparent",
+  color: "#3c4043",
+  borderRadius: 3,
+  fontSize: 11,
+  fontFamily: "'Google Sans', system-ui, sans-serif",
+  cursor: "pointer",
 }
 
 export function registerBridgeImageRenderer(): void {
