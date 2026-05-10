@@ -940,7 +940,7 @@ function CategoryRenameOverlay({
         onClick={(e) => { e.stopPropagation(); setOpen(true) }}
         onMouseDown={(e) => e.stopPropagation()}
         style={{
-          position: "absolute", bottom: 22, right: 4, zIndex: 2,
+          position: "absolute", top: 4, right: 4, zIndex: 2,
           padding: "1px 6px", background: "transparent",
           border: "1px dashed #bdc1c6", borderRadius: 3,
           color: "#80868b", fontSize: 10,
@@ -959,7 +959,7 @@ function CategoryRenameOverlay({
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
       style={{
-        position: "absolute", bottom: 22, right: 4, zIndex: 10,
+        position: "absolute", top: 4, right: 4, zIndex: 10,
         background: "#fff", border: "1px solid #dadce0", borderRadius: 6,
         boxShadow: "0 4px 14px rgba(0,0,0,0.15)",
         padding: 10, minWidth: 200,
@@ -1019,7 +1019,7 @@ function LegendRenameOverlay({
         onClick={(e) => { e.stopPropagation(); setOpen(true) }}
         onMouseDown={(e) => e.stopPropagation()}
         style={{
-          position: "absolute", bottom: 22, left: 4, zIndex: 2,
+          position: "absolute", top: 4, right: 110, zIndex: 2,
           padding: "1px 6px", background: "transparent",
           border: "1px dashed #bdc1c6", borderRadius: 3,
           color: "#80868b", fontSize: 10,
@@ -1038,7 +1038,7 @@ function LegendRenameOverlay({
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
       style={{
-        position: "absolute", bottom: 22, left: 4, zIndex: 10,
+        position: "absolute", top: 4, right: 110, zIndex: 10,
         background: "#fff", border: "1px solid #dadce0", borderRadius: 6,
         boxShadow: "0 4px 14px rgba(0,0,0,0.15)",
         padding: 10, minWidth: 200,
