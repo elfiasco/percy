@@ -635,6 +635,52 @@ function ChartRendererImpl({ element, docId, slideN, renderKey, selected }: Nati
   } | null>(null)
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft]     = useState("")
+  const [pasteToast, setPasteToast]     = useState<string | null>(null)
+
+  // Paste CSV/TSV onto a SELECTED chart → replace categories + series.
+  // Mirrors Google Sheets' "paste data into chart range" UX.
+  useEffect(() => {
+    if (!selected || !data) return
+    const onPaste = (e: ClipboardEvent) => {
+      // Skip if focus is in a real input/textarea (user is editing a field).
+      const tgt = e.target as HTMLElement | null
+      if (tgt && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA" || tgt.isContentEditable)) return
+      const text = e.clipboardData?.getData("text/plain")
+      if (!text || !/[\t,]/.test(text) || text.split(/\r?\n/).length < 2) return
+      e.preventDefault()
+      const parsed = parseChartTSV(text)
+      if (!parsed || parsed.categories.length === 0 || parsed.series.length === 0) {
+        setPasteToast("Could not parse pasted data as a table")
+        setTimeout(() => setPasteToast(null), 2200)
+        return
+      }
+      commitChartData(element.id, {
+        categories: parsed.categories,
+        series: parsed.series.map((s, i) => {
+          const existing = data.series[i]
+          return existing
+            ? { ...existing, name: s.name, values: s.values }
+            : { idx: i, name: s.name, values: s.values, x_values: [],
+                color: null, point_colors: [], plot_type: null, smooth: false,
+                invert_if_negative: false,
+                line: { visible: true, width: null, color: null, dash: null },
+                marker: { style: null, size: null, color: null, line_visible: false },
+                data_labels: { show: false, show_val: true, show_cat_name: false, show_ser_name: false, show_percent: false, position: null, font_size: null, font_color: null, separator: null } }
+        }),
+      } as unknown as Partial<ChartData>)
+        .then(() => {
+          setPasteToast(`Loaded ${parsed.series.length} series × ${parsed.categories.length} points`)
+          setTimeout(() => setPasteToast(null), 2200)
+        })
+        .catch((err) => {
+          console.error("[Percy] chart paste failed:", err)
+          setPasteToast("Paste failed")
+          setTimeout(() => setPasteToast(null), 2200)
+        })
+    }
+    document.addEventListener("paste", onPaste)
+    return () => document.removeEventListener("paste", onPaste)
+  }, [selected, data, element.id])
 
   if (error) {
     return (
@@ -818,8 +864,61 @@ function ChartRendererImpl({ element, docId, slideN, renderKey, selected }: Nati
           onClose={() => setRecolorPopover(null)}
         />
       )}
+      {pasteToast && (
+        <div style={{
+          position: "absolute", bottom: 12, left: "50%", transform: "translateX(-50%)",
+          zIndex: 20,
+          background: "#202124", color: "#fff",
+          padding: "6px 12px", borderRadius: 4,
+          fontSize: 12, fontFamily: "'Google Sans', system-ui, sans-serif",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
+          pointerEvents: "none",
+        }}>
+          {pasteToast}
+        </div>
+      )}
     </div>
   )
+}
+
+// ── CSV/TSV paste parser ────────────────────────────────────────────────────
+// Expects: first row = headers (first cell is category-label header, rest are
+// series names). Subsequent rows = one category per row, then numeric values.
+// Example:
+//   Quarter\tRevenue\tProfit
+//   Q1\t120\t30
+//   Q2\t145\t42
+//   ...
+// Returns categories + series objects, or null if unparseable.
+
+function parseChartTSV(text: string): { categories: string[]; series: Array<{ name: string; values: (number | null)[] }> } | null {
+  const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").map((l) => l.trim()).filter(Boolean)
+  if (lines.length < 2) return null
+  const sep = lines[0].includes("\t") ? "\t" : ","
+  const split = (line: string) => line.split(sep).map((c) => c.trim().replace(/^"|"$/g, ""))
+  const header = split(lines[0])
+  if (header.length < 2) return null
+  const seriesNames = header.slice(1)
+  const categories: string[] = []
+  const seriesValues: Array<(number | null)[]> = seriesNames.map(() => [])
+  for (let r = 1; r < lines.length; r++) {
+    const row = split(lines[r])
+    if (row.length < 2) continue
+    categories.push(row[0])
+    for (let c = 0; c < seriesNames.length; c++) {
+      const raw = row[c + 1]
+      if (raw === undefined || raw === "") {
+        seriesValues[c].push(null)
+      } else {
+        const num = parseFloat(raw.replace(/[$,]/g, ""))
+        seriesValues[c].push(Number.isFinite(num) ? num : null)
+      }
+    }
+  }
+  return {
+    categories,
+    series: seriesNames.map((name, i) => ({ name, values: seriesValues[i] })),
+  }
 }
 
 // ── Chart type quick-switch picker ──────────────────────────────────────────
