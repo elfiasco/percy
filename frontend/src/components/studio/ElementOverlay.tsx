@@ -45,6 +45,8 @@ interface DragState {
   containerW: number
   containerH: number
   altHeld: boolean
+  pointerId: number
+  captureTarget: HTMLElement
   /** Drag threshold not yet exceeded — letting click events bubble to inner renderers. */
   pending: boolean
 }
@@ -127,10 +129,17 @@ export default function ElementOverlay({
       containerW:     rect.width,
       containerH:     rect.height,
       altHeld:        e.altKey,
+      pointerId:      e.pointerId,
+      captureTarget:  e.target as HTMLElement,
       pending:        mode === "move",   // resize commits immediately, move waits for movement
     }
-    if (mode === "resize") setActiveResize(true)
-    ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+    if (mode === "resize") {
+      setActiveResize(true)
+      // Resize commits immediately — capture pointer so we don't lose it during drag
+      ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+    }
+    // For "move", DEFER pointer capture until movement crosses the threshold.
+    // Capturing on pointerdown can suppress click/dblclick on inner editors.
   }, [element, containerRef])
 
   // ── Pointer move ─────────────────────────────────────────────────────────────
@@ -147,6 +156,8 @@ export default function ElementOverlay({
       if (movedPx < DRAG_THRESHOLD_PX) return
       ds.pending = false
       e.preventDefault()   // now we're really dragging
+      // Capture the pointer now that we're committed to a drag
+      try { ds.captureTarget.setPointerCapture(ds.pointerId) } catch {}
     }
 
     const dxPct = (e.clientX - ds.startX) / ds.containerW * 100

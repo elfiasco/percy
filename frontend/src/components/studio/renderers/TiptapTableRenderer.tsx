@@ -78,11 +78,19 @@ function TiptapTableRendererImpl({
     <div
       style={containerStyle}
       onClick={(e) => {
-        if (!selected) return
-        e.stopPropagation()
-        setEditing(true)
+        // Enter edit mode immediately on click when the table is already
+        // selected (gives single-click-into-cell once selected). On the very
+        // first click we let the event bubble to ElementOverlay which selects.
+        if (selected) {
+          e.stopPropagation()
+          setEditing(true)
+        }
       }}
       onDoubleClick={(e) => {
+        // Always enter edit mode on dblclick — even from unselected state.
+        // Without this gate-removal, the user has to click 3 times because
+        // React batches the selection-state update across the dblclick's
+        // two synchronous click events.
         e.stopPropagation()
         setEditing(true)
       }}
