@@ -1,3 +1,4 @@
+import { useState } from "react"
 import {
   ResponsiveContainer,
   BarChart, Bar,
@@ -10,13 +11,15 @@ import {
 } from "recharts"
 import type { ChartData, ChartSeriesData, ChartLegendData } from "../../../lib/studioTypes"
 import { useStudioChartPayload } from "../../../lib/studio/payloadHooks"
+import { commitChartData } from "../../../lib/studio/commands"
 import type { NativeRendererProps } from "./RendererRegistry"
 import { registerRenderer } from "./RendererRegistry"
 
+// Google Charts Material Design palette (matches google.visualization defaults)
 const DEFAULT_PALETTE = [
-  "#4472C4", "#ED7D31", "#A5A5A5", "#FFC000",
-  "#5B9BD5", "#70AD47", "#264478", "#9E480E",
-  "#636363", "#997300", "#255E91", "#43682B",
+  "#3366CC", "#DC3912", "#FF9900", "#109618",
+  "#990099", "#0099C6", "#DD4477", "#66AA00",
+  "#B82E2E", "#316395", "#994499", "#22AA99",
 ]
 
 function seriesColor(s: ChartSeriesData, idx: number): string {
@@ -39,18 +42,20 @@ function outsideLabelColor(fontColor: string | null | undefined): string {
   return fontColor
 }
 
-// Recharts Legend props from Bridge legend.position
+// Recharts Legend props from Bridge legend.position. Default position is
+// BOTTOM (Google Charts / Sheets convention) so the legend doesn't overlap
+// the plot area when only chart_type is specified.
 function legendProps(lg: ChartLegendData) {
   if (!lg.visible) return null
-  const pos = (lg.position || "RIGHT").toUpperCase()
-  const fontSize = lg.font_size ?? 10
-  const style: Record<string, string | number> = { fontSize, color: lg.font_color || "#333" }
+  const pos = (lg.position || "BOTTOM").toUpperCase()
+  const fontSize = lg.font_size ?? 11
+  const style: Record<string, string | number> = { fontSize, color: lg.font_color || "#3c4043", paddingTop: 4 }
   switch (pos) {
     case "TOP":     return { verticalAlign: "top" as const,    align: "center" as const, layout: "horizontal" as const, wrapperStyle: style }
-    case "BOTTOM":  return { verticalAlign: "bottom" as const, align: "center" as const, layout: "horizontal" as const, wrapperStyle: style }
     case "LEFT":    return { verticalAlign: "middle" as const, align: "left" as const,   layout: "vertical" as const,   wrapperStyle: style }
-    case "RIGHT":
-    default:        return { verticalAlign: "middle" as const, align: "right" as const,  layout: "vertical" as const,   wrapperStyle: style }
+    case "RIGHT":   return { verticalAlign: "middle" as const, align: "right" as const,  layout: "vertical" as const,   wrapperStyle: style }
+    case "BOTTOM":
+    default:        return { verticalAlign: "bottom" as const, align: "center" as const, layout: "horizontal" as const, wrapperStyle: style }
   }
 }
 
@@ -121,23 +126,49 @@ function buildScatterSeries(data: ChartData) {
 
 // ── Sub-renderers per chart-type family ───────────────────────────────────────
 
-// Title is an overlay; top margin only needs to clear data labels if present.
-// Keep margins tight to match matplotlib's minimal internal chart padding.
-function CartesianMargins(hasDataLabels = false) {
-  return { top: hasDataLabels ? 14 : 4, right: 4, bottom: 0, left: 2 }
+// Generous top headroom so the tallest bar/line doesn't crash into the
+// chart title area. Bottom margin handles legend space when legend is below.
+function CartesianMargins(hasDataLabels = false, hasBottomLegend = false) {
+  return {
+    top:    hasDataLabels ? 24 : 14,
+    right:  12,
+    bottom: hasBottomLegend ? 4 : 2,
+    left:   8,
+  }
+}
+
+// Google Sheets-style grid: light gray solid lines
+function ChartGrid() {
+  return <CartesianGrid stroke="#e8e8e8" strokeDasharray="" vertical={false} />
 }
 
 function renderXAxis(data: ChartData, dataKey: string = "__cat__", horizontal = false) {
   const ax = horizontal ? data.value_axis : data.category_axis
   if (!ax.visible) return null
-  const fontSize = ax.tick_label_font_size ?? 7
+  const fontSize = ax.tick_label_font_size ?? 11
+
+  // Only rotate X-axis labels when text is likely to overflow.
+  // Heuristic: rotate when there are many categories or any label is long.
+  const cats = data.categories ?? []
+  const longestLabel = cats.reduce((m, c) => Math.max(m, String(c ?? "").length), 0)
+  const shouldRotate = !horizontal && (cats.length > 6 || longestLabel > 8)
+  const angle = shouldRotate ? -30 : 0
+
   return (
     <XAxis
       dataKey={horizontal ? undefined : dataKey}
       type={horizontal ? "number" : "category"}
       domain={horizontal && (ax.min !== null || ax.max !== null) ? [ax.min ?? "auto", ax.max ?? "auto"] : undefined}
-      tick={{ fontSize, fill: ax.tick_label_font_color || "#555", angle: !horizontal ? -30 : 0, textAnchor: !horizontal ? "end" : "middle" }}
-      height={horizontal ? 26 : 34}
+      tick={{
+        fontSize,
+        fill: ax.tick_label_font_color || "#5f6368",
+        angle,
+        textAnchor: shouldRotate ? "end" : "middle",
+      }}
+      axisLine={{ stroke: "#dadce0" }}
+      tickLine={false}
+      tickMargin={6}
+      height={horizontal ? 30 : (shouldRotate ? 44 : 28)}
       reversed={ax.reverse_order}
       tickFormatter={ax.number_format && horizontal ? (v) => formatNumber(v, ax.number_format!) : undefined}
     />
@@ -155,14 +186,17 @@ function renderYAxis(data: ChartData, horizontal = false, zeroFloor = false) {
       domain = [0, "auto"]
     }
   }
-  const fontSize = ax.tick_label_font_size ?? 7
+  const fontSize = ax.tick_label_font_size ?? 11
   return (
     <YAxis
       dataKey={horizontal ? "__cat__" : undefined}
       type={horizontal ? "category" : "number"}
       domain={domain}
-      tick={{ fontSize, fill: ax.tick_label_font_color || "#555" }}
-      width={horizontal ? undefined : 24}
+      tick={{ fontSize, fill: ax.tick_label_font_color || "#5f6368" }}
+      axisLine={false}
+      tickLine={false}
+      tickMargin={6}
+      width={horizontal ? 60 : 44}
       reversed={ax.reverse_order}
       tickCount={!horizontal ? 6 : undefined}
       tickFormatter={!horizontal && ax.number_format ? (v) => formatNumber(v, ax.number_format!) : undefined}
@@ -180,8 +214,10 @@ function formatNumber(v: number | string, fmt: string): string {
   return String(num)
 }
 
-function ColumnOrBarChart({ data, horizontal, stacked, percent }: {
+function ColumnOrBarChart({ data, horizontal, stacked, percent, onPointClick, elementId }: {
   data: ChartData; horizontal: boolean; stacked: boolean; percent: boolean
+  onPointClick?: (seriesIdx: number, pointIdx: number, evt: { clientX: number; clientY: number }) => void
+  elementId?: string
 }) {
   let rows = buildCategoryRows(data)
   if (percent) {
@@ -202,6 +238,7 @@ function ColumnOrBarChart({ data, horizontal, stacked, percent }: {
   const lp = legendProps(data.legend)
   const valAxFormat = percent ? "0%" : (data.value_axis.number_format || undefined)
   const anyDataLabels = data.series.some((s) => s.data_labels.show)
+  const hasBottomLegend = !!lp && lp.verticalAlign === "bottom"
   // Reference renderer hardcodes width=0.8 per bar cluster, matching barCategoryGap=20%.
   const barCategoryGap = "20%"
 
@@ -210,25 +247,47 @@ function ColumnOrBarChart({ data, horizontal, stacked, percent }: {
       <BarChart
         data={rows}
         layout={horizontal ? "vertical" : "horizontal"}
-        margin={CartesianMargins(anyDataLabels)}
+        margin={CartesianMargins(anyDataLabels, hasBottomLegend)}
         barCategoryGap={barCategoryGap}
         stackOffset={percent ? "expand" : undefined}
       >
+        <ChartGrid />
         {renderXAxis(data, "__cat__", horizontal)}
         {renderYAxis(data, horizontal, !horizontal && !percent)}
-        <Tooltip cursor={{ fill: "rgba(0,0,0,0.04)" }} formatter={valAxFormat ? (v) => formatNumber(v as number, valAxFormat) : undefined} />
+        <Tooltip
+          cursor={{ fill: "rgba(0,0,0,0.04)" }}
+          contentStyle={{ fontSize: 11, border: "1px solid #dadce0", borderRadius: 4, boxShadow: "0 2px 6px rgba(0,0,0,0.1)" }}
+          formatter={valAxFormat ? (v) => formatNumber(v as number, valAxFormat) : undefined}
+        />
         {lp && <Legend {...lp} />}
         {data.series.map((s, idx) => {
           const fill = seriesColor(s, idx)
           const key  = s.name || `Series ${idx + 1}`
+          // Rounded top corners (Google Charts style) — skip for stacked to avoid mid-stack rounding
+          const radius = !stacked && !percent
+            ? (horizontal ? ([0, 3, 3, 0] as [number, number, number, number]) : ([3, 3, 0, 0] as [number, number, number, number]))
+            : undefined
           return (
             <Bar
               key={key}
               dataKey={key}
               fill={fill}
+              radius={radius}
               stackId={stacked || percent ? "stack" : undefined}
-              isAnimationActive={false}
+              isAnimationActive={true}
+              animationDuration={600}
+              animationEasing="ease-out"
+              onClick={onPointClick && elementId ? (_data: unknown, pointIdx: number, evt: React.MouseEvent) => {
+                evt.stopPropagation()
+                onPointClick(idx, pointIdx, { clientX: evt.clientX, clientY: evt.clientY })
+              } : undefined}
+              cursor={onPointClick ? "pointer" : undefined}
             >
+              {/* Per-bar Cells let users override individual bar colors */}
+              {rows.map((_, pointIdx) => {
+                const pc = s.point_colors?.[pointIdx]
+                return <Cell key={pointIdx} fill={pc || fill} />
+              })}
               {s.data_labels.show && (
                 <LabelList
                   dataKey={key}
@@ -256,12 +315,17 @@ function LineOrAreaChart({ data, area, stacked }: { data: ChartData; area: boole
   const lp = legendProps(data.legend)
   const Chart = area ? AreaChart : LineChart
   const anyDataLabels = data.series.some((s) => s.data_labels.show)
+  const hasBottomLegend = !!lp && lp.verticalAlign === "bottom"
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <Chart data={rows} margin={CartesianMargins(anyDataLabels)}>
+      <Chart data={rows} margin={CartesianMargins(anyDataLabels, hasBottomLegend)}>
+        <ChartGrid />
         {renderXAxis(data)}
         {renderYAxis(data)}
-        <Tooltip cursor={{ stroke: "#999", strokeDasharray: "3 3" }} />
+        <Tooltip
+          cursor={{ stroke: "#dadce0", strokeDasharray: "3 3" }}
+          contentStyle={{ fontSize: 11, border: "1px solid #dadce0", borderRadius: 4, boxShadow: "0 2px 6px rgba(0,0,0,0.1)" }}
+        />
         {lp && <Legend {...lp} />}
         {data.series.map((s, idx) => {
           const color = seriesColor(s, idx)
@@ -273,10 +337,13 @@ function LineOrAreaChart({ data, area, stacked }: { data: ChartData; area: boole
                 type={s.smooth ? "monotone" : "linear"}
                 dataKey={key}
                 stroke={color}
+                strokeWidth={2}
                 fill={color}
-                fillOpacity={0.45}
+                fillOpacity={0.15}
                 stackId={stacked ? "stack" : undefined}
-                isAnimationActive={false}
+                isAnimationActive={true}
+                animationDuration={700}
+                animationEasing="ease-out"
                 dot={!!s.marker.style && s.marker.style !== "none"}
               />
             )
@@ -287,16 +354,18 @@ function LineOrAreaChart({ data, area, stacked }: { data: ChartData; area: boole
               type={s.smooth ? "monotone" : "linear"}
               dataKey={key}
               stroke={color}
-              strokeWidth={s.line.width ?? 2}
+              strokeWidth={s.line.width ?? 2.5}
               strokeDasharray={dashArray(s.line.dash)}
-              dot={s.marker.style ? { r: (s.marker.size ?? 4) / 2, fill: s.marker.color || color } : false}
-              isAnimationActive={false}
+              dot={s.marker.style ? { r: (s.marker.size ?? 4) / 2, fill: s.marker.color || color, strokeWidth: 0 } : false}
+              isAnimationActive={true}
+              animationDuration={700}
+              animationEasing="ease-out"
             >
               {s.data_labels.show && (
                 <LabelList
                   dataKey={key}
                   position="top"
-                  style={{ fontSize: s.data_labels.font_size ?? 9, fill: s.data_labels.font_color || "#444" }}
+                  style={{ fontSize: s.data_labels.font_size ?? 9, fill: s.data_labels.font_color || "#5f6368" }}
                 />
               )}
             </Line>
@@ -339,7 +408,10 @@ function PieOrDonutChart({ data, donut, exploded }: { data: ChartData; donut: bo
   return (
     <ResponsiveContainer width="100%" height="100%">
       <PieChart>
-        <Tooltip formatter={(v: number) => `${total > 0 ? ((v / total) * 100).toFixed(1) : 0}%`} />
+        <Tooltip
+          formatter={(v: number) => `${total > 0 ? ((v / total) * 100).toFixed(1) : 0}%`}
+          contentStyle={{ fontSize: 11, border: "1px solid #dadce0", borderRadius: 4, boxShadow: "0 2px 6px rgba(0,0,0,0.1)" }}
+        />
         {lp && <Legend {...lp} />}
         <Pie
           data={pieData}
@@ -347,14 +419,18 @@ function PieOrDonutChart({ data, donut, exploded }: { data: ChartData; donut: bo
           nameKey="name"
           cx="50%"
           cy="50%"
-          outerRadius="80%"
+          outerRadius="78%"
           innerRadius={donut ? `${data.plot_properties.hole_size ?? 50}%` : 0}
           startAngle={90}
           endAngle={450}
-          isAnimationActive={false}
+          isAnimationActive={true}
+          animationDuration={700}
+          animationEasing="ease-out"
           label={pctLabel}
           labelLine={false}
-          paddingAngle={exploded ? 2 : 0}
+          paddingAngle={exploded ? 3 : 1}
+          strokeWidth={1}
+          stroke="#fff"
         >
           {pieData.map((entry, i) => (
             <Cell key={i} fill={entry.color || DEFAULT_PALETTE[i % DEFAULT_PALETTE.length]} />
@@ -368,13 +444,18 @@ function PieOrDonutChart({ data, donut, exploded }: { data: ChartData; donut: bo
 function ScatterOrBubbleChart({ data, withLines, bubble }: { data: ChartData; withLines: boolean; bubble: boolean }) {
   const series = buildScatterSeries(data)
   const lp = legendProps(data.legend)
+  const hasBottomLegend = !!lp && lp.verticalAlign === "bottom"
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <ScatterChart margin={CartesianMargins()}>
-        <XAxis type="number" dataKey="x" tick={{ fontSize: 7 }} height={18} />
-        <YAxis type="number" dataKey="y" tick={{ fontSize: 7 }} width={24} />
+      <ScatterChart margin={CartesianMargins(false, hasBottomLegend)}>
+        <ChartGrid />
+        <XAxis type="number" dataKey="x" tick={{ fontSize: 9, fill: "#80868b" }} axisLine={{ stroke: "#dadce0" }} tickLine={false} height={28} />
+        <YAxis type="number" dataKey="y" tick={{ fontSize: 9, fill: "#80868b" }} axisLine={false} tickLine={false} width={32} />
         {bubble && <ZAxis type="number" dataKey="z" range={[20, 200]} />}
-        <Tooltip cursor={{ strokeDasharray: "3 3" }} />
+        <Tooltip
+          cursor={{ strokeDasharray: "3 3" }}
+          contentStyle={{ fontSize: 11, border: "1px solid #dadce0", borderRadius: 4, boxShadow: "0 2px 6px rgba(0,0,0,0.1)" }}
+        />
         {lp && <Legend {...lp} />}
         {series.map((s, idx) => (
           <Scatter
@@ -382,9 +463,10 @@ function ScatterOrBubbleChart({ data, withLines, bubble }: { data: ChartData; wi
             name={s.name}
             data={s.points}
             fill={s.color}
-            line={withLines ? { stroke: s.color, strokeWidth: 1.5 } : false}
+            line={withLines ? { stroke: s.color, strokeWidth: 2 } : false}
             shape="circle"
-            isAnimationActive={false}
+            isAnimationActive={true}
+            animationDuration={600}
           />
         ))}
       </ScatterChart>
@@ -396,24 +478,26 @@ function ComboChart({ data }: { data: ChartData }) {
   // Combo: each series uses its own plot_type override
   const rows = buildCategoryRows(data)
   const lp = legendProps(data.legend)
+  const hasBottomLegend = !!lp && lp.verticalAlign === "bottom"
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <ComposedChart data={rows} margin={CartesianMargins()}>
+      <ComposedChart data={rows} margin={CartesianMargins(false, hasBottomLegend)}>
+        <ChartGrid />
         {renderXAxis(data)}
         {renderYAxis(data)}
-        <Tooltip />
+        <Tooltip contentStyle={{ fontSize: 11, border: "1px solid #dadce0", borderRadius: 4, boxShadow: "0 2px 6px rgba(0,0,0,0.1)" }} />
         {lp && <Legend {...lp} />}
         {data.series.map((s, idx) => {
           const color = seriesColor(s, idx)
           const key   = s.name || `Series ${idx + 1}`
           const pt    = (s.plot_type || "").toLowerCase()
           if (pt.includes("line")) {
-            return <Line key={key} type={s.smooth ? "monotone" : "linear"} dataKey={key} stroke={color} strokeWidth={s.line.width ?? 2} dot={false} isAnimationActive={false} />
+            return <Line key={key} type={s.smooth ? "monotone" : "linear"} dataKey={key} stroke={color} strokeWidth={s.line.width ?? 2.5} dot={false} isAnimationActive={true} animationDuration={600} />
           }
           if (pt.includes("area")) {
-            return <Area key={key} type={s.smooth ? "monotone" : "linear"} dataKey={key} stroke={color} fill={color} fillOpacity={0.4} isAnimationActive={false} />
+            return <Area key={key} type={s.smooth ? "monotone" : "linear"} dataKey={key} stroke={color} fill={color} fillOpacity={0.15} isAnimationActive={true} animationDuration={600} />
           }
-          return <Bar key={key} dataKey={key} fill={color} isAnimationActive={false} />
+          return <Bar key={key} dataKey={key} fill={color} radius={[3, 3, 0, 0]} isAnimationActive={true} animationDuration={600} />
         })}
       </ComposedChart>
     </ResponsiveContainer>
@@ -422,7 +506,13 @@ function ComboChart({ data }: { data: ChartData }) {
 
 // ── Dispatcher ────────────────────────────────────────────────────────────────
 
-function ChartByType({ data }: { data: ChartData }) {
+interface ChartByTypeProps {
+  data: ChartData
+  onPointClick?: (seriesIdx: number, pointIdx: number, evt: { clientX: number; clientY: number }) => void
+  elementId?: string
+}
+
+function ChartByType({ data, onPointClick, elementId }: ChartByTypeProps) {
   const ct = (data.chart_type || "").toUpperCase()
   // Combo: any series has plot_type that conflicts with the chart_type root
   const usesCombo = data.series.some((s) => {
@@ -436,13 +526,17 @@ function ChartByType({ data }: { data: ChartData }) {
   })
   if (usesCombo) return <ComboChart data={data} />
 
+  // Bar/column: per-point click for recolor
+  const colBar = (h: boolean, s: boolean, p: boolean) =>
+    <ColumnOrBarChart data={data} horizontal={h} stacked={s} percent={p} onPointClick={onPointClick} elementId={elementId} />
+
   switch (ct) {
-    case "COLUMN_CLUSTERED":            return <ColumnOrBarChart data={data} horizontal={false} stacked={false} percent={false} />
-    case "COLUMN_STACKED":              return <ColumnOrBarChart data={data} horizontal={false} stacked={true}  percent={false} />
-    case "COLUMN_100_PERCENT_STACKED":  return <ColumnOrBarChart data={data} horizontal={false} stacked={true}  percent={true}  />
-    case "BAR_CLUSTERED":               return <ColumnOrBarChart data={data} horizontal={true}  stacked={false} percent={false} />
-    case "BAR_STACKED":                 return <ColumnOrBarChart data={data} horizontal={true}  stacked={true}  percent={false} />
-    case "BAR_100_PERCENT_STACKED":     return <ColumnOrBarChart data={data} horizontal={true}  stacked={true}  percent={true}  />
+    case "COLUMN_CLUSTERED":            return colBar(false, false, false)
+    case "COLUMN_STACKED":              return colBar(false, true,  false)
+    case "COLUMN_100_PERCENT_STACKED":  return colBar(false, true,  true )
+    case "BAR_CLUSTERED":               return colBar(true,  false, false)
+    case "BAR_STACKED":                 return colBar(true,  true,  false)
+    case "BAR_100_PERCENT_STACKED":     return colBar(true,  true,  true )
     case "LINE":
     case "LINE_MARKERS":                return <LineOrAreaChart data={data} area={false} stacked={false} />
     case "AREA":                        return <LineOrAreaChart data={data} area={true}  stacked={false} />
@@ -456,14 +550,89 @@ function ChartByType({ data }: { data: ChartData }) {
     case "XY_SCATTER_LINES_NO_MARKERS":
     case "XY_SCATTER_SMOOTH":           return <ScatterOrBubbleChart data={data} withLines={true}  bubble={false} />
     case "BUBBLE":                      return <ScatterOrBubbleChart data={data} withLines={false} bubble={true}  />
-    default:                            return <ColumnOrBarChart data={data} horizontal={false} stacked={false} percent={false} />
+    default:                            return colBar(false, false, false)
   }
+}
+
+// ── Per-bar recolor popover (Google Sheets-style click-to-color) ─────────────
+function BarRecolorPopover({
+  x, y, currentColor, onPick, onReset, onClose,
+}: {
+  x: number; y: number; currentColor: string
+  onPick: (color: string) => void; onReset: () => void; onClose: () => void
+}) {
+  const PALETTE = [
+    ...DEFAULT_PALETTE,
+    "#000000", "#3c4043", "#80868b", "#dadce0", "#ffffff",
+  ]
+  // Clamp to viewport
+  const left = Math.max(8, Math.min(x - 90, window.innerWidth - 200))
+  const top  = Math.min(y + 10, window.innerHeight - 130)
+  return (
+    <>
+      <div
+        style={{ position: "fixed", inset: 0, zIndex: 99998 }}
+        onClick={onClose}
+        onContextMenu={(e) => { e.preventDefault(); onClose() }}
+      />
+      <div
+        style={{
+          position: "fixed", left, top, zIndex: 99999,
+          background: "#fff", border: "1px solid #dadce0", borderRadius: 6,
+          boxShadow: "0 4px 16px rgba(0,0,0,0.18), 0 1px 3px rgba(0,0,0,0.10)",
+          padding: 8, width: 184, fontFamily: "'Google Sans', system-ui, sans-serif",
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div style={{ fontSize: 11, color: "#5f6368", marginBottom: 6, fontWeight: 500 }}>
+          Bar color
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gap: 4 }}>
+          {PALETTE.map((c) => (
+            <button
+              key={c}
+              onClick={() => onPick(c)}
+              title={c}
+              style={{
+                width: 18, height: 18, padding: 0, cursor: "pointer",
+                background: c, border: c.toLowerCase() === currentColor.toLowerCase()
+                  ? "2px solid #1a73e8" : "1px solid #dadce0",
+                borderRadius: 2,
+              }}
+            />
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+          <input
+            type="color"
+            value={/^#[0-9a-fA-F]{6}$/.test(currentColor) ? currentColor : "#3366CC"}
+            onChange={(e) => onPick(e.target.value)}
+            style={{ width: 28, height: 22, padding: 0, border: "1px solid #dadce0", borderRadius: 3, cursor: "pointer" }}
+            title="Custom color"
+          />
+          <button
+            onClick={onReset}
+            style={{
+              flex: 1, fontSize: 11, padding: "2px 8px",
+              background: "#f1f3f4", border: "1px solid #dadce0", borderRadius: 3,
+              color: "#3c4043", cursor: "pointer", fontFamily: "inherit",
+            }}
+          >
+            Reset to series color
+          </button>
+        </div>
+      </div>
+    </>
+  )
 }
 
 // ── Top-level component ───────────────────────────────────────────────────────
 
-function ChartRendererImpl({ element, docId, slideN, renderKey }: NativeRendererProps) {
+function ChartRendererImpl({ element, docId, slideN, renderKey, selected }: NativeRendererProps) {
   const { data, error } = useStudioChartPayload(docId, slideN, element.id, renderKey)
+  const [recolorPopover, setRecolorPopover] = useState<{
+    seriesIdx: number; pointIdx: number; x: number; y: number
+  } | null>(null)
 
   if (error) {
     return (
@@ -483,12 +652,35 @@ function ChartRendererImpl({ element, docId, slideN, renderKey }: NativeRenderer
       <div style={{
         width: "100%", height: "100%",
         display: "flex", alignItems: "center", justifyContent: "center",
-        background: "#f3f4f6", color: "#9ca3af",
-        fontSize: 10, fontFamily: "monospace",
+        background: "#f8f9fa",
       }}>
-        Loading chart…
+        <div style={{
+          width: 18, height: 18,
+          border: "2px solid #3366CC",
+          borderTopColor: "transparent",
+          borderRadius: "50%",
+          animation: "spin 0.7s linear infinite",
+        }} />
       </div>
     )
+  }
+
+  // When selected, allow clicking individual bars to recolor that bar.
+  const onPointClick = selected ? (seriesIdx: number, pointIdx: number, evt: { clientX: number; clientY: number }) => {
+    setRecolorPopover({ seriesIdx, pointIdx, x: evt.clientX, y: evt.clientY })
+  } : undefined
+
+  const applyPointColor = (color: string | null) => {
+    if (!recolorPopover) return
+    const series = data.series.map((s, sIdx) => {
+      if (sIdx !== recolorPopover.seriesIdx) return s
+      const pc = [...(s.point_colors || [])]
+      while (pc.length < data.categories.length) pc.push(null)
+      pc[recolorPopover.pointIdx] = color
+      return { ...s, point_colors: pc }
+    })
+    commitChartData(element.id, { series }).catch((e) => console.error("recolor commit failed:", e))
+    setRecolorPopover(null)
   }
 
   const title = chartTitle(data)
@@ -497,7 +689,9 @@ function ChartRendererImpl({ element, docId, slideN, renderKey }: NativeRenderer
       width: "100%", height: "100%",
       position: "relative",
       background: "transparent",
-      pointerEvents: "none",
+      // pointer-events: when selected, allow clicking bars; otherwise let the
+      // overlay handle drag/select
+      pointerEvents: selected ? "auto" : "none",
       userSelect: "none",
       boxSizing: "border-box",
     }}>
@@ -510,7 +704,20 @@ function ChartRendererImpl({ element, docId, slideN, renderKey }: NativeRenderer
           {title.text}
         </div>
       )}
-      <ChartByType data={data} />
+      <ChartByType data={data} onPointClick={onPointClick} elementId={element.id} />
+      {recolorPopover && (
+        <BarRecolorPopover
+          x={recolorPopover.x}
+          y={recolorPopover.y}
+          currentColor={
+            data.series[recolorPopover.seriesIdx]?.point_colors?.[recolorPopover.pointIdx] ??
+            seriesColor(data.series[recolorPopover.seriesIdx], recolorPopover.seriesIdx)
+          }
+          onPick={applyPointColor}
+          onReset={() => applyPointColor(null)}
+          onClose={() => setRecolorPopover(null)}
+        />
+      )}
     </div>
   )
 }

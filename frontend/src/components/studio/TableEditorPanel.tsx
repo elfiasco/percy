@@ -194,7 +194,7 @@ function CellsTab({ data, sel, setSel, patch }: {
 
   return (
     <div className="space-y-2">
-      <SectionHead title="Spreadsheet (click a cell)" />
+      <SectionHead title="Cells" />
       <div className="overflow-auto -mx-1 max-h-48 scrollbar-thin border border-edge/50 rounded">
         <table className="w-full text-[10px] font-mono">
           <thead>

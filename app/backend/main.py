@@ -360,6 +360,16 @@ class ElementStyleUpdate(BaseModel):
     crop_right: float | None = None
     crop_top: float | None = None
     crop_bottom: float | None = None
+    # image effects (Google Slides parity)
+    brightness: float | None = None        # -1.0 to +1.0
+    contrast: float | None = None          # -1.0 to +1.0
+    transparency: float | None = None      # 0.0 (opaque) to 1.0 (invisible)
+    recolor_preset: str | None = None      # "none" | "grayscale" | "sepia" | "negative" | "bw" | "light1".."dark4"
+    mask_shape: str | None = None          # null = rectangle (no mask) | shape preset name
+    reflection_on: bool | None = None
+    reflection_transparency: float | None = None  # 0.0 – 1.0
+    reflection_distance: float | None = None      # pt
+    reflection_size: float | None = None          # 0.0 – 1.0
 
 
 # ── Text-editing models ───────────────────────────────────────────────────────
@@ -9497,8 +9507,12 @@ def _ser_style(el: Any) -> dict:
         if insets:
             text_insets = dict(insets)
 
-    # image crop
+    # image crop + effects
     crop_left = crop_right = crop_top = crop_bottom = None
+    brightness = contrast = transparency = None
+    recolor_preset = mask_shape = None
+    reflection_on = False
+    reflection_transparency = reflection_distance = reflection_size = None
     if el_type == "BridgeImage":
         crop_obj = getattr(el, "cropping", None)
         if crop_obj:
@@ -9506,6 +9520,17 @@ def _ser_style(el: Any) -> dict:
             crop_right  = getattr(crop_obj, "crop_right",  0.0)
             crop_top    = getattr(crop_obj, "crop_top",    0.0)
             crop_bottom = getattr(crop_obj, "crop_bottom", 0.0)
+        fx = getattr(el, "effects", None)
+        if fx:
+            brightness              = getattr(fx, "brightness", None)
+            contrast                = getattr(fx, "contrast", None)
+            transparency            = getattr(fx, "transparency", None)
+            recolor_preset          = getattr(fx, "recolor_preset", None)
+            mask_shape              = getattr(fx, "mask_shape", None)
+            reflection_on           = bool(getattr(fx, "reflection_on", False))
+            reflection_transparency = getattr(fx, "reflection_transparency", None)
+            reflection_distance     = getattr(fx, "reflection_distance", None)
+            reflection_size         = getattr(fx, "reflection_size", None)
 
     return {
         "fill_type":        fill_type,
@@ -9536,6 +9561,15 @@ def _ser_style(el: Any) -> dict:
         "crop_right":       crop_right,
         "crop_top":         crop_top,
         "crop_bottom":      crop_bottom,
+        "brightness":              brightness,
+        "contrast":                contrast,
+        "transparency":            transparency,
+        "recolor_preset":          recolor_preset,
+        "mask_shape":              mask_shape,
+        "reflection_on":           reflection_on,
+        "reflection_transparency": reflection_transparency,
+        "reflection_distance":     reflection_distance,
+        "reflection_size":         reflection_size,
     }
 
 
@@ -9611,6 +9645,22 @@ def _apply_style(el: Any, req: ElementStyleUpdate) -> None:
             if req.crop_right  is not None: crop.crop_right  = max(0.0, min(0.99, req.crop_right))
             if req.crop_top    is not None: crop.crop_top    = max(0.0, min(0.99, req.crop_top))
             if req.crop_bottom is not None: crop.crop_bottom = max(0.0, min(0.99, req.crop_bottom))
+        # image effects (Google Slides parity)
+        from percy.bridge.elements import ImageEffects
+        fx = getattr(el, "effects", None)
+        if fx is None:
+            el.effects = fx = ImageEffects()
+        if req.brightness   is not None: fx.brightness   = max(-1.0, min(1.0, req.brightness))
+        if req.contrast     is not None: fx.contrast     = max(-1.0, min(1.0, req.contrast))
+        if req.transparency is not None: fx.transparency = max(0.0,  min(1.0, req.transparency))
+        if req.recolor_preset is not None:
+            fx.recolor_preset = req.recolor_preset if req.recolor_preset != "none" else None
+        if req.mask_shape is not None:
+            fx.mask_shape = req.mask_shape if req.mask_shape and req.mask_shape != "rectangle" else None
+        if req.reflection_on is not None:           fx.reflection_on = bool(req.reflection_on)
+        if req.reflection_transparency is not None: fx.reflection_transparency = max(0.0, min(1.0, req.reflection_transparency))
+        if req.reflection_distance is not None:     fx.reflection_distance = max(0.0, req.reflection_distance)
+        if req.reflection_size is not None:         fx.reflection_size = max(0.0, min(1.0, req.reflection_size))
 
 
 class BulkStyleRequest(BaseModel):

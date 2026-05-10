@@ -351,6 +351,8 @@ import { useAuth } from "../../auth/AuthContext"
 import { setPendingAutoEdit } from "../../lib/pendingAutoEdit"
 import { commitElementFlags, commitElementGeometry } from "../../lib/studio/commands"
 import { studioStore, useStudioStore } from "../../lib/studio/store"
+import { getActiveTiptapEditor } from "../../lib/bridge/activeEditor"
+import HyperlinkPopover from "./HyperlinkPopover"
 
 setupNativeRenderers()
 
@@ -723,7 +725,10 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const [focusMode, setFocusMode]                   = useState(false)
   const [slideCtxMenu, setSlideCtxMenu] = useState<{ x: number; y: number } | null>(null)
   const [formatPaintMode, setFormatPaintMode]   = useState(false)
+  const [formatPaintSticky, setFormatPaintSticky] = useState(false)
   const formatPaintStyleRef = useRef<ElementStyleData | null>(null)
+  // Hyperlink popover (Ctrl+K when editing text)
+  const [linkPopover, setLinkPopover] = useState<{ editor: import("@tiptap/react").Editor; anchor: { x: number; y: number; w: number; h: number } } | null>(null)
   const [dirtySlides, setDirtySlides]         = useState<Set<number>>(new Set())
   const [multiSelectIds, setMultiSelectIds]   = useState<Set<string>>(new Set())
   const [undoDepth, setUndoDepth]             = useState(0)
@@ -982,20 +987,34 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
     }
   }, [doc.doc_id, markDirty])
 
-  // ── format painter ────────────────────────────────────────────────────────
-  const handleFormatPaint = useCallback(async () => {
+  // ── format painter (Google Slides parity) ─────────────────────────────────
+  // Single-click toolbar button = one-shot (apply once, deactivate)
+  // Double-click toolbar button  = sticky mode (apply repeatedly until Esc)
+  // Ctrl+Alt+C = capture style from selection
+  // Ctrl+Alt+V = paste captured style to current selection
+  // Esc        = exit sticky/active mode
+  const handleFormatPaint = useCallback(async (sticky = false) => {
+    // If already active, toggling off
+    if (formatPaintMode) {
+      setFormatPaintMode(false)
+      setFormatPaintSticky(false)
+      formatPaintStyleRef.current = null
+      return
+    }
     const el = selectedElementRef.current
     if (!el) return
     try {
       const style = await fetchElementStyle(doc.doc_id, selectedSlideRef.current, el.id)
       formatPaintStyleRef.current = style
       setFormatPaintMode(true)
+      setFormatPaintSticky(sticky)
     } catch (e) {
       console.error("format paint fetch failed:", e)
     }
-  }, [doc.doc_id])
+  }, [doc.doc_id, formatPaintMode])
 
-  // Apply paint when a new element is selected while paint mode is on
+  // Apply paint when a new element is selected while paint mode is on.
+  // In sticky mode, the captured style is preserved — we keep painting until Esc.
   const prevElementIdRef = useRef<string | null>(null)
   useEffect(() => {
     const el = selectedElement
@@ -1004,12 +1023,88 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
     prevElementIdRef.current = el.id
     if (!formatPaintMode || !formatPaintStyleRef.current) return
     const style = formatPaintStyleRef.current
-    setFormatPaintMode(false)
-    formatPaintStyleRef.current = null
-    updateElementStyle(doc.doc_id, selectedSlideRef.current, el.id, style)
+    // Build allowlisted paint format update — Google Slides excludes link, reflection, image recolor
+    const paintUpdate = {
+      fill_color:    style.fill_color,
+      fill_type:     style.fill_type,
+      gradient_stops: style.gradient_stops?.map((s) => ({ position: s.position, color: s.color ?? "#000000" })) ?? null,
+      gradient_angle: style.gradient_angle,
+      line_color:    style.line_color,
+      line_width:    style.line_width,
+      line_dash:     style.line_dash,
+      opacity:       style.opacity,
+      shadow_on:     style.shadow_on,
+      shadow_color:  style.shadow_color,
+      shadow_blur:   style.shadow_blur,
+      shadow_offset_x: style.shadow_offset_x,
+      shadow_offset_y: style.shadow_offset_y,
+    }
+    updateElementStyle(doc.doc_id, selectedSlideRef.current, el.id, paintUpdate)
       .then(() => { markDirty(selectedSlideRef.current); setRefreshKey((k) => k + 1) })
       .catch((err) => console.error("format paint apply failed:", err))
-  }, [selectedElement, formatPaintMode, doc.doc_id, markDirty])
+    // In one-shot mode, deactivate after one paint. Sticky mode keeps the style.
+    if (!formatPaintSticky) {
+      setFormatPaintMode(false)
+      formatPaintStyleRef.current = null
+    }
+  }, [selectedElement, formatPaintMode, formatPaintSticky, doc.doc_id, markDirty])
+
+  // Esc exits format paint mode (sticky or one-shot)
+  useEffect(() => {
+    if (!formatPaintMode) return
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setFormatPaintMode(false)
+        setFormatPaintSticky(false)
+        formatPaintStyleRef.current = null
+      }
+    }
+    window.addEventListener("keydown", handler)
+    return () => window.removeEventListener("keydown", handler)
+  }, [formatPaintMode])
+
+  // Set crosshair-style cursor on body while format paint is active
+  useEffect(() => {
+    if (!formatPaintMode) return
+    const prev = document.body.style.cursor
+    document.body.style.cursor = "copy"
+    return () => { document.body.style.cursor = prev }
+  }, [formatPaintMode])
+
+  // ── Hyperlink popover: Ctrl+K when editing text ──────────────────────────
+  // Capture-phase handler so it fires inside contenteditable before the normal
+  // canvas keyboard handler bails. If no active editor → fall through to
+  // command palette (existing Ctrl+K behavior).
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.key !== "k" && e.key !== "K") || !(e.ctrlKey || e.metaKey)) return
+      const active = getActiveTiptapEditor()
+      if (!active) return  // let the normal handler open command palette
+      e.preventDefault()
+      e.stopPropagation()
+      // Compute selection anchor in viewport coords. Tiptap's view exposes
+      // coordsAtPos for the selection's "to" position.
+      const { from, to } = active.editor.state.selection
+      try {
+        const start = active.editor.view.coordsAtPos(from)
+        const end   = active.editor.view.coordsAtPos(to)
+        const x = Math.min(start.left, end.left)
+        const w = Math.max(end.right - start.left, 60)
+        const y = start.top
+        const h = end.bottom - start.top
+        setLinkPopover({ editor: active.editor, anchor: { x, y, w, h } })
+      } catch {
+        // Fallback: anchor at element center
+        const elBounds = active.editor.view.dom.getBoundingClientRect()
+        setLinkPopover({
+          editor: active.editor,
+          anchor: { x: elBounds.left, y: elBounds.top, w: elBounds.width, h: elBounds.height },
+        })
+      }
+    }
+    window.addEventListener("keydown", handler, true)  // capture phase
+    return () => window.removeEventListener("keydown", handler, true)
+  }, [])
 
   const _doInsertShape = useCallback(async (shapeType: string, leftIn: number, topIn: number, widthIn: number, heightIn: number) => {
     try {
@@ -1142,7 +1237,41 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         return
       }
 
-      // Ctrl+Shift+C → copy style (format painter activate)
+      // Ctrl+Alt+C → Copy formatting (Google Slides Paint Format shortcut)
+      if ((e.key === "c" || e.key === "C") && (e.ctrlKey || e.metaKey) && e.altKey && !e.shiftKey) {
+        if (selectedElementRef.current) { e.preventDefault(); handleFormatPaint(false) }
+        return
+      }
+
+      // Ctrl+Alt+V → Paste formatting onto current selection (immediate paint)
+      if ((e.key === "v" || e.key === "V") && (e.ctrlKey || e.metaKey) && e.altKey && !e.shiftKey) {
+        const el = selectedElementRef.current
+        const captured = formatPaintStyleRef.current
+        if (el && captured) {
+          e.preventDefault()
+          const paintUpdate = {
+            fill_color:    captured.fill_color,
+            fill_type:     captured.fill_type,
+            gradient_stops: captured.gradient_stops?.map((s) => ({ position: s.position, color: s.color ?? "#000000" })) ?? null,
+            gradient_angle: captured.gradient_angle,
+            line_color:    captured.line_color,
+            line_width:    captured.line_width,
+            line_dash:     captured.line_dash,
+            opacity:       captured.opacity,
+            shadow_on:     captured.shadow_on,
+            shadow_color:  captured.shadow_color,
+            shadow_blur:   captured.shadow_blur,
+            shadow_offset_x: captured.shadow_offset_x,
+            shadow_offset_y: captured.shadow_offset_y,
+          }
+          updateElementStyle(doc.doc_id, selectedSlideRef.current, el.id, paintUpdate)
+            .then(() => { markDirty(selectedSlideRef.current); setRefreshKey((k) => k + 1) })
+            .catch((err) => console.error("paste format failed:", err))
+        }
+        return
+      }
+
+      // Ctrl+Shift+C → legacy alias for format paint capture
       if ((e.key === "c" || e.key === "C") && (e.ctrlKey || e.metaKey) && e.shiftKey) {
         if (selectedElementRef.current) { e.preventDefault(); handleFormatPaint() }
         return
@@ -1378,7 +1507,23 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       const el = selectedElementRef.current
       if (!el || el.locked) return
       e.preventDefault()
-      // 1pt nudge; Shift = 8pt nudge (matching Google Slides behavior)
+
+      // Alt+Arrow: rotate element (Google Slides behavior: Alt=15°, Alt+Shift=1°)
+      if (e.altKey) {
+        const rotStep = e.shiftKey ? 1 : 15
+        const dRot = (e.key === "ArrowLeft") ? -rotStep : (e.key === "ArrowRight") ? rotStep : 0
+        if (dRot !== 0) {
+          const newRot = (((el.rotation ?? 0) + dRot) % 360 + 360) % 360
+          commitElementGeometry(el.id, { rotation: newRot })
+            .then((updated) => { if (updated) setSelectedElement(updated) })
+            .catch(() => {})
+        }
+        return
+      }
+
+      // Plain/Shift+Arrow: nudge position
+      // Google Slides (post-Aug 2025): Arrow = 1px, Shift+Arrow = larger increment
+      // Percy uses 1pt (1/72 in) as the base unit; Shift multiplies by 8
       const PT = 1 / 72
       const step = e.shiftKey ? 8 * PT : PT
       const dl = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0
@@ -1518,6 +1663,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         onAlignElements={handleAlignElements}
         onFormatPaint={handleFormatPaint}
         formatPaintMode={formatPaintMode}
+        formatPaintSticky={formatPaintSticky}
         onCopyToSlide={selectedElement ? handleCopyToSlide : undefined}
         onApplyLayout={handleApplyLayout}
         onGroupElements={multiSelectIds.size > 1 ? handleGroupElements : undefined}
@@ -1792,6 +1938,21 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           />
         )}
 
+        {/* Order: AI Assistant first (collapsed by default), then Format Options
+            on the far right edge — matches Google Slides convention where the
+            primary right rail is the Format Options panel. */}
+        <StudioAgent
+          docId={doc.doc_id}
+          slideN={selectedSlide}
+          selectedElement={selectedElement}
+          collapsed={agentCollapsed}
+          onToggleCollapsed={(c) => { setAgentCollapsed(c); saveAgentCollapsed(c) }}
+          onRefresh={() => setRefreshKey((k) => k + 1)}
+          onJumpToSlide={(n) => handleSlideSelect(n)}
+          onEditConnect={(id) => setConnectModalElementId(id)}
+          refreshTick={refreshKey}
+        />
+
         {!focusMode && <StudioPropertiesPanel
           element={selectedElement}
           elements={slideElements}
@@ -1814,18 +1975,6 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
             try { localStorage.setItem("percy_props_collapsed_v1", String(c)) } catch {}
           }}
         />}
-
-        <StudioAgent
-          docId={doc.doc_id}
-          slideN={selectedSlide}
-          selectedElement={selectedElement}
-          collapsed={agentCollapsed}
-          onToggleCollapsed={(c) => { setAgentCollapsed(c); saveAgentCollapsed(c) }}
-          onRefresh={() => setRefreshKey((k) => k + 1)}
-          onJumpToSlide={(n) => handleSlideSelect(n)}
-          onEditConnect={(id) => setConnectModalElementId(id)}
-          refreshTick={refreshKey}
-        />
 
         {connectModalElementId && (() => {
           const el = slideElements.find((e) => e.id === connectModalElementId)
@@ -1864,6 +2013,17 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
 
       {shortcutsOpen && (
         <KeyboardShortcutsModal onClose={() => setShortcutsOpen(false)} />
+      )}
+
+      {/* Hyperlink popover (Ctrl+K when editing text) */}
+      {linkPopover && (
+        <HyperlinkPopover
+          editor={linkPopover.editor}
+          anchor={linkPopover.anchor}
+          slides={Array.from({ length: localSlideCount }, (_, i) => ({ n: i + 1, title: `Slide ${i + 1}` }))}
+          currentSlideN={selectedSlide}
+          onClose={() => setLinkPopover(null)}
+        />
       )}
 
       {commandPaletteOpen && (

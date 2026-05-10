@@ -30,7 +30,12 @@ interface Props {
   refreshTick?: number
 }
 
-export const loadAgentCollapsed = (): boolean => localStorage.getItem(COLLAPSED_KEY) === "1"
+// Default to COLLAPSED — Format Options panel owns the right edge by default;
+// the AI assistant opens on demand via the AI toggle in the menu bar.
+export const loadAgentCollapsed = (): boolean => {
+  const v = localStorage.getItem(COLLAPSED_KEY)
+  return v === null ? true : v === "1"
+}
 export const saveAgentCollapsed = (c: boolean): void => { localStorage.setItem(COLLAPSED_KEY, c ? "1" : "0") }
 
 type AgentTab = "chat" | "templates" | "materials" | "insights" | "connects" | "activity"

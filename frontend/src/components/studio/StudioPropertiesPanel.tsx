@@ -726,6 +726,165 @@ function StyleTab({ element, docId, slideN, onCommit }: StyleTabProps) {
               </FieldRow>
             )
           })}
+
+          {/* ── Image Adjustments (Brightness / Contrast / Transparency) ── */}
+          <SectionHead title="Adjustments" />
+          <FieldRow label="Brightness">
+            <input type="range" min={-100} max={100} step={1}
+              value={Math.round((style.brightness ?? 0) * 100)}
+              onChange={(e) => setStyle({ ...style, brightness: parseInt(e.target.value, 10) / 100 })}
+              onMouseUp={() => patch({ brightness: style.brightness })}
+              onTouchEnd={() => patch({ brightness: style.brightness })}
+              className="w-full accent-[#1a73e8]"
+            />
+          </FieldRow>
+          <FieldRow label="Contrast">
+            <input type="range" min={-100} max={100} step={1}
+              value={Math.round((style.contrast ?? 0) * 100)}
+              onChange={(e) => setStyle({ ...style, contrast: parseInt(e.target.value, 10) / 100 })}
+              onMouseUp={() => patch({ contrast: style.contrast })}
+              onTouchEnd={() => patch({ contrast: style.contrast })}
+              className="w-full accent-[#1a73e8]"
+            />
+          </FieldRow>
+          <FieldRow label="Transparency">
+            <input type="range" min={0} max={100} step={1}
+              value={Math.round((style.transparency ?? 0) * 100)}
+              onChange={(e) => setStyle({ ...style, transparency: parseInt(e.target.value, 10) / 100 })}
+              onMouseUp={() => patch({ transparency: style.transparency })}
+              onTouchEnd={() => patch({ transparency: style.transparency })}
+              className="w-full accent-[#1a73e8]"
+            />
+          </FieldRow>
+
+          {/* ── Recolor preset ── */}
+          <SectionHead title="Recolor" />
+          <FieldRow label="Preset">
+            <select
+              value={style.recolor_preset ?? "none"}
+              onChange={(e) => {
+                const v = e.target.value
+                setStyle({ ...style, recolor_preset: v })
+                patch({ recolor_preset: v })
+              }}
+              className="w-full text-xs bg-base border border-edge rounded px-1.5 py-1 text-slate-200 focus:outline-none focus:border-accent"
+            >
+              <option value="none">No recolor</option>
+              <option value="grayscale">Grayscale</option>
+              <option value="sepia">Sepia</option>
+              <option value="negative">Negative</option>
+              <option value="bw">Black & white</option>
+              <option value="light1">Light 1</option>
+              <option value="light2">Light 2</option>
+              <option value="light3">Light 3</option>
+              <option value="light4">Light 4</option>
+              <option value="dark1">Dark 1</option>
+              <option value="dark2">Dark 2</option>
+              <option value="dark3">Dark 3</option>
+              <option value="dark4">Dark 4</option>
+            </select>
+          </FieldRow>
+
+          {/* ── Mask to shape (crop-to-shape) ── */}
+          <SectionHead title="Mask shape" />
+          <FieldRow label="Shape">
+            <select
+              value={style.mask_shape ?? "rectangle"}
+              onChange={(e) => {
+                const v = e.target.value === "rectangle" ? null : e.target.value
+                setStyle({ ...style, mask_shape: v })
+                patch({ mask_shape: v })
+              }}
+              className="w-full text-xs bg-base border border-edge rounded px-1.5 py-1 text-slate-200 focus:outline-none focus:border-accent"
+            >
+              <optgroup label="Shapes">
+                <option value="rectangle">Rectangle (none)</option>
+                <option value="rounded_rect">Rounded rectangle</option>
+                <option value="circle">Circle</option>
+                <option value="ellipse">Ellipse</option>
+                <option value="triangle">Triangle</option>
+                <option value="rtriangle">Right triangle</option>
+                <option value="diamond">Diamond</option>
+                <option value="pentagon">Pentagon</option>
+                <option value="hexagon">Hexagon</option>
+                <option value="octagon">Octagon</option>
+                <option value="parallelogram">Parallelogram</option>
+                <option value="trapezoid">Trapezoid</option>
+                <option value="star5">5-point star</option>
+                <option value="star8">8-point star</option>
+                <option value="heart">Heart</option>
+                <option value="cloud">Cloud</option>
+                <option value="moon">Moon</option>
+              </optgroup>
+              <optgroup label="Arrows">
+                <option value="arrow_right">Right arrow</option>
+                <option value="arrow_left">Left arrow</option>
+                <option value="arrow_up">Up arrow</option>
+                <option value="arrow_down">Down arrow</option>
+                <option value="arrow_lr">Left-right arrow</option>
+                <option value="chevron">Chevron</option>
+              </optgroup>
+              <optgroup label="Callouts">
+                <option value="callout_round">Speech (round)</option>
+                <option value="callout_rect">Speech (square)</option>
+                <option value="thought_cloud">Thought cloud</option>
+              </optgroup>
+              <optgroup label="Equation">
+                <option value="math_plus">Plus</option>
+                <option value="math_minus">Minus</option>
+                <option value="math_multiply">Multiply</option>
+                <option value="math_divide">Divide</option>
+                <option value="math_equal">Equal</option>
+              </optgroup>
+            </select>
+          </FieldRow>
+
+          {/* ── Reflection ── */}
+          <SectionHead title="Reflection" />
+          <FieldRow label="Enable">
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={style.reflection_on ?? false}
+                onChange={(e) => {
+                  setStyle({ ...style, reflection_on: e.target.checked })
+                  patch({ reflection_on: e.target.checked })
+                }}
+                className="accent-[#1a73e8]"
+              />
+              <span className="text-[10px] text-muted">Show reflection below image</span>
+            </label>
+          </FieldRow>
+          {style.reflection_on && (
+            <>
+              <FieldRow label="Opacity">
+                <input type="range" min={0} max={100} step={1}
+                  value={Math.round((1 - (style.reflection_transparency ?? 0.5)) * 100)}
+                  onChange={(e) => setStyle({ ...style, reflection_transparency: 1 - parseInt(e.target.value, 10) / 100 })}
+                  onMouseUp={() => patch({ reflection_transparency: style.reflection_transparency })}
+                  onTouchEnd={() => patch({ reflection_transparency: style.reflection_transparency })}
+                  className="w-full accent-[#1a73e8]"
+                />
+              </FieldRow>
+              <FieldRow label="Distance">
+                <input type="range" min={0} max={50} step={1}
+                  value={Math.round(style.reflection_distance ?? 4)}
+                  onChange={(e) => setStyle({ ...style, reflection_distance: parseInt(e.target.value, 10) })}
+                  onMouseUp={() => patch({ reflection_distance: style.reflection_distance })}
+                  onTouchEnd={() => patch({ reflection_distance: style.reflection_distance })}
+                  className="w-full accent-[#1a73e8]"
+                />
+              </FieldRow>
+              <FieldRow label="Size">
+                <input type="range" min={0} max={100} step={1}
+                  value={Math.round((style.reflection_size ?? 0.3) * 100)}
+                  onChange={(e) => setStyle({ ...style, reflection_size: parseInt(e.target.value, 10) / 100 })}
+                  onMouseUp={() => patch({ reflection_size: style.reflection_size })}
+                  onTouchEnd={() => patch({ reflection_size: style.reflection_size })}
+                  className="w-full accent-[#1a73e8]"
+                />
+              </FieldRow>
+            </>
+          )}
+
           <ImageReplaceButton docId={docId} slideN={slideN} elementId={element.id} onReplaced={onCommit} />
           <AltTextButton docId={docId} slideN={slideN} elementId={element.id} onGenerated={onCommit} />
         </>
@@ -1110,6 +1269,73 @@ type NoSelTab = "slide" | "elements"
 
 import { fetchElementConnect, type ConnectScript } from "../../lib/studioApi"
 
+// User-facing element-type names (no "Bridge" prefix, no internal terminology).
+const FRIENDLY_TYPE_NAME: Record<string, string> = {
+  BridgeShape:     "Shape",
+  BridgeText:      "Text box",
+  BridgeChart:     "Chart",
+  BridgeTable:     "Table",
+  BridgeImage:     "Image",
+  BridgeFreeform:  "Drawing",
+  BridgeConnector: "Connector",
+  BridgeGroup:     "Group",
+}
+
+function friendlyTypeName(t: string | undefined | null): string {
+  if (!t) return "Element"
+  return FRIENDLY_TYPE_NAME[t] ?? t.replace(/^Bridge/, "")
+}
+
+// Wrap BindingStatusRow so the binding panel only renders when a connect is
+// actually attached (or the user is hovering / actively editing). Avoids
+// taking 60px of prime real estate on every selection just to say "no binding".
+function ConditionalBindingRow({
+  docId, slideN, element, onEditConnect,
+}: {
+  docId: string
+  slideN: number
+  element: StudioElement
+  onEditConnect?: (elementId: string) => void
+}) {
+  const [connect, setConnect] = useState<ConnectScript | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [expanded, setExpanded] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    fetchElementConnect(docId, slideN, element.id)
+      .then((c) => { if (!cancelled) setConnect(c) })
+      .catch(() => { if (!cancelled) setConnect(null) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+  }, [docId, slideN, element.id])
+
+  const hasScript = !!(connect?.script && connect.script.trim().length > 0)
+
+  // When no script is attached, show only a single small text link to add one.
+  if (loading) return null
+  if (!hasScript && !expanded) {
+    return (
+      <button
+        onClick={() => { setExpanded(true); onEditConnect?.(element.id) }}
+        className="text-[10px] text-muted/70 hover:text-slate-200 mb-2 underline-offset-2 hover:underline"
+        title="Bind this element to a Python connect for live data"
+      >
+        + Bind to Python connect
+      </button>
+    )
+  }
+  // Otherwise render the full status row (existing component).
+  return (
+    <BindingStatusRow
+      docId={docId}
+      slideN={slideN}
+      element={element}
+      onEditConnect={onEditConnect}
+    />
+  )
+}
+
 function BindingStatusRow({
   docId, slideN, element, onEditConnect,
 }: {
@@ -1267,10 +1493,16 @@ export default function StudioPropertiesPanel({
             <>
               <div className="flex items-center gap-2 mb-1">
                 <div className="w-2 h-2 rounded-sm shrink-0" style={{ background: color }} />
-                <span className="text-sm font-semibold text-slate-200 truncate">{element.name}</span>
+                <span className="text-sm font-semibold text-slate-200 truncate">{element.name || friendlyTypeName(element.type)}</span>
               </div>
-              <div className="text-[10px] text-muted/80 mb-2 font-mono">{element.type}</div>
-              <BindingStatusRow
+              {/* Friendly element-type subtitle (no internal "Bridge" prefix). */}
+              <div className="text-[10px] text-muted/80 mb-2 uppercase tracking-widest">
+                {friendlyTypeName(element.type)}
+              </div>
+              {/* Only show the binding row when an actual binding exists, or when the
+                  user explicitly opens the Connect editor. Hidden by default to stop
+                  the dev-oriented "BINDING / Add Connect" widget from owning prime real estate. */}
+              <ConditionalBindingRow
                 docId={docId}
                 slideN={slideN}
                 element={element}

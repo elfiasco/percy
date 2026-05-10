@@ -352,9 +352,6 @@ function DataTab({ data, patch }: PanelProps) {
         </table>
       </div>
 
-      <div className="text-[10px] text-muted/50 pt-1">
-        Edits commit on blur or Enter. Numbers only in series columns.
-      </div>
     </div>
   )
 }

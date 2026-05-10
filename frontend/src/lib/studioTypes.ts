@@ -193,6 +193,19 @@ export interface ElementStyleData {
   crop_right: number | null
   crop_top: number | null
   crop_bottom: number | null
+  // ── Image effects (Google Slides parity) ─────────────────────────────────
+  // All optional — only present on BridgeImage elements.
+  brightness?: number | null      // -1.0 to +1.0 (default 0)
+  contrast?: number | null        // -1.0 to +1.0 (default 0)
+  transparency?: number | null    // 0.0 (opaque) to 1.0 (invisible)
+  recolor_preset?: string | null  // "none" | "grayscale" | "sepia" | "negative" | "bw" | "light1".."dark4"
+  // ── Crop-to-shape mask (Google Slides image masking) ──────────────────
+  mask_shape?: string | null      // null = rectangle (no mask) | shape preset name
+  // ── Reflection ───────────────────────────────────────────────────────────
+  reflection_on?: boolean | null
+  reflection_transparency?: number | null   // 0.0 – 1.0 (start opacity)
+  reflection_distance?: number | null       // pt
+  reflection_size?: number | null           // 0.0 – 1.0 (fraction of element height mirrored)
 }
 
 export interface ElementStyleUpdate {
@@ -213,6 +226,15 @@ export interface ElementStyleUpdate {
   crop_right?: number | null
   crop_top?: number | null
   crop_bottom?: number | null
+  brightness?: number | null
+  contrast?: number | null
+  transparency?: number | null
+  recolor_preset?: string | null
+  mask_shape?: string | null
+  reflection_on?: boolean | null
+  reflection_transparency?: number | null
+  reflection_distance?: number | null
+  reflection_size?: number | null
 }
 
 // ── Chart types (typed editor for BridgeChart) ────────────────────────────────

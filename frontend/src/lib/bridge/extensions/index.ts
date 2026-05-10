@@ -1,6 +1,7 @@
 import StarterKit from "@tiptap/starter-kit"
 import TextAlign from "@tiptap/extension-text-align"
 import Color from "@tiptap/extension-color"
+import Link from "@tiptap/extension-link"
 import { BridgeParagraph }  from "./BridgeParagraph"
 import { BridgeTextStyle }  from "./BridgeTextStyle"
 // Underline is bundled in Tiptap 3 StarterKit — importing the standalone
@@ -31,6 +32,19 @@ export function bridgeExtensions(opts: { collab?: boolean } = {}) {
       defaultAlignment: "left",
     }),
     Color,
+    Link.configure({
+      openOnClick: false,    // we open via the popover, not on click in editor
+      autolink: true,        // auto-detect URLs typed in text
+      defaultProtocol: "https",
+      linkOnPaste: true,
+      HTMLAttributes: {
+        // GS-style link rendering: blue + underline. Inline style so it shows
+        // even before any link CSS classes are applied.
+        style: "color: #1a73e8; text-decoration: underline; cursor: pointer;",
+        rel: "noopener noreferrer",
+        target: "_blank",
+      },
+    }),
   ]
 }
 

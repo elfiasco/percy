@@ -81,6 +81,17 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
   const [annotating, setAnnotating]     = useState(false)
   const GRID_IN                     = 0.25
 
+  // Dismiss context menu on outside click
+  useEffect(() => {
+    if (!ctxMenu) return
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement
+      if (!target.closest("[data-gs-ctx-menu]")) setCtxMenu(null)
+    }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [ctxMenu])
+
   // Keep refs in sync for hot keyboard/drag handlers.
   useEffect(() => { elementsRef.current = elements }, [elements])
   useEffect(() => { selectedIdsRef.current = selectedIds }, [selectedIds])
@@ -168,6 +179,20 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
       // contenteditable (Tiptap, ProseMirror) — let the editor handle the key
       if (tgt.isContentEditable || tgt.closest('[contenteditable="true"]')) return
       if (e.key === "Escape") { studioStore.clearSelection(); onSelectElement(null); onMultiSelect?.(new Set()) }
+      // Enter → enter text edit mode for selected text/shape element (Google Slides behavior)
+      if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        const sel = selectedIdsRef.current
+        if (sel.size === 1) {
+          const id = [...sel][0]
+          const el = elementsRef.current.find((e) => e.id === id)
+          if (el && (el.type === "BridgeText" || el.type === "BridgeShape")) {
+            e.preventDefault()
+            // BridgeText/Shape use native Tiptap editors — simulate a click on the element
+            const overlay = document.querySelector(`[data-element="true"][style*="${id}"]`) as HTMLElement | null
+            if (overlay) overlay.click()
+          }
+        }
+      }
       if (e.key === "g" || e.key === "G") { if (!e.ctrlKey && !e.metaKey) setGridOn((v) => !v) }
       if (e.key === "s" || e.key === "S") { if (!e.ctrlKey && !e.metaKey) setSnapOn((v) => !v) }
       if (e.key === "r" || e.key === "R") { if (!e.ctrlKey && !e.metaKey) setRulerOn((v) => !v) }
@@ -618,33 +643,37 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
             {/* slide background — use document background color or white */}
             <div className="absolute inset-0" style={{ background: bgColor ?? "#FFFFFF", zIndex: 0 }} />
 
-            {/* grid overlay */}
+            {/* grid overlay — Google Slides style: subtle light gray dot grid */}
             {gridOn && slideWidthIn > 0 && slideHeightIn > 0 && (
               <svg
                 className="absolute inset-0 pointer-events-none"
                 style={{ width: "100%", height: "100%", zIndex: 5000 }}
                 xmlns="http://www.w3.org/2000/svg"
               >
+                {/* Vertical lines */}
                 {Array.from({ length: Math.floor(slideWidthIn / GRID_IN) + 1 }, (_, i) => (
                   <line
                     key={`v${i}`}
                     x1={`${(i * GRID_IN / slideWidthIn) * 100}%`}
                     y1="0%" x2={`${(i * GRID_IN / slideWidthIn) * 100}%`} y2="100%"
-                    stroke="rgba(99,102,241,0.25)" strokeWidth={0.5}
+                    stroke="rgba(0,0,0,0.10)" strokeWidth={0.5}
+                    strokeDasharray={i % 4 === 0 ? "none" : "2 4"}
                   />
                 ))}
+                {/* Horizontal lines */}
                 {Array.from({ length: Math.floor(slideHeightIn / GRID_IN) + 1 }, (_, i) => (
                   <line
                     key={`h${i}`}
                     y1={`${(i * GRID_IN / slideHeightIn) * 100}%`}
                     x1="0%" y2={`${(i * GRID_IN / slideHeightIn) * 100}%`} x2="100%"
-                    stroke="rgba(99,102,241,0.25)" strokeWidth={0.5}
+                    stroke="rgba(0,0,0,0.10)" strokeWidth={0.5}
+                    strokeDasharray={i % 4 === 0 ? "none" : "2 4"}
                   />
                 ))}
               </svg>
             )}
 
-            {/* snap guide lines — shown during element drag */}
+            {/* smart guide lines — Google Slides red solid lines */}
             {snapGuides.length > 0 && (
               <svg
                 className="absolute inset-0 pointer-events-none"
@@ -654,10 +683,10 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
                 {snapGuides.map((g, i) =>
                   g.type === "v" ? (
                     <line key={i} x1={`${g.pos}%`} y1="0%" x2={`${g.pos}%`} y2="100%"
-                      stroke="rgba(239,68,68,0.85)" strokeWidth={1} strokeDasharray="4 3" />
+                      stroke="#ea4335" strokeWidth={1} />
                   ) : (
                     <line key={i} x1="0%" y1={`${g.pos}%`} x2="100%" y2={`${g.pos}%`}
-                      stroke="rgba(239,68,68,0.85)" strokeWidth={1} strokeDasharray="4 3" />
+                      stroke="#ea4335" strokeWidth={1} />
                   )
                 )}
               </svg>
@@ -708,7 +737,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
                 onAltDuplicate={onAltDuplicate}
               />
             ))}
-            {/* multi-select bounding box */}
+            {/* multi-select bounding box — Google blue dashed */}
             {selectedIds.size > 1 && (() => {
               const sel = elements.filter((e) => selectedIds.has(e.id))
               if (!sel.length) return null
@@ -722,7 +751,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
                   style={{
                     left: `${minL}%`, top: `${minT}%`,
                     width: `${maxR - minL}%`, height: `${maxB - minT}%`,
-                    border: "2px dashed rgba(99,102,241,0.8)",
+                    border: "1.5px dashed #1a73e8",
                     zIndex: 10000,
                     boxSizing: "border-box",
                   }}
@@ -730,15 +759,15 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
               )
             })()}
 
-            {/* rubber-band selection rect */}
+            {/* rubber-band selection rect — Google blue fill + border */}
             {rubberBand && rubberBand.w > 0.2 && rubberBand.h > 0.2 && (
               <div
                 className="absolute pointer-events-none"
                 style={{
                   left: `${rubberBand.x}%`, top: `${rubberBand.y}%`,
                   width: `${rubberBand.w}%`, height: `${rubberBand.h}%`,
-                  border: "1.5px dashed rgba(99,102,241,0.9)",
-                  background: "rgba(99,102,241,0.08)",
+                  border: "1px solid #1a73e8",
+                  background: "rgba(26,115,232,0.10)",
                   zIndex: 20000,
                   boxSizing: "border-box",
                 }}
@@ -828,26 +857,29 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
             setCtxMenu(null)
           }
 
-          const items: ({ label: string; action: () => void; danger?: boolean; dim?: boolean } | null)[] = [
-            { label: "⚙ Edit Connect…", action: () => { onEditConnect?.(el.id); setCtxMenu(null) } },
+          const items: ({ label: string; action: () => void; danger?: boolean; dim?: boolean; shortcut?: string } | null)[] = [
+            { label: "Edit Connect…", action: () => { onEditConnect?.(el.id); setCtxMenu(null) } },
             null,
-            { label: "Duplicate", action: () => { onDuplicateElement?.(el.id); setCtxMenu(null) } },
-            { label: "Delete",    action: () => { onDeleteElement?.(el.id); setCtxMenu(null) }, danger: true },
+            { label: "Cut",       action: () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "x", ctrlKey: true, bubbles: true })); setCtxMenu(null) }, shortcut: "⌘X" },
+            { label: "Copy",      action: () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true })); setCtxMenu(null) }, shortcut: "⌘C" },
+            { label: "Paste",     action: () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true })); setCtxMenu(null) }, shortcut: "⌘V" },
+            { label: "Duplicate", action: () => { onDuplicateElement?.(el.id); setCtxMenu(null) }, shortcut: "⌘D" },
+            { label: "Delete",    action: () => { onDeleteElement?.(el.id); setCtxMenu(null) }, danger: true, shortcut: "Del" },
             null,
             { label: el.locked ? "Unlock" : "Lock", action: () => { onToggleLockElement?.(el.id, !el.locked); setCtxMenu(null) } },
             { label: el.hidden ? "Show" : "Hide",   action: () => { onToggleHiddenElement?.(el.id, !el.hidden); setCtxMenu(null) } },
             null,
             selectedIds.size > 1 && onGroupElements
-              ? { label: `Group ${selectedIds.size} Elements`, action: () => { onGroupElements(); setCtxMenu(null) } }
+              ? { label: `Group ${selectedIds.size} elements`, action: () => { onGroupElements(); setCtxMenu(null) }, shortcut: "⌘G" }
               : null,
             el.type === "BridgeGroup" && onUngroupElement
-              ? { label: "Ungroup", action: () => { onUngroupElement(el.id); setCtxMenu(null) } }
+              ? { label: "Ungroup", action: () => { onUngroupElement(el.id); setCtxMenu(null) }, shortcut: "⌘⇧G" }
               : null,
             null,
-            { label: "Bring to Front",  action: () => changeZ(maxZ + 1), dim: el.z_index === maxZ },
-            { label: "Bring Forward",   action: () => { const above = sorted[idx + 1]; if (above) changeZ(above.z_index + 0.5); else setCtxMenu(null) }, dim: idx >= sorted.length - 1 },
-            { label: "Send Backward",   action: () => { const below = sorted[idx - 1]; if (below) changeZ(below.z_index - 0.5); else setCtxMenu(null) }, dim: idx <= 0 },
-            { label: "Send to Back",    action: () => changeZ(minZ - 1), dim: el.z_index === minZ },
+            { label: "Bring to front",  action: () => changeZ(maxZ + 1), dim: el.z_index === maxZ, shortcut: "⌘⇧]" },
+            { label: "Bring forward",   action: () => { const above = sorted[idx + 1]; if (above) changeZ(above.z_index + 0.5); else setCtxMenu(null) }, dim: idx >= sorted.length - 1, shortcut: "⌘]" },
+            { label: "Send backward",   action: () => { const below = sorted[idx - 1]; if (below) changeZ(below.z_index - 0.5); else setCtxMenu(null) }, dim: idx <= 0, shortcut: "⌘[" },
+            { label: "Send to back",    action: () => changeZ(minZ - 1), dim: el.z_index === minZ, shortcut: "⌘⇧[" },
             null,
             {
               label: `Select all ${el.type.replace(/^Bridge/, "")}s`,
@@ -863,164 +895,62 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
             },
           ]
           return (
-            <div
-              className="fixed z-[99999] bg-surface border border-edge rounded shadow-xl py-1 min-w-[170px] text-xs"
-              style={{ left: ctxMenu.x, top: ctxMenu.y }}
-              onMouseDown={(e) => e.stopPropagation()}
-            >
-              {items.map((item, i) =>
-                item === null ? (
-                  <div key={i} className="border-t border-edge/50 my-1" />
-                ) : (
-                  <button
-                    key={i}
-                    onClick={item.action}
-                    disabled={item.dim}
-                    className={`w-full text-left px-3 py-1.5 hover:bg-white/10 transition-colors disabled:opacity-30 disabled:cursor-default ${
-                      item.danger ? "text-red-400 hover:text-red-300" : "text-slate-300"
-                    }`}
-                  >
-                    {item.label}
-                  </button>
-                )
-              )}
-              <div className="border-t border-edge/50 my-1" />
-              <button
-                onClick={() => {
-                  broadcastElement(docId, slideN, el.id)
-                    .then((r) => { onBroadcastElement?.(r.pushed_to) })
-                    .catch((err) => console.error("broadcast failed:", err))
-                  setCtxMenu(null)
-                }}
-                title="Copy this element to every other slide at the same position"
-                className="w-full text-left px-3 py-1.5 hover:bg-sky-500/10 hover:text-sky-300 transition-colors text-slate-300"
-              >
-                ⊕ Push to all slides
-              </button>
-              {onSplitElement && (el.type === "BridgeText" || el.type === "BridgeShape" || el.type === "BridgeFreeform") && (
-                <>
-                  <button
-                    onClick={() => { onSplitElement(el.id); setCtxMenu(null) }}
-                    title="Split each paragraph of this element onto its own new slide"
-                    className="w-full text-left px-3 py-1.5 hover:bg-paper/10 hover:text-paper transition-colors text-slate-300"
-                  >
-                    ⊗ Split to slides
-                  </button>
-                </>
-              )}
-              <div className="border-t border-edge/50 my-1" />
-              {/* AI Rewrite */}
-              {rewriteInput?.id === el.id ? (
-                <div className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
-                  <div className="text-[10px] text-muted mb-1">Rewrite instruction</div>
-                  <div className="flex gap-1">
-                    <input
-                      autoFocus
-                      value={rewriteInput.instruction}
-                      onChange={(e) => setRewriteInput((r) => r ? { ...r, instruction: e.target.value } : r)}
-                      onKeyDown={(e) => {
-                        e.stopPropagation()
-                        if (e.key === "Enter" && rewriteInput.instruction.trim() && !rewriteInput.busy) {
-                          setRewriteInput((r) => r ? { ...r, busy: true } : r)
-                          rewriteElementText(docId, slideN, el.id, rewriteInput.instruction)
-                            .then(() => {
-                              studioStore.bumpRenderKeys([el.id])
-                              onZIndexChange?.(el.id)
-                              setCtxMenu(null)
-                              setRewriteInput(null)
-                            })
-                            .catch((err) => { console.error("rewrite failed:", err); setRewriteInput((r) => r ? { ...r, busy: false } : r) })
-                        }
-                        if (e.key === "Escape") { setRewriteInput(null) }
-                      }}
-                      placeholder="e.g. make shorter, formal tone…"
-                      className="flex-1 text-[11px] bg-base border border-edge rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-accent"
-                    />
-                    <button
-                      disabled={!rewriteInput.instruction.trim() || rewriteInput.busy}
-                      onClick={() => {
-                        if (!rewriteInput.instruction.trim()) return
-                        setRewriteInput((r) => r ? { ...r, busy: true } : r)
-                        rewriteElementText(docId, slideN, el.id, rewriteInput.instruction)
-                          .then(() => {
-                            studioStore.bumpRenderKeys([el.id])
-                            onZIndexChange?.(el.id)
-                            setCtxMenu(null)
-                            setRewriteInput(null)
-                          })
-                          .catch((err) => { console.error("rewrite failed:", err); setRewriteInput((r) => r ? { ...r, busy: false } : r) })
-                      }}
-                      className="px-2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30 transition-colors disabled:opacity-40 text-[10px]"
-                    >
-                      {rewriteInput.busy ? "…" : "↵"}
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <button
-                  onClick={() => { setRewriteInput({ id: el.id, instruction: "", busy: false }) }}
-                  title="Use AI to rewrite this element's text"
-                  className="w-full text-left px-3 py-1.5 hover:bg-emerald-500/10 hover:text-emerald-300 transition-colors text-slate-300"
-                >
-                  ✨ AI Rewrite…
-                </button>
-              )}
-              {/* Talking Points */}
-              {(el.type === "BridgeText" || el.type === "BridgeShape" || el.type === "BridgeFreeform") && (
-                talkingPoints?.id === el.id ? (
-                  <div className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-[10px] text-amber-300/80">Talking Points</span>
-                      <button onClick={() => setTalkingPoints(null)} className="text-[10px] text-white/30 hover:text-white/60">×</button>
-                    </div>
-                    {talkingPoints.loading ? (
-                      <div className="text-[10px] text-white/40 py-1 animate-pulse">Generating…</div>
-                    ) : (
-                      <ul className="space-y-1">
-                        {talkingPoints.points.map((pt, i) => (
-                          <li key={i} className="text-[10px] text-white/70 leading-relaxed pl-2 border-l border-amber-400/30">
-                            {pt}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => {
-                      setTalkingPoints({ id: el.id, points: [], loading: true })
-                      generateTalkingPoints(docId, slideN, el.id)
-                        .then((r) => setTalkingPoints({ id: el.id, points: r.points, loading: false }))
-                        .catch(() => setTalkingPoints(null))
-                    }}
-                    title="Generate talking points for this element's text"
-                    className="w-full text-left px-3 py-1.5 hover:bg-amber-500/10 hover:text-amber-300 transition-colors text-slate-300"
-                  >
-                    💬 Talking Points…
-                  </button>
-                )
-              )}
-              <div className="border-t border-edge/50 my-1" />
-              <a
-                href={elementPngUrl(docId, slideN, el.id)}
-                download={`${el.name.replace(/[^a-z0-9]/gi, "_")}.png`}
-                onClick={() => setCtxMenu(null)}
-                className="w-full text-left px-3 py-1.5 hover:bg-white/10 transition-colors text-slate-300 flex items-center gap-1.5 no-underline"
-              >
-                ↓ Download as PNG
-              </a>
-            </div>
+            <GsContextMenu
+              x={ctxMenu.x} y={ctxMenu.y}
+              el={el}
+              items={items}
+              docId={docId}
+              slideN={slideN}
+              rewriteInput={rewriteInput}
+              setRewriteInput={setRewriteInput}
+              talkingPoints={talkingPoints}
+              setTalkingPoints={setTalkingPoints}
+              onBroadcast={() => {
+                broadcastElement(docId, slideN, el.id)
+                  .then((r) => onBroadcastElement?.(r.pushed_to))
+                  .catch((err) => console.error("broadcast failed:", err))
+                setCtxMenu(null)
+              }}
+              onSplit={onSplitElement ? () => { onSplitElement(el.id); setCtxMenu(null) } : undefined}
+              onClose={() => setCtxMenu(null)}
+              onGenerateTalkingPoints={() => {
+                setTalkingPoints({ id: el.id, points: [], loading: true })
+                generateTalkingPoints(docId, slideN, el.id)
+                  .then((r) => setTalkingPoints({ id: el.id, points: r.points, loading: false }))
+                  .catch(() => setTalkingPoints(null))
+              }}
+              onRewriteCommit={(instruction) => {
+                setRewriteInput((r) => r ? { ...r, busy: true } : r)
+                rewriteElementText(docId, slideN, el.id, instruction)
+                  .then(() => {
+                    studioStore.bumpRenderKeys([el.id])
+                    onZIndexChange?.(el.id)
+                    setCtxMenu(null)
+                    setRewriteInput(null)
+                  })
+                  .catch((err) => { console.error("rewrite failed:", err); setRewriteInput((r) => r ? { ...r, busy: false } : r) })
+              }}
+              elementPngUrl={elementPngUrl(docId, slideN, el.id)}
+              elementName={el.name}
+            />
           )
         })()}
 
-        {/* position HUD during drag */}
+        {/* position/size HUD during drag — Google Slides style dark pill */}
         {dragInfo && (
           <div
-            className="fixed z-[99997] pointer-events-none bg-black/80 text-white/90 text-[10px] font-mono
-                       rounded px-2 py-1 border border-white/10 leading-tight"
-            style={{ left: "50%", transform: "translateX(-50%)", top: 12 }}
+            className="fixed z-[99997] pointer-events-none"
+            style={{
+              left: "50%", transform: "translateX(-50%)", top: 14,
+              background: "#202124", color: "#fff",
+              fontSize: 11, fontFamily: "'Google Sans', system-ui, sans-serif",
+              fontWeight: 500, lineHeight: "20px",
+              padding: "2px 10px", borderRadius: 3,
+              boxShadow: "0 2px 6px rgba(0,0,0,0.25)",
+              letterSpacing: "0.01em",
+            }}
           >
-            x {dragInfo.x}" · y {dragInfo.y}" · {dragInfo.w}" × {dragInfo.h}"
+            x: {dragInfo.x}" · y: {dragInfo.y}" · {dragInfo.w}" × {dragInfo.h}"
           </div>
         )}
 
@@ -1176,6 +1106,214 @@ function ZoomControl({ zoom, setZoom }: { zoom: number; setZoom: (fn: (z: number
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Google Slides-style context menu ─────────────────────────────────────────
+// White background, Material Design typography, keyboard shortcut hints
+
+interface GsCtxItem { label: string; action: () => void; danger?: boolean; dim?: boolean; shortcut?: string }
+
+function GsContextMenu({
+  x, y, el, items, rewriteInput, setRewriteInput, talkingPoints, setTalkingPoints,
+  onBroadcast, onSplit, onClose, onGenerateTalkingPoints, onRewriteCommit,
+  elementPngUrl, elementName,
+}: {
+  x: number; y: number
+  el: import("../../lib/studioTypes").StudioElement
+  items: (GsCtxItem | null)[]
+  docId: string; slideN: number
+  rewriteInput: { id: string; instruction: string; busy: boolean } | null
+  setRewriteInput: (v: { id: string; instruction: string; busy: boolean } | null) => void
+  talkingPoints: { id: string; points: string[]; loading: boolean } | null
+  setTalkingPoints: (v: { id: string; points: string[]; loading: boolean } | null) => void
+  onBroadcast: () => void
+  onSplit?: () => void
+  onClose: () => void
+  onGenerateTalkingPoints: () => void
+  onRewriteCommit: (instruction: string) => void
+  elementPngUrl: string
+  elementName: string
+}) {
+  // Clamp menu to viewport
+  const menuStyle: React.CSSProperties = {
+    position: "fixed",
+    left: Math.min(x, window.innerWidth - 220),
+    top: Math.min(y, window.innerHeight - 400),
+    zIndex: 99999,
+    background: "#fff",
+    border: "1px solid #dadce0",
+    borderRadius: 4,
+    boxShadow: "0 2px 10px rgba(0,0,0,0.18), 0 1px 3px rgba(0,0,0,0.10)",
+    minWidth: 200,
+    padding: "4px 0",
+    fontFamily: "'Google Sans', system-ui, sans-serif",
+    fontSize: 13,
+    color: "#3c4043",
+    userSelect: "none",
+  }
+
+  const btnStyle = (danger?: boolean, dim?: boolean): React.CSSProperties => ({
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    width: "100%",
+    padding: "6px 16px",
+    background: "none",
+    border: "none",
+    textAlign: "left",
+    cursor: dim ? "default" : "pointer",
+    color: danger ? "#d93025" : dim ? "#80868b" : "#3c4043",
+    fontSize: 13,
+    lineHeight: "20px",
+    opacity: dim ? 0.5 : 1,
+    transition: "background 80ms",
+  })
+
+  return (
+    <div style={menuStyle} data-gs-ctx-menu="true" onMouseDown={(e) => e.stopPropagation()}>
+      {items.map((item, i) =>
+        item === null ? (
+          <div key={i} style={{ height: 1, background: "#e0e0e0", margin: "4px 0" }} />
+        ) : (
+          <button
+            key={i}
+            onClick={item.dim ? undefined : item.action}
+            style={btnStyle(item.danger, item.dim)}
+            onMouseEnter={(e) => { if (!item.dim) (e.currentTarget as HTMLButtonElement).style.background = "#f1f3f4" }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "none" }}
+          >
+            <span>{item.label}</span>
+            {item.shortcut && <span style={{ fontSize: 11, color: "#80868b", marginLeft: 16 }}>{item.shortcut}</span>}
+          </button>
+        )
+      )}
+
+      <div style={{ height: 1, background: "#e0e0e0", margin: "4px 0" }} />
+
+      {/* Push to all slides */}
+      <button
+        onClick={onBroadcast}
+        style={btnStyle()}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#f1f3f4" }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "none" }}
+        title="Copy to all other slides at the same position"
+      >
+        Push to all slides
+      </button>
+
+      {/* Split to slides */}
+      {onSplit && (el.type === "BridgeText" || el.type === "BridgeShape" || el.type === "BridgeFreeform") && (
+        <button
+          onClick={onSplit}
+          style={btnStyle()}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#f1f3f4" }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "none" }}
+          title="Split each paragraph to its own slide"
+        >
+          Split to slides
+        </button>
+      )}
+
+      <div style={{ height: 1, background: "#e0e0e0", margin: "4px 0" }} />
+
+      {/* AI Rewrite */}
+      {rewriteInput?.id === el.id ? (
+        <div style={{ padding: "6px 12px" }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ fontSize: 11, color: "#80868b", marginBottom: 4 }}>Rewrite instruction</div>
+          <div style={{ display: "flex", gap: 4 }}>
+            <input
+              autoFocus
+              value={rewriteInput.instruction}
+              onChange={(e) => setRewriteInput({ ...rewriteInput, instruction: e.target.value })}
+              onKeyDown={(e) => {
+                e.stopPropagation()
+                if (e.key === "Enter" && rewriteInput.instruction.trim() && !rewriteInput.busy) {
+                  onRewriteCommit(rewriteInput.instruction)
+                }
+                if (e.key === "Escape") { setRewriteInput(null) }
+              }}
+              placeholder="e.g. make shorter, formal tone…"
+              style={{
+                flex: 1, fontSize: 12, border: "1px solid #dadce0", borderRadius: 4,
+                padding: "4px 8px", outline: "none", color: "#3c4043",
+              }}
+            />
+            <button
+              disabled={!rewriteInput.instruction.trim() || rewriteInput.busy}
+              onClick={() => rewriteInput.instruction.trim() && !rewriteInput.busy && onRewriteCommit(rewriteInput.instruction)}
+              style={{
+                padding: "4px 10px", borderRadius: 4, fontSize: 12, cursor: "pointer",
+                background: "#1a73e8", color: "#fff", border: "none",
+                opacity: !rewriteInput.instruction.trim() || rewriteInput.busy ? 0.5 : 1,
+              }}
+            >
+              {rewriteInput.busy ? "…" : "Go"}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={() => setRewriteInput({ id: el.id, instruction: "", busy: false })}
+          style={btnStyle()}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#f1f3f4" }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "none" }}
+        >
+          ✨ AI Rewrite…
+        </button>
+      )}
+
+      {/* Talking Points */}
+      {(el.type === "BridgeText" || el.type === "BridgeShape" || el.type === "BridgeFreeform") && (
+        talkingPoints?.id === el.id ? (
+          <div style={{ padding: "6px 12px" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+              <span style={{ fontSize: 11, color: "#f9ab00", fontWeight: 500 }}>Talking Points</span>
+              <button onClick={() => setTalkingPoints(null)} style={{ fontSize: 12, color: "#80868b", background: "none", border: "none", cursor: "pointer" }}>×</button>
+            </div>
+            {talkingPoints.loading ? (
+              <div style={{ fontSize: 11, color: "#80868b" }}>Generating…</div>
+            ) : (
+              <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
+                {talkingPoints.points.map((pt, i) => (
+                  <li key={i} style={{ fontSize: 11, color: "#3c4043", padding: "2px 0 2px 8px", borderLeft: "2px solid #f9ab00" }}>
+                    {pt}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ) : (
+          <button
+            onClick={onGenerateTalkingPoints}
+            style={btnStyle()}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#f1f3f4" }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "none" }}
+          >
+            💬 Talking Points…
+          </button>
+        )
+      )}
+
+      <div style={{ height: 1, background: "#e0e0e0", margin: "4px 0" }} />
+
+      {/* Download PNG */}
+      <a
+        href={elementPngUrl}
+        download={`${elementName.replace(/[^a-z0-9]/gi, "_")}.png`}
+        onClick={onClose}
+        style={{
+          ...btnStyle(),
+          display: "flex",
+          textDecoration: "none",
+          color: "#3c4043",
+        }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.background = "#f1f3f4" }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.background = "none" }}
+      >
+        Save as PNG
+      </a>
     </div>
   )
 }

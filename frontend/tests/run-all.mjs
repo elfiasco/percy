@@ -34,6 +34,7 @@
  *   25. agent-mode               — AI agent panel UI + API checks (needs API key)
  *   26. adversarial-users        — LM Studio generates edge cases
  *   27. vision-critique          — Gemma 4 vision reviews every major page
+ *   28. vision-click-agent       — Vision model agent attempts PowerPoint editing tasks
  *
  * Each suite writes its own timestamped JSON to tests/results/.
  * This file appends a summary row to test-log.json after every run.
@@ -82,6 +83,7 @@ const SUITES = [
   { name: "agent-mode",               file: "tests/agent-mode.mjs",               args: [BASE],           critical: false },
   { name: "adversarial-users",        file: "tests/adversarial-users.mjs",        args: [BASE, LM_URL],   critical: false },
   { name: "vision-critique",          file: "tests/vision-critique.mjs",          args: [BASE, LM_URL],   critical: false },
+  { name: "vision-click-agent",       file: "tests/vision-click-agent.mjs",       args: [BASE, LM_URL],   critical: false },
 ]
 
 console.log("╔══════════════════════════════════════╗")

@@ -821,6 +821,25 @@ class ImageBorder:
 
 
 @dataclass(slots=True)
+class ImageEffects:
+    """Image effect parameters mirroring Google Slides' Image options panel.
+
+    All values normalized to floats in [-1, 1] or [0, 1] so SVG filter chains
+    can use them directly. None = effect disabled (default).
+    """
+    brightness: float | None = None        # -1.0 to +1.0 (default 0)
+    contrast: float | None = None          # -1.0 to +1.0 (default 0)
+    transparency: float | None = None      # 0.0 (opaque) to 1.0 (invisible)
+    recolor_preset: str | None = None      # "none" | "grayscale" | "sepia" | "negative" | "bw" | "light1".."dark4"
+    mask_shape: str | None = None          # null = rectangle (no mask) | shape preset name
+    # Reflection
+    reflection_on: bool = False
+    reflection_transparency: float | None = None  # 0.0 – 1.0 (start opacity)
+    reflection_distance: float | None = None      # pt
+    reflection_size: float | None = None          # 0.0 – 1.0 (fraction of element height mirrored)
+
+
+@dataclass(slots=True)
 class ShapeShadow:
     """Outer drop shadow extracted from effectLst/outerShdw."""
     has_shadow: bool = False
@@ -845,6 +864,7 @@ class BridgeImage(BridgeElement):
     cropping: ImageCropping = field(default_factory=ImageCropping)
     border: ImageBorder = field(default_factory=ImageBorder)
     shadow: ShapeShadow = field(default_factory=ShapeShadow)
+    effects: ImageEffects = field(default_factory=ImageEffects)
     hyperlink: str | None = None
     fill_mode: str | None = None     # "stretch" | "tile" | "fit" | None
     shape_geometry: str | None = None          # prstGeom prst (e.g. "roundRect"), None = "rect"

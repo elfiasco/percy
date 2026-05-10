@@ -544,8 +544,9 @@ export default function StudioRibbon(props: Props) {
 
   // Extended props accessed via cast (optional handlers from Studio)
   const p = props as Record<string, unknown>
-  const onFormatPaint      = p.onFormatPaint      as (() => void) | undefined
+  const onFormatPaint      = p.onFormatPaint      as ((sticky?: boolean) => void) | undefined
   const formatPaintMode    = p.formatPaintMode     as boolean | undefined
+  const formatPaintSticky  = p.formatPaintSticky   as boolean | undefined
   const onImportSlides     = p.onImportSlides      as ((f: File) => void) | undefined
   const onSaveToCloud      = p.onSaveToCloud       as (() => void) | undefined
   const savingToCloud      = p.savingToCloud       as boolean | undefined
@@ -824,11 +825,41 @@ export default function StudioRibbon(props: Props) {
         {/* Rebuild */}
         <TBtn icon={rebuilding ? "…" : "⟳"} title="Rebuild slide renders" onClick={onRebuild} disabled={rebuilding} />
 
-        {/* Format paint */}
+        {/* Format paint — single-click = one-shot, double-click = sticky mode */}
         {onFormatPaint && (
           <>
             <TDivider />
-            <TBtn icon="🖌" title="Format paint" onClick={onFormatPaint} active={formatPaintMode} />
+            <button
+              onClick={() => onFormatPaint(false)}
+              onDoubleClick={() => onFormatPaint(true)}
+              title={formatPaintMode
+                ? (formatPaintSticky ? "Paint format (sticky) — Esc to exit" : "Paint format — click target to apply")
+                : "Paint format · Single-click = one-shot · Double-click = sticky · Ctrl+Alt+C"}
+              style={{
+                padding: "4px 8px", fontSize: 14, lineHeight: 1, height: 28,
+                background: formatPaintMode ? "#e8f0fe" : "transparent",
+                border: "none", borderRadius: 3,
+                color: formatPaintMode ? "#1a73e8" : "#3c4043",
+                cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                position: "relative",
+              }}
+              onMouseEnter={(e) => {
+                if (!formatPaintMode) (e.currentTarget as HTMLButtonElement).style.background = "#f1f3f4"
+              }}
+              onMouseLeave={(e) => {
+                if (!formatPaintMode) (e.currentTarget as HTMLButtonElement).style.background = "transparent"
+              }}
+            >
+              🖌
+              {formatPaintSticky && (
+                <span style={{
+                  position: "absolute", top: 2, right: 2,
+                  width: 5, height: 5, borderRadius: "50%",
+                  background: "#1a73e8",
+                }} />
+              )}
+            </button>
           </>
         )}
 

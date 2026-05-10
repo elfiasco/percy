@@ -752,8 +752,16 @@ export default function StudioSlideStrip({
       {/* context menu */}
       {contextMenu && (
         <div
-          className="fixed z-[9999] bg-white border border-gray-300 rounded shadow-xl py-1 min-w-[180px]"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
+          className="fixed z-[9999] py-1 min-w-[180px]"
+          style={{
+            left: Math.min(contextMenu.x, window.innerWidth - 200),
+            top: Math.min(contextMenu.y, window.innerHeight - 320),
+            background: "#fff",
+            border: "1px solid #dadce0",
+            borderRadius: 4,
+            boxShadow: "0 2px 10px rgba(0,0,0,0.18), 0 1px 3px rgba(0,0,0,0.10)",
+            fontFamily: "'Google Sans', system-ui, sans-serif",
+          }}
           onMouseDown={(e) => e.stopPropagation()}
         >
           <CtxItem onClick={() => { setEditingLabel(contextMenu.slideN); setEditLabelText(slideLabels[contextMenu.slideN] ?? ""); setContextMenu(null) }}>
@@ -911,12 +919,22 @@ function CtxItem({
     <button
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
-      className={[
-        "w-full text-left px-3 py-1 text-[12px] transition-colors",
-        disabled ? "text-gray-300 cursor-default" :
-        danger   ? "text-red-600 hover:bg-red-50" :
-                   "text-gray-700 hover:bg-gray-100",
-      ].join(" ")}
+      style={{
+        display: "block",
+        width: "100%",
+        textAlign: "left",
+        padding: "6px 16px",
+        fontSize: 13,
+        lineHeight: "20px",
+        background: "none",
+        border: "none",
+        cursor: disabled ? "default" : "pointer",
+        color: disabled ? "#bdc1c6" : danger ? "#d93025" : "#3c4043",
+        fontFamily: "inherit",
+        transition: "background 80ms",
+      }}
+      onMouseEnter={(e) => { if (!disabled) (e.currentTarget as HTMLButtonElement).style.background = "#f1f3f4" }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "none" }}
     >
       {children}
     </button>
