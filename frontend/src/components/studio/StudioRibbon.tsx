@@ -305,14 +305,182 @@ interface Props {
   [key: string]: unknown
 }
 
+// ── Google Slides–style menu/toolbar helpers ───────────────────────────────────
+
+interface GMenuItem {
+  label: string
+  icon?: string
+  shortcut?: string
+  onClick?: () => void
+  disabled?: boolean
+  separator?: boolean
+  active?: boolean
+}
+
+function GMenuBtn({ label, items, disabled }: { label: string; items: GMenuItem[]; disabled?: boolean }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="relative">
+      <button
+        disabled={disabled}
+        onClick={() => setOpen((o) => !o)}
+        className={`px-2 h-8 text-[13px] rounded transition-colors disabled:opacity-40 ${
+          open ? "bg-[#e8f0fe] text-[#1a73e8]" : "text-[#3c4043] hover:bg-[#f1f3f4]"
+        }`}
+      >
+        {label}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-full mt-0.5 z-50 bg-white border border-[#dadce0] rounded shadow-[0_2px_10px_rgba(0,0,0,0.18)] py-1 min-w-[220px]"
+            style={{ fontFamily: "'Google Sans',Roboto,sans-serif" }}>
+            {items.map((item, i) =>
+              item.separator ? (
+                <div key={i} className="h-px bg-[#e0e0e0] my-1 mx-1" />
+              ) : (
+                <button
+                  key={i}
+                  onClick={() => { item.onClick?.(); setOpen(false) }}
+                  disabled={item.disabled}
+                  className={`w-full text-left px-4 py-[6px] text-[13px] flex items-center gap-3 disabled:opacity-40 disabled:cursor-default ${
+                    item.active ? "text-[#1a73e8] bg-[#e8f0fe]" : "text-[#202124] hover:bg-[#f1f3f4]"
+                  }`}
+                >
+                  <span className="w-4 text-center text-[14px] shrink-0">{item.icon ?? ""}</span>
+                  <span className="flex-1">{item.label}</span>
+                  {item.shortcut && <span className="text-[11px] text-[#80868b] shrink-0">{item.shortcut}</span>}
+                </button>
+              )
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function TBtn({ icon, title, onClick, disabled, active }: {
+  icon: React.ReactNode; title: string; onClick?: () => void; disabled?: boolean; active?: boolean
+}) {
+  return (
+    <button
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      className={`w-8 h-8 flex items-center justify-center rounded text-[16px] transition-colors disabled:opacity-30 ${
+        active ? "bg-[#e8f0fe] text-[#1a73e8]" : "text-[#3c4043] hover:bg-[#f1f3f4]"
+      }`}
+    >
+      {icon}
+    </button>
+  )
+}
+
+function TDivider() {
+  return <div className="w-px h-5 bg-[#dadce0] mx-0.5 shrink-0" />
+}
+
+function ShapesToolBtn({ onInsertShape }: { onInsertShape: (s: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [galleryTab, setGalleryTab] = useState(0)
+  return (
+    <div className="relative flex items-center">
+      <button
+        title="Insert shape"
+        onClick={() => onInsertShape("rect")}
+        className="h-8 flex items-center justify-center rounded-l text-[15px] text-[#3c4043] hover:bg-[#f1f3f4] px-1.5 transition-colors"
+      >
+        ◻
+      </button>
+      <button
+        title="More shapes"
+        onClick={() => setOpen((o) => !o)}
+        className="h-8 flex items-center justify-center rounded-r text-[10px] text-[#3c4043] hover:bg-[#f1f3f4] px-0.5 transition-colors"
+      >
+        ▾
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-full mt-0.5 z-50 bg-white border border-[#dadce0] rounded shadow-[0_2px_10px_rgba(0,0,0,0.18)] overflow-hidden" style={{ width: 320 }}>
+            <div className="flex border-b border-[#e0e0e0] bg-[#f8f9fa]">
+              {SHAPE_GALLERY.map((cat, i) => (
+                <button key={cat.category} onClick={() => setGalleryTab(i)}
+                  className={`px-2 py-1.5 text-[11px] whitespace-nowrap transition-colors ${
+                    galleryTab === i ? "bg-white text-[#1a73e8] border-b-2 border-[#1a73e8]" : "text-[#5f6368] hover:bg-white/60"
+                  }`}
+                >{cat.category}</button>
+              ))}
+            </div>
+            <div className="grid grid-cols-6 gap-0.5 p-2 max-h-48 overflow-y-auto">
+              {SHAPE_GALLERY[galleryTab]?.shapes.map((s) => (
+                <button key={s.value} title={s.label}
+                  onClick={() => { setOpen(false); onInsertShape(s.value) }}
+                  className="flex flex-col items-center gap-0.5 p-1 rounded hover:bg-[#e8f0fe] text-[#3c4043] transition-colors"
+                  style={{ minHeight: 42 }}
+                >
+                  <span className="text-xl leading-none">{s.icon}</span>
+                  <span className="text-[8px] text-[#5f6368] leading-tight text-center">{s.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function TableToolBtn({ onInsertTable }: { onInsertTable?: (rows?: number, cols?: number) => void }) {
+  const [open, setOpen] = useState(false)
+  const [hover, setHover] = useState<[number, number]>([0, 0])
+  const R = 8, C = 10
+  return (
+    <div className="relative">
+      <button
+        title="Insert table"
+        onClick={() => setOpen((o) => !o)}
+        className="h-8 flex items-center gap-0.5 px-1.5 rounded text-[#3c4043] hover:bg-[#f1f3f4] text-[15px] transition-colors"
+      >
+        <span>▦</span><span className="text-[10px]">▾</span>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => { setOpen(false); setHover([0, 0]) }} />
+          <div className="absolute left-0 top-full mt-0.5 z-50 bg-white border border-[#dadce0] rounded shadow-[0_2px_10px_rgba(0,0,0,0.18)] p-2"
+            onMouseLeave={() => setHover([0, 0])}>
+            <div className="text-[11px] text-[#80868b] mb-1.5 text-center min-h-[16px]">
+              {hover[0] > 0 ? `${hover[1]} × ${hover[0]} table` : "Insert table"}
+            </div>
+            <div className="grid gap-0.5" style={{ gridTemplateColumns: `repeat(${C}, 16px)` }}>
+              {Array.from({ length: R }, (_, r) =>
+                Array.from({ length: C }, (_, c) => {
+                  const active = r < hover[0] && c < hover[1]
+                  return (
+                    <div key={`${r}-${c}`}
+                      className={`w-4 h-4 border cursor-pointer transition-colors ${active ? "bg-[#e8f0fe] border-[#1a73e8]" : "border-[#dadce0] hover:border-[#9aa0a6]"}`}
+                      onMouseEnter={() => setHover([r + 1, c + 1])}
+                      onClick={() => { setOpen(false); setHover([0, 0]); onInsertTable?.(hover[0], hover[1]) }}
+                    />
+                  )
+                })
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 // ── Top-level ─────────────────────────────────────────────────────────────────
 
 export default function StudioRibbon(props: Props) {
   const {
-    doc, slideN, slideWidthIn, slideHeightIn, selectedElement,
-    onCommitPosition, onCommitZIndex,
-    onDelete, onDuplicate, onInsertShape, onInsertChart, onInsertTable, onInsertImage,
-    onStartDraw, placingShapeType, drawMode, onCancelPlace, onCancelDraw,
+    doc, slideN, selectedElement,
+    onDelete, onDuplicate, onInsertShape, onInsertChart, onInsertTable,
+    onStartDraw, drawMode, onCancelDraw,
     onRebuild, rebuilding,
     chatOpen, onToggleChat,
     onShowShortcuts, onShowSlideSorter, onPresent,
@@ -325,304 +493,349 @@ export default function StudioRibbon(props: Props) {
     onTransitions, onGrammarCheck, onAIScore,
   } = props
 
-  const [tab, setTab] = useState<Tab>("home")
-  const [exportOpen, setExportOpen]   = useState(false)
-  const [shapesOpen, setShapesOpen]   = useState(false)
-  const [fileOpen, setFileOpen]       = useState(false)
+  // Extended props accessed via cast (optional handlers from Studio)
+  const p = props as Record<string, unknown>
+  const onFormatPaint      = p.onFormatPaint      as (() => void) | undefined
+  const formatPaintMode    = p.formatPaintMode     as boolean | undefined
+  const onImportSlides     = p.onImportSlides      as ((f: File) => void) | undefined
+  const onSaveToCloud      = p.onSaveToCloud       as (() => void) | undefined
+  const savingToCloud      = p.savingToCloud       as boolean | undefined
+  const onRerenderAll      = p.onRerenderAll       as (() => void) | undefined
+  const rerenderingAll     = p.rerenderingAll      as boolean | undefined
+  const onFindReplace      = p.onToggleFindReplace as (() => void) | undefined
+  const findReplaceOpen    = p.findReplaceOpen     as boolean | undefined
+  const onApplyLayout      = p.onApplyLayout       as ((preset: string) => void) | undefined
+  const onGenerateSlide    = p.onGenerateSlide     as (() => void) | undefined
+  const generating         = p.generating          as boolean | undefined
+  const onCopyToSlide      = p.onCopyToSlide       as (() => void) | undefined
+  const onGroupElements    = p.onGroupElements     as (() => void) | undefined
+  const onUngroupElement   = p.onUngroupElement    as (() => void) | undefined
+  const onAlignElements    = p.onAlignElements     as ((a: string) => void) | undefined
+  const multiCount         = (p.multiSelectIds as Set<string> | undefined)?.size ?? 0
+  const onOptimizeLayout   = p.onOptimizeLayout    as (() => void) | undefined
+  const optimizingLayout   = p.optimizingLayout    as boolean | undefined
+  const onColorSwapAny     = p.onColorSwap         as (() => void) | undefined
+  const onThemeGen         = p.onThemeGen          as (() => void) | undefined
+  const onVariation        = p.onVariation         as (() => void) | undefined
+  const onTranslate        = p.onTranslate         as (() => void) | undefined
+  const onCompare          = p.onCompare           as (() => void) | undefined
+  const onBrandCheck       = p.onBrandCheck        as (() => void) | undefined
+  const onDeckHealth       = p.onDeckHealth        as (() => void) | undefined
+  const onRehearse         = p.onRehearsal         as (() => void) | undefined
+  const onAICoach          = p.onCoach             as (() => void) | undefined
+  const onDeckSummary      = p.onDeckSummary       as (() => void) | undefined
+  const onSlideNumbers     = p.onSlideNumbers      as (() => void) | undefined
+  const onWatermark        = p.onWatermark         as (() => void) | undefined
+  const onAgendaSlide      = p.onAgendaSlide       as (() => void) | undefined
+  const onTextFormatCommit = p.onTextFormatCommit  as (() => void) | undefined
+  const onCommitPosition   = p.onCommitPosition    as ((l: number, t: number, w: number, h: number) => void) | undefined
+  const onCommitZIndex     = p.onCommitZIndex      as ((z: number) => void) | undefined
+
+  const [exportOpen, setExportOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const importRef    = useRef<HTMLInputElement>(null)
 
-  // Auto-switch to context tab when element is selected
-  useEffect(() => {
-    if (selectedElement) {
-      const isImg = selectedElement.type === "BridgeImage" || selectedElement.shape_type === "image"
-      if (tab !== "shapeformat" && tab !== "pictureformat") {
-        setTab(isImg ? "pictureformat" : "shapeformat")
-      }
-    } else {
-      if (tab === "shapeformat" || tab === "pictureformat") {
-        setTab("home")
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedElement?.id])
+  const docName = doc.name.replace(/\.pptx$/i, "")
 
-  // sync position inputs from selectedElement
-  const [x, setX] = useState("")
-  const [y, setY] = useState("")
-  const [w, setW] = useState("")
-  const [h, setH] = useState("")
-  useEffect(() => {
-    if (selectedElement) {
-      setX(selectedElement.left_in.toFixed(3))
-      setY(selectedElement.top_in.toFixed(3))
-      setW(selectedElement.width_in.toFixed(3))
-      setH(selectedElement.height_in.toFixed(3))
-    } else { setX(""); setY(""); setW(""); setH("") }
-  }, [selectedElement])
+  const handleFilePicked = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]
+    if (f && props.onInsertImage) props.onInsertImage(f)
+    e.target.value = ""
+  }
 
-  const commitPos = useCallback(() => {
-    if (!selectedElement) return
-    const lx = parseFloat(x), ly = parseFloat(y), lw = parseFloat(w), lh = parseFloat(h)
-    if ([lx, ly, lw, lh].some(isNaN)) return
-    onCommitPosition(lx, ly, lw, lh)
-  }, [x, y, w, h, selectedElement, onCommitPosition])
+  const handleImportPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]
+    if (f && onImportSlides) onImportSlides(f)
+    e.target.value = ""
+  }
 
   const arrange = useCallback((action: "front" | "forward" | "backward" | "back") => {
-    if (!selectedElement) return
+    if (!selectedElement || !onCommitZIndex) return
     const z = selectedElement.z_index
     const next = action === "front" ? 9999 : action === "forward" ? z + 1 : action === "backward" ? Math.max(1, z - 1) : 1
     onCommitZIndex(next)
   }, [selectedElement, onCommitZIndex])
 
-  const align = useCallback((btn: typeof ALIGN_BUTTONS[number]) => {
-    if (!selectedElement) return
-    const newX = btn.dx ? btn.dx(selectedElement, slideWidthIn, slideHeightIn) : selectedElement.left_in
-    const newY = btn.dy ? btn.dy(selectedElement, slideWidthIn, slideHeightIn) : selectedElement.top_in
-    onCommitPosition(newX, newY, selectedElement.width_in, selectedElement.height_in)
-  }, [selectedElement, slideWidthIn, slideHeightIn, onCommitPosition])
+  // ── File menu items ────────────────────────────────────────────────────────
+  const fileMenuItems: GMenuItem[] = [
+    ...(onSaveToCloud ? [{ label: savingToCloud ? "Saving…" : "Save to cloud", icon: "💾", onClick: onSaveToCloud, disabled: savingToCloud }] : []),
+    ...(onImportSlides ? [{ label: "Import slides", icon: "📥", onClick: () => importRef.current?.click() }] : []),
+    { label: rebuilding ? "Rebuilding…" : "Rebuild renders", icon: "⟳", onClick: onRebuild, disabled: rebuilding },
+    ...(onRerenderAll ? [{ label: rerenderingAll ? "Rerendering…" : "Rerender all slides", icon: "⟳", onClick: onRerenderAll, disabled: rerenderingAll }] : []),
+    { separator: true },
+    { label: "Export PowerPoint (.pptx)", icon: "↓", onClick: () => { window.open(props.onInsertShape ? `${window.location.origin}/api/docs/${doc.doc_id}/export/pptx` : "#", "_blank") } },
+    { label: "Export PDF", icon: "↓", onClick: () => window.open(`/api/docs/${doc.doc_id}/export/pdf`, "_blank") },
+    { label: "Export PNG slides (zip)", icon: "↓", onClick: () => window.open(`/api/docs/${doc.doc_id}/export/png-zip`, "_blank") },
+    { label: "Export HTML slideshow", icon: "↓", onClick: () => window.open(`/api/docs/${doc.doc_id}/export/html`, "_blank") },
+    { label: "Export Markdown outline", icon: "↓", onClick: () => window.open(`/api/docs/${doc.doc_id}/export/markdown`, "_blank") },
+    { label: "Export speaker notes (.md)", icon: "↓", onClick: () => window.open(`/api/docs/${doc.doc_id}/notes/export/md`, "_blank") },
+  ]
 
-  const noSel = !selectedElement
-  const docName = doc.name.replace(/\.pptx$/i, "")
+  // ── Edit menu items ────────────────────────────────────────────────────────
+  const editMenuItems: GMenuItem[] = [
+    { label: undoDepth ? `Undo (${undoDepth} steps)` : "Undo", icon: "↩", shortcut: "Ctrl+Z", onClick: onUndo, disabled: !onUndo || undoDepth === 0 },
+    { label: redoDepth ? `Redo (${redoDepth} steps)` : "Redo", icon: "↪", shortcut: "Ctrl+Y", onClick: onRedo, disabled: !onRedo || redoDepth === 0 },
+    { separator: true },
+    { label: "Duplicate element", icon: "⊕", shortcut: "Ctrl+D", onClick: onDuplicate, disabled: !selectedElement },
+    { label: "Delete element", icon: "✕", shortcut: "Del", onClick: onDelete, disabled: !selectedElement },
+    { separator: true },
+    ...(onFindReplace ? [{ label: "Find & replace", icon: "🔍", shortcut: "Ctrl+H", onClick: onFindReplace, active: findReplaceOpen }] : []),
+    ...(onFormatPaint ? [{ label: "Format paint", icon: "🖌", onClick: onFormatPaint, active: formatPaintMode }] : []),
+  ]
 
-  const handleFilePicked = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0]
-    if (f && onInsertImage) onInsertImage(f)
-    e.target.value = ""
-  }
+  // ── View menu items ────────────────────────────────────────────────────────
+  const viewMenuItems: GMenuItem[] = [
+    { label: outlineOpen ? "Hide outline panel" : "Show outline panel", icon: "≡", onClick: onToggleOutline, active: outlineOpen },
+    { label: layersOpen ? "Hide layers panel" : "Show layers", icon: "◫", onClick: onToggleLayers, active: layersOpen },
+    { label: commentsOpen ? "Hide comments" : "Show comments", icon: "💬", onClick: onToggleComments, active: commentsOpen },
+    { separator: true },
+    { label: "Slide sorter", icon: "▦", shortcut: "Ctrl+Shift+S", onClick: onShowSlideSorter },
+    ...(onPresent ? [{ label: "Present", icon: "▶", shortcut: "Ctrl+F5", onClick: onPresent }] : []),
+    { separator: true },
+    ...(onShowShortcuts ? [{ label: "Keyboard shortcuts", icon: "⌨", shortcut: "Ctrl+/", onClick: onShowShortcuts }] : []),
+    ...(onShowStats ? [{ label: "Presentation statistics", icon: "📊", onClick: onShowStats }] : []),
+  ]
 
-  // Determine context tab label/visibility
-  const isImageEl = selectedElement && (selectedElement.type === "BridgeImage" || selectedElement.shape_type === "image")
-  const contextTabId: Tab | null = selectedElement ? (isImageEl ? "pictureformat" : "shapeformat") : null
-  const contextTabLabel = isImageEl ? "Picture Format" : "Shape Format"
+  // ── Insert menu items ──────────────────────────────────────────────────────
+  const insertMenuItems: GMenuItem[] = [
+    { label: "Text box", icon: "T", onClick: () => onInsertShape("text_box") },
+    { label: "Image", icon: "🖼", onClick: () => fileInputRef.current?.click() },
+    { separator: true },
+    { label: "Shape: Rectangle", icon: "▭", onClick: () => onInsertShape("rect") },
+    { label: "Shape: Ellipse", icon: "○", onClick: () => onInsertShape("ellipse") },
+    { label: "Shape: Triangle", icon: "△", onClick: () => onInsertShape("triangle") },
+    { label: "Shape: Arrow", icon: "→", onClick: () => onInsertShape("rightArrow") },
+    { separator: true },
+    { label: "Chart", icon: "📊", onClick: () => onInsertChart?.() },
+    ...(onStartDraw ? [
+      { separator: true },
+      { label: drawMode === "pen" ? "Drawing (pen active)" : "Draw with Pen", icon: "✒", onClick: () => onStartDraw("pen"), active: drawMode === "pen" },
+      { label: drawMode === "polygon" ? "Drawing (polygon active)" : "Draw Polygon", icon: "⬡", onClick: () => onStartDraw("polygon"), active: drawMode === "polygon" },
+      ...(drawMode ? [{ label: "Cancel drawing", icon: "✕", onClick: onCancelDraw }] : []),
+    ] : []),
+  ]
+
+  // ── Format menu items ──────────────────────────────────────────────────────
+  const formatMenuItems: GMenuItem[] = [
+    ...(onColorSwapAny ? [{ label: "Color swap", icon: "🎨", onClick: onColorSwapAny }] : []),
+    ...(onFontSwap ? [{ label: "Font swap", icon: "Ff", onClick: onFontSwap }] : []),
+    ...(onTemplateVars ? [{ label: "Template variables", icon: "{}", onClick: onTemplateVars }] : []),
+    { separator: true },
+    ...(onApplyLayout ? [
+      { label: "Apply layout: Title slide", icon: "□", onClick: () => onApplyLayout("title") },
+      { label: "Apply layout: Title + content", icon: "▭", onClick: () => onApplyLayout("title_content") },
+      { label: "Apply layout: Blank", icon: "□", onClick: () => onApplyLayout("blank") },
+    ] : []),
+    ...(onSlideNumbers ? [{ separator: true }, { label: "Slide numbers", icon: "#", onClick: onSlideNumbers }] : []),
+    ...(onWatermark ? [{ label: "Watermark", icon: "⟨⟩", onClick: onWatermark }] : []),
+  ]
+
+  // ── Slide menu items ───────────────────────────────────────────────────────
+  const slideMenuItems: GMenuItem[] = [
+    ...(onTransitions ? [{ label: "Transitions", icon: "⇄", onClick: onTransitions }] : []),
+    ...(onThemeGen ? [{ label: "Theme generator", icon: "🎨", onClick: onThemeGen }] : []),
+    ...(onVariation ? [{ label: "Slide variation", icon: "⊞", onClick: onVariation }] : []),
+    ...(onAgendaSlide ? [{ label: "Generate agenda slide", icon: "≡", onClick: onAgendaSlide }] : []),
+  ]
+
+  // ── Arrange menu items ─────────────────────────────────────────────────────
+  const arrangeMenuItems: GMenuItem[] = [
+    { label: "Bring to front", icon: "⇈", shortcut: "Ctrl+Shift+]", onClick: () => arrange("front"), disabled: !selectedElement },
+    { label: "Bring forward",  icon: "↑", shortcut: "Ctrl+]",       onClick: () => arrange("forward"),  disabled: !selectedElement },
+    { label: "Send backward",  icon: "↓", shortcut: "Ctrl+[",       onClick: () => arrange("backward"), disabled: !selectedElement },
+    { label: "Send to back",   icon: "⇊", shortcut: "Ctrl+Shift+[", onClick: () => arrange("back"),    disabled: !selectedElement },
+    ...(onAlignElements ? [
+      { separator: true },
+      { label: "Align left",            icon: "⫷", onClick: () => onAlignElements("left") },
+      { label: "Center horizontally",   icon: "⊟", onClick: () => onAlignElements("center") },
+      { label: "Align right",           icon: "⫸", onClick: () => onAlignElements("right") },
+      { label: "Align top",             icon: "⫶", onClick: () => onAlignElements("top") },
+      { label: "Center vertically",     icon: "⊟", onClick: () => onAlignElements("middle") },
+      { label: "Align bottom",          icon: "⫶", onClick: () => onAlignElements("bottom") },
+    ] : []),
+    ...(onGroupElements || onUngroupElement ? [
+      { separator: true },
+      ...(onGroupElements && multiCount >= 2 ? [{ label: "Group", icon: "◳", shortcut: "Ctrl+G", onClick: onGroupElements }] : []),
+      ...(onUngroupElement ? [{ label: "Ungroup", icon: "◰", shortcut: "Ctrl+Shift+G", onClick: onUngroupElement }] : []),
+    ] : []),
+    ...(onCopyToSlide ? [
+      { separator: true },
+      { label: "Copy to slide…", icon: "⇥", onClick: onCopyToSlide },
+    ] : []),
+  ]
+
+  // ── Tools menu items ───────────────────────────────────────────────────────
+  const toolsMenuItems: GMenuItem[] = [
+    ...(onGrammarCheck ? [{ label: "Grammar check", icon: "✓", onClick: onGrammarCheck }] : []),
+    ...(onCompare ? [{ label: "Compare slides", icon: "⊞", onClick: onCompare }] : []),
+    ...(onTranslate ? [{ label: "Translate", icon: "🌐", onClick: onTranslate }] : []),
+    ...(onOptimizeLayout ? [{ label: optimizingLayout ? "Optimizing…" : "Optimize layout", icon: "◻", onClick: onOptimizeLayout, disabled: optimizingLayout }] : []),
+    { separator: true },
+    ...(onGenerateSlide ? [{ label: generating ? "Generating…" : "Generate slide content", icon: "✦", onClick: onGenerateSlide, disabled: generating }] : []),
+    ...(onBrandCheck ? [{ label: "Brand check", icon: "🏷", onClick: onBrandCheck }] : []),
+    ...(onDeckHealth ? [{ label: "Deck health", icon: "💊", onClick: onDeckHealth }] : []),
+    ...(onAICoach ? [{ label: "Presentation coach", icon: "🎓", onClick: onAICoach }] : []),
+    ...(onDeckSummary ? [{ label: "Deck summary", icon: "📋", onClick: onDeckSummary }] : []),
+    ...(onRehearse ? [{ label: "Rehearsal timer", icon: "⏱", onClick: onRehearse }] : []),
+  ]
+
+  // ── Extensions (AI) menu ───────────────────────────────────────────────────
+  const extItems: GMenuItem[] = [
+    ...(onAIScore ? [{ label: "AI presentation score", icon: "★", onClick: onAIScore }] : []),
+    ...(p.onReorder ? [{ label: "Reorder suggestions", icon: "↕", onClick: p.onReorder as () => void }] : []),
+    ...(p.onReadability ? [{ label: "Readability", icon: "📖", onClick: p.onReadability as () => void }] : []),
+    ...(p.onContentDensity ? [{ label: "Content density", icon: "≡", onClick: p.onContentDensity as () => void }] : []),
+    ...(p.onEmotionalTone ? [{ label: "Emotional tone", icon: "🎭", onClick: p.onEmotionalTone as () => void }] : []),
+    ...(p.onImpactScores ? [{ label: "Impact scores", icon: "📈", onClick: p.onImpactScores as () => void }] : []),
+    ...(p.onAccessibility ? [{ label: "Accessibility report", icon: "♿", onClick: p.onAccessibility as () => void }] : []),
+  ]
 
   return (
-    <div className="shrink-0 border-b border-gray-300 bg-white select-none shadow-sm" style={{ fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
-      {/* ── Title bar / Quick Access Toolbar ──────────────────────────── */}
-      <div className="h-8 flex items-center bg-white border-b border-gray-200 px-3 gap-1 shrink-0">
-        {/* Percy wordmark */}
-        <span className="text-[11px] font-bold text-[#2b579a] tracking-[0.18em] uppercase mr-2 select-none">
-          Percy
-        </span>
-
-        {/* Quick Access Toolbar: Undo / Redo / Save */}
-        <button
-          title={`Undo${undoDepth ? ` (${undoDepth} steps)` : ""} — Ctrl+Z`}
-          onClick={onUndo}
-          disabled={!onUndo || undoDepth === 0}
-          className="w-6 h-6 flex items-center justify-center text-gray-600 hover:bg-gray-100 rounded disabled:opacity-30 text-[14px] transition-colors"
-        >↩</button>
-        <button
-          title={`Redo${redoDepth ? ` (${redoDepth} steps)` : ""} — Ctrl+Y`}
-          onClick={onRedo}
-          disabled={!onRedo || redoDepth === 0}
-          className="w-6 h-6 flex items-center justify-center text-gray-600 hover:bg-gray-100 rounded disabled:opacity-30 text-[14px] transition-colors"
-        >↪</button>
-        <button
-          title="Rebuild slide (re-render PNGs)"
-          onClick={onRebuild}
-          disabled={rebuilding}
-          className="w-6 h-6 flex items-center justify-center text-gray-600 hover:bg-gray-100 rounded disabled:opacity-30 text-[14px] transition-colors"
-        >
-          {rebuilding
-            ? <span className="inline-block w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin" />
-            : "⟳"}
-        </button>
-
-        <div className="w-px h-4 bg-gray-200 mx-1" />
-
-        {/* Document name — center */}
-        <div className="flex-1 flex items-center justify-center gap-1.5 overflow-hidden">
-          <span className="text-[12px] text-gray-800 font-medium truncate max-w-[22rem]">{docName}</span>
-          <span className="text-[10px] text-gray-400 shrink-0">· Slide {slideN} / {doc.slide_count}</span>
+    <div style={{ fontFamily: "'Google Sans',Roboto,'Helvetica Neue',Arial,sans-serif", background: "#fff", borderBottom: "1px solid #e0e0e0", userSelect: "none" }}>
+      {/* ── Row 1: Menu bar ──────────────────────────────────────────────── */}
+      <div className="h-10 flex items-center px-2 gap-0 shrink-0">
+        {/* Percy logo mark */}
+        <div className="w-9 h-9 flex items-center justify-center mr-1 shrink-0">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <rect x="3" y="4" width="18" height="14" rx="2" fill="#4285F4"/>
+            <rect x="5" y="7" width="14" height="2" rx="1" fill="white" opacity="0.9"/>
+            <rect x="5" y="11" width="10" height="2" rx="1" fill="white" opacity="0.7"/>
+            <rect x="5" y="15" width="7" height="1.5" rx="0.75" fill="white" opacity="0.5"/>
+          </svg>
         </div>
 
-        {/* Right: Share, Export, AI */}
+        {/* Document name */}
+        <span className="text-[18px] font-normal text-[#202124] mr-3 max-w-[18rem] truncate shrink-0">
+          {docName}
+        </span>
+
+        {/* Menu items */}
+        <GMenuBtn label="File"       items={fileMenuItems} />
+        <GMenuBtn label="Edit"       items={editMenuItems} />
+        <GMenuBtn label="View"       items={viewMenuItems} />
+        <GMenuBtn label="Insert"     items={insertMenuItems} />
+        <GMenuBtn label="Format"     items={formatMenuItems} disabled={formatMenuItems.length === 0} />
+        {slideMenuItems.length > 0 && <GMenuBtn label="Slide" items={slideMenuItems} />}
+        <GMenuBtn label="Arrange"    items={arrangeMenuItems} />
+        {toolsMenuItems.length > 0 && <GMenuBtn label="Tools" items={toolsMenuItems} />}
+        {extItems.length > 0 && <GMenuBtn label="Extensions" items={extItems} />}
+        {onShowShortcuts && <GMenuBtn label="Help" items={[{ label: "Keyboard shortcuts", icon: "⌨", shortcut: "Ctrl+/", onClick: onShowShortcuts }]} />}
+
+        {/* Spacer */}
+        <div className="flex-1" />
+
+        {/* Slide counter */}
+        <span className="text-[11px] text-[#80868b] shrink-0 mr-3">
+          Slide {slideN} / {doc.slide_count}
+        </span>
+
+        {/* Share */}
         {onShare && (
           <button
             onClick={onShare}
-            className="px-3 h-6 rounded text-[11px] bg-[#2b579a] text-white hover:bg-[#1e4080] flex items-center gap-1 transition-colors font-medium"
-            title="Share this presentation"
+            className="h-8 px-4 rounded-full text-[13px] font-medium bg-[#1a73e8] text-white hover:bg-[#1765cc] transition-colors flex items-center gap-1.5 shrink-0 mr-2"
           >
             Share
           </button>
         )}
-        <div className="relative">
+
+        {/* Export */}
+        <div className="relative shrink-0 mr-1">
           <button
             onClick={() => setExportOpen((o) => !o)}
-            className="px-2 h-6 rounded text-[11px] bg-white text-gray-700 hover:bg-gray-100 border border-gray-300 flex items-center gap-1 transition-colors"
+            className="h-8 px-3 rounded text-[13px] text-[#3c4043] hover:bg-[#f1f3f4] border border-[#dadce0] flex items-center gap-1 transition-colors"
           >
-            ↓ Export ▾
+            Export ▾
           </button>
           {exportOpen && (
             <ExportMenu docId={doc.doc_id} onClose={() => setExportOpen(false)} />
           )}
         </div>
+
+        {/* AI panel toggle */}
         <button
           onClick={onToggleChat}
-          title={chatOpen ? "Collapse AI panel" : "Expand AI panel"}
-          className={`ml-1 px-2 h-6 rounded text-[11px] border flex items-center gap-1 transition-colors ${
+          title={chatOpen ? "Collapse AI panel" : "Open AI panel"}
+          className={`h-8 px-3 rounded text-[13px] flex items-center gap-1 transition-colors border shrink-0 ${
             chatOpen
-              ? "bg-[#2b579a]/10 text-[#2b579a] border-[#2b579a]/30"
-              : "bg-white text-gray-600 border-gray-300 hover:bg-gray-100"
+              ? "bg-[#e8f0fe] text-[#1a73e8] border-[#1a73e8]/30"
+              : "text-[#3c4043] hover:bg-[#f1f3f4] border-[#dadce0]"
           }`}
-        >✦ AI</button>
+        >
+          ✦ AI
+        </button>
       </div>
 
-      {/* ── Tab strip ─────────────────────────────────────────────────── */}
-      <div className="h-7 flex items-stretch bg-[#f3f3f3] border-b border-gray-300 px-1 shrink-0">
-        {/* File tab — PPT-blue accent button */}
-        <div className="relative">
-          <button
-            onClick={() => setFileOpen((o) => !o)}
-            className="h-full px-4 text-[11px] font-semibold text-white bg-[#2b579a] hover:bg-[#1e4080] transition-colors"
-          >
-            File
-          </button>
-          {fileOpen && (
-            <FileMenu
-              docId={doc.doc_id}
-              onClose={() => setFileOpen(false)}
-            />
-          )}
-        </div>
+      {/* ── Row 2: Toolbar ───────────────────────────────────────────────── */}
+      <div className="h-10 flex items-center px-2 gap-0.5 bg-[#f8f9fa] border-t border-[#e0e0e0] shrink-0">
+        {/* Undo / Redo */}
+        <TBtn icon="↩" title={`Undo${undoDepth ? ` (${undoDepth})` : ""} — Ctrl+Z`} onClick={onUndo} disabled={!onUndo || undoDepth === 0} />
+        <TBtn icon="↪" title={`Redo${redoDepth ? ` (${redoDepth})` : ""} — Ctrl+Y`} onClick={onRedo} disabled={!onRedo || redoDepth === 0} />
 
-        {/* Main tabs */}
-        {MAIN_TABS.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={[
-              "px-3 h-full text-[11px] transition-colors relative whitespace-nowrap",
-              tab === t.id
-                ? "bg-white text-[#2b579a] font-medium"
-                : "text-gray-600 hover:text-gray-800 hover:bg-white/60",
-            ].join(" ")}
-          >
-            {tab === t.id && (
-              <span className="absolute top-0 left-0 right-0 h-0.5 bg-[#2b579a]" />
-            )}
-            {t.label}
-          </button>
-        ))}
+        {/* Rebuild */}
+        <TBtn icon={rebuilding ? "…" : "⟳"} title="Rebuild slide renders" onClick={onRebuild} disabled={rebuilding} />
 
-        {/* Context tab — Shape Format / Picture Format */}
-        {contextTabId && (
+        {/* Format paint */}
+        {onFormatPaint && (
           <>
-            <div className="w-px bg-gray-300 mx-0.5 my-1.5" />
-            <button
-              onClick={() => setTab(contextTabId)}
-              className={[
-                "px-3 h-full text-[11px] transition-colors relative whitespace-nowrap font-medium",
-                tab === contextTabId
-                  ? "bg-white text-orange-700"
-                  : "text-orange-600 bg-orange-50/60 hover:bg-orange-50",
-              ].join(" ")}
-            >
-              {tab === contextTabId && (
-                <span className="absolute top-0 left-0 right-0 h-0.5 bg-orange-500" />
-              )}
-              {contextTabLabel}
-            </button>
+            <TDivider />
+            <TBtn icon="🖌" title="Format paint" onClick={onFormatPaint} active={formatPaintMode} />
+          </>
+        )}
+
+        <TDivider />
+
+        {/* Insert tools */}
+        <TBtn icon="T" title="Text box" onClick={() => onInsertShape("text_box")} />
+        <TBtn icon="🖼" title="Image" onClick={() => fileInputRef.current?.click()} />
+        <ShapesToolBtn onInsertShape={onInsertShape} />
+        <TableToolBtn onInsertTable={onInsertTable} />
+        <TBtn icon="📊" title="Chart" onClick={() => onInsertChart?.()} />
+
+        {/* Draw tools */}
+        {onStartDraw && (
+          <>
+            <TDivider />
+            <TBtn icon="✒" title="Draw pen path" onClick={() => onStartDraw("pen")} active={drawMode === "pen"} />
+            <TBtn icon="⬡" title="Draw polygon" onClick={() => onStartDraw("polygon")} active={drawMode === "polygon"} />
+            {drawMode && <TBtn icon="✕" title="Cancel drawing (Esc)" onClick={onCancelDraw} />}
+          </>
+        )}
+
+        {/* Text formatting — contextual, only when text element is selected */}
+        {selectedElement && isTextCapable(selectedElement) && (
+          <>
+            <TDivider />
+            <TextFormatGroup
+              element={selectedElement}
+              docId={doc.doc_id}
+              slideN={slideN}
+              onCommit={onTextFormatCommit}
+            />
+          </>
+        )}
+
+        {/* Arrange shortcuts — contextual */}
+        {selectedElement && (
+          <>
+            <TDivider />
+            <TBtn icon="⊕" title="Duplicate (Ctrl+D)" onClick={onDuplicate} />
+            <TBtn icon="✕" title="Delete (Del)" onClick={onDelete} />
+            {multiCount >= 2 && onAlignElements && (
+              <TBtn icon="⊟" title="Center elements" onClick={() => onAlignElements("center")} />
+            )}
+            {onGroupElements && multiCount >= 2 && (
+              <TBtn icon="◳" title="Group (Ctrl+G)" onClick={onGroupElements} />
+            )}
+            {onUngroupElement && (
+              <TBtn icon="◰" title="Ungroup" onClick={onUngroupElement} />
+            )}
           </>
         )}
       </div>
 
-      {/* ── Ribbon body ───────────────────────────────────────────────── */}
-      <div className="bg-white relative">
-        {tab === "home" && (
-          <HomeRibbon
-            noSel={noSel}
-            selectedElement={selectedElement}
-            onDuplicate={onDuplicate}
-            onDelete={onDelete}
-            onGroup={props.onGroupElements}
-            onUngroup={props.onUngroupElement}
-            multiCount={props.multiSelectIds?.size ?? 0}
-            onAlignElements={props.onAlignElements}
-            onInsertShape={onInsertShape}
-            onPickImage={() => fileInputRef.current?.click()}
-            docId={doc.doc_id}
-            slideN={slideN}
-            onTextFormatCommit={props.onTextFormatCommit}
-          />
-        )}
-        {tab === "insert" && (
-          <InsertRibbon
-            shapesOpen={shapesOpen}
-            setShapesOpen={setShapesOpen}
-            onInsertShape={onInsertShape}
-            onInsertChart={onInsertChart}
-            onInsertTable={onInsertTable}
-            onPickImage={() => fileInputRef.current?.click()}
-          />
-        )}
-        {tab === "draw" && (
-          <DrawRibbon
-            onStartDraw={onStartDraw}
-            drawMode={drawMode}
-            onCancelDraw={onCancelDraw}
-          />
-        )}
-        {tab === "design" && (
-          <DesignRibbon
-            onColorSwap={onColorSwap}
-            onFontSwap={onFontSwap}
-            onTemplateVars={onTemplateVars}
-          />
-        )}
-        {tab === "transitions" && (
-          <TransitionsRibbon onTransitions={onTransitions} />
-        )}
-        {tab === "animations" && (
-          <AnimationsRibbon />
-        )}
-        {tab === "slideshow" && (
-          <SlideShowRibbon
-            onPresent={onPresent}
-            onShowSlideSorter={onShowSlideSorter}
-          />
-        )}
-        {tab === "review" && (
-          <ReviewRibbon
-            onGrammarCheck={onGrammarCheck}
-            commentsOpen={!!commentsOpen}
-            onToggleComments={onToggleComments}
-            onAIScore={onAIScore}
-            onShowStats={onShowStats}
-          />
-        )}
-        {tab === "view" && (
-          <ViewRibbon
-            layersOpen={!!layersOpen} onToggleLayers={onToggleLayers}
-            outlineOpen={!!outlineOpen} onToggleOutline={onToggleOutline}
-            commentsOpen={!!commentsOpen} onToggleComments={onToggleComments}
-            onShowSlideSorter={onShowSlideSorter}
-            onPresent={onPresent}
-            onShowStats={onShowStats}
-            onShowShortcuts={onShowShortcuts}
-          />
-        )}
-        {(tab === "shapeformat" || tab === "pictureformat") && (
-          <ShapeFormatRibbon
-            noSel={noSel}
-            x={x} y={y} w={w} h={h}
-            setX={setX} setY={setY} setW={setW} setH={setH}
-            commitPos={commitPos}
-            selectedElement={selectedElement}
-            arrange={arrange}
-            align={align}
-            onDelete={onDelete}
-            onDuplicate={onDuplicate}
-            onGroup={props.onGroupElements}
-            onUngroup={props.onUngroupElement}
-            multiCount={props.multiSelectIds?.size ?? 0}
-            onAlignElements={props.onAlignElements}
-            isImage={tab === "pictureformat"}
-          />
-        )}
-      </div>
-
       <input ref={fileInputRef} type="file" accept="image/*" onChange={handleFilePicked} className="hidden" />
+      <input ref={importRef} type="file" accept=".pptx,.ppt" onChange={handleImportPicked} className="hidden" />
     </div>
   )
 }

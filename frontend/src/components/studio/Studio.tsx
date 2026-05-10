@@ -1671,8 +1671,8 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
           />
           <StudioNotesBar docId={doc.doc_id} slideN={selectedSlide} />
 
-          {/* status bar — PPT style: info left, view buttons right */}
-          <div className="h-7 shrink-0 border-t border-gray-300 bg-white flex items-center px-3 gap-2 text-[11px] text-gray-500 select-none" style={{ fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
+          {/* status bar — Google Slides style */}
+          <div className="h-7 shrink-0 border-t border-[#e0e0e0] bg-white flex items-center px-3 gap-2 text-[11px] text-[#80868b] select-none" style={{ fontFamily: "'Google Sans',Roboto,sans-serif" }}>
             {/* slide N/M */}
             <span className="shrink-0">
               Slide <span className="text-gray-800 font-medium">{selectedSlide}</span> of {localSlideCount}
@@ -1717,7 +1717,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
               <button
                 title="Normal view"
                 onClick={() => setFocusMode(false)}
-                className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${!focusMode ? "text-[#2b579a] bg-[#2b579a]/10" : "text-gray-500 hover:text-gray-700"}`}
+                className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${!focusMode ? "text-[#1a73e8] bg-[#e8f0fe]" : "text-[#5f6368] hover:text-[#3c4043]"}`}
               >
                 ⊞ Normal
               </button>
@@ -1731,7 +1731,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
               <button
                 title="Focus mode (hide panels)"
                 onClick={() => setFocusMode((f) => !f)}
-                className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${focusMode ? "text-[#2b579a] bg-[#2b579a]/10" : "text-gray-500 hover:text-gray-700"}`}
+                className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${focusMode ? "text-[#1a73e8] bg-[#e8f0fe]" : "text-[#5f6368] hover:text-[#3c4043]"}`}
               >
                 ⛶ Focus
               </button>

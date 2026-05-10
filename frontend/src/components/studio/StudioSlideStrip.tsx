@@ -314,13 +314,13 @@ export default function StudioSlideStrip({
   return (
     <div
       ref={stripRef}
-      className="w-44 shrink-0 flex flex-col border-r border-gray-300 bg-[#f5f5f5] min-h-0"
-      style={{ fontFamily: "'Segoe UI', system-ui, sans-serif" }}
+      className="w-44 shrink-0 flex flex-col border-r border-[#e0e0e0] bg-[#f8f9fa] min-h-0"
+      style={{ fontFamily: "'Google Sans',Roboto,sans-serif" }}
     >
       {/* ── Slides / Outline tab row (PPT-style) ──────────────── */}
       <div className="flex items-stretch border-b border-gray-300 bg-white shrink-0">
         <button
-          className="flex-1 py-1.5 text-[11px] font-medium text-[#2b579a] border-b-2 border-[#2b579a] bg-white transition-colors"
+          className="flex-1 py-1.5 text-[11px] font-medium text-[#1a73e8] border-b-2 border-[#1a73e8] bg-white transition-colors"
           title="Slides panel"
         >
           Slides
@@ -354,8 +354,8 @@ export default function StudioSlideStrip({
 
       {/* multi-select action bar */}
       {multiSelected.size > 0 && (
-        <div className="px-2 py-1 border-b border-gray-200 bg-[#edf2fa] shrink-0 flex items-center gap-1">
-          <span className="text-[10px] text-[#2b579a] font-medium">{multiSelected.size} selected</span>
+        <div className="px-2 py-1 border-b border-gray-200 bg-[#e8f0fe] shrink-0 flex items-center gap-1">
+          <span className="text-[10px] text-[#1a73e8] font-medium">{multiSelected.size} selected</span>
           <button
             onClick={() => handleDuplicate()}
             disabled={busy}
@@ -453,7 +453,7 @@ export default function StudioSlideStrip({
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search slides…"
           className="w-full text-[10px] bg-white border border-gray-300 rounded px-1.5 py-0.5
-                     text-gray-700 placeholder:text-gray-400 focus:outline-none focus:border-[#2b579a]"
+                     text-gray-700 placeholder:text-gray-400 focus:outline-none focus:border-[#1a73e8]"
           onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Escape") setSearchQuery("") }}
         />
       </div>
@@ -483,7 +483,7 @@ export default function StudioSlideStrip({
             }}
             placeholder="min"
             className="w-10 text-[9px] bg-white border border-gray-300 rounded px-1 py-0.5
-                       text-gray-700 focus:outline-none focus:border-[#2b579a]"
+                       text-gray-700 focus:outline-none focus:border-[#1a73e8]"
           />
         ) : (
           <button
@@ -560,11 +560,11 @@ export default function StudioSlideStrip({
                 onDragEnd={handleDragEnd}
                 className={[
                   "flex flex-col rounded transition-all group w-full cursor-grab active:cursor-grabbing p-1",
-                  active      ? "ring-2 ring-[#2b579a] bg-[#edf2fa]"
+                  active      ? "ring-2 ring-[#1a73e8] bg-[#e8f0fe]"
                     : isMulti ? "ring-1 ring-gray-400 bg-gray-100"
                     : "hover:bg-gray-200",
                   isDragging  ? "opacity-40" : hiddenSlides.has(n) ? "opacity-50" : "",
-                  isDropTarget ? "ring-2 ring-[#2b579a] bg-[#edf2fa]" : "",
+                  isDropTarget ? "ring-2 ring-[#1a73e8] bg-[#e8f0fe]" : "",
                 ].join(" ")}
                 onClick={(e) => handleSlideClick(e, n)}
                 onContextMenu={(e) => handleContextMenu(e, n)}
@@ -642,7 +642,7 @@ export default function StudioSlideStrip({
 
                 {/* ── Number + label below thumbnail (PPT style) ── */}
                 <div className="flex items-center gap-1 mt-0.5 px-0.5">
-                  <span className={`text-[10px] font-medium tabular-nums shrink-0 ${active ? "text-[#2b579a]" : "text-gray-500"}`}>
+                  <span className={`text-[10px] font-medium tabular-nums shrink-0 ${active ? "text-[#1a73e8]" : "text-gray-500"}`}>
                     {n}
                   </span>
                   {editingLabel === n ? (
@@ -656,7 +656,7 @@ export default function StudioSlideStrip({
                         if (e.key === "Enter") { e.preventDefault(); commitLabel(n, editLabelText) }
                         if (e.key === "Escape") { setEditingLabel(null) }
                       }}
-                      className="flex-1 min-w-0 text-[9px] bg-white border border-[#2b579a] rounded px-1 py-0 text-gray-800 focus:outline-none"
+                      className="flex-1 min-w-0 text-[9px] bg-white border border-[#1a73e8] rounded px-1 py-0 text-gray-800 focus:outline-none"
                       onClick={(e) => e.stopPropagation()}
                     />
                   ) : slideLabels[n] ? (
@@ -824,7 +824,7 @@ export default function StudioSlideStrip({
                     }}
                     className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors capitalize ${
                       active
-                        ? "bg-[#2b579a]/10 text-[#2b579a] border-[#2b579a]/30"
+                        ? "bg-[#1a73e8]/10 text-[#1a73e8] border-[#1a73e8]/30"
                         : "bg-white text-gray-600 border-gray-300 hover:bg-gray-100"
                     }`}
                   >

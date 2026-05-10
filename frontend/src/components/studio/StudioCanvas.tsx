@@ -475,7 +475,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
   return (
     <CanvasContext.Provider value={{ containerRef, slideWidthIn, slideHeightIn }}>
       <div
-        className="relative flex flex-col items-center justify-center w-full h-full p-6 bg-[#d6d6d6] select-none overflow-auto"
+        className="relative flex flex-col items-center justify-center w-full h-full p-6 bg-[#e8eaed] select-none overflow-auto"
         onWheel={handleWheel}
       >
         {/* floating zoom control — bottom-right, like Figma / Keynote */}
