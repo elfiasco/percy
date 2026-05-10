@@ -633,6 +633,8 @@ function ChartRendererImpl({ element, docId, slideN, renderKey, selected }: Nati
   const [recolorPopover, setRecolorPopover] = useState<{
     seriesIdx: number; pointIdx: number; x: number; y: number
   } | null>(null)
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [titleDraft, setTitleDraft]     = useState("")
 
   if (error) {
     return (
@@ -695,14 +697,71 @@ function ChartRendererImpl({ element, docId, slideN, renderKey, selected }: Nati
       userSelect: "none",
       boxSizing: "border-box",
     }}>
-      {title && (
-        <div style={{
-          position: "absolute", top: 2, left: 0, right: 0, zIndex: 1,
-          pointerEvents: "none", userSelect: "none",
-          ...title.style,
-        }}>
+      {title && !editingTitle && (
+        <div
+          style={{
+            position: "absolute", top: 2, left: 0, right: 0, zIndex: 2,
+            pointerEvents: selected ? "auto" : "none",
+            userSelect: "none",
+            cursor: selected ? "text" : "default",
+            ...title.style,
+          }}
+          onClick={(e) => {
+            if (!selected) return
+            e.stopPropagation()
+            setTitleDraft(title.text)
+            setEditingTitle(true)
+          }}
+          title={selected ? "Click to edit title" : undefined}
+        >
           {title.text}
         </div>
+      )}
+      {!title && selected && !editingTitle && (
+        <button
+          onClick={(e) => { e.stopPropagation(); setTitleDraft(""); setEditingTitle(true) }}
+          onMouseDown={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute", top: 4, left: "50%", transform: "translateX(-50%)",
+            zIndex: 2, padding: "2px 8px", background: "transparent",
+            border: "1px dashed #80868b", borderRadius: 3,
+            color: "#80868b", fontSize: 11, fontFamily: "'Google Sans', system-ui, sans-serif",
+            cursor: "pointer", pointerEvents: "auto",
+          }}
+        >
+          + Add chart title
+        </button>
+      )}
+      {editingTitle && (
+        <input
+          autoFocus
+          value={titleDraft}
+          onChange={(e) => setTitleDraft(e.target.value)}
+          onBlur={() => {
+            const trimmed = titleDraft
+            if (trimmed !== (title?.text ?? "")) {
+              commitChartData(element.id, { title: { ...(data.title ?? {}), text: trimmed } })
+                .catch((err) => console.error("[Percy] chart title save failed:", err))
+            }
+            setEditingTitle(false)
+          }}
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur()
+            if (e.key === "Escape") { setEditingTitle(false) }
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute", top: 2, left: "50%", transform: "translateX(-50%)",
+            zIndex: 3, padding: "2px 6px",
+            background: "#fff", border: "1.5px solid #1a73e8", borderRadius: 3,
+            outline: "none", textAlign: "center",
+            ...(title?.style ?? {}),
+            color: title?.style.color ?? "#202124",
+            minWidth: 180, maxWidth: "80%",
+          }}
+        />
       )}
       <ChartByType data={data} onPointClick={onPointClick} elementId={element.id} />
       {recolorPopover && (
