@@ -164,6 +164,8 @@ function PersistentTableEditor({
   const initialJSON = useRef(tableToTiptap(content)).current
   const lastSavedJSON = useRef<string>(JSON.stringify(initialJSON))
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Wrapper ref so we can measure the available height and size rows to fill
+  const wrapperRef = useRef<HTMLDivElement>(null)
 
   const editor = useEditor({
     extensions: bridgeTableExtensions(),
@@ -199,6 +201,42 @@ function PersistentTableEditor({
     if (!editor) return
     editor.setEditable(selected)
   }, [editor, selected])
+
+  // ── Make the table fill the element bounds (Google Sheets behavior) ──
+  // HTML tables don't reliably honor height:100% through CSS chains, so we
+  // measure the wrapper at runtime and write explicit pixel heights to each
+  // <tr>. Re-runs when the wrapper resizes (zoom, element resize, row count
+  // change).
+  useEffect(() => {
+    if (!editor) return
+    const wrapper = wrapperRef.current
+    if (!wrapper) return
+
+    const resizeRows = () => {
+      const root = editor.view.dom as HTMLElement
+      const rows = Array.from(root.querySelectorAll("tr"))
+      if (rows.length === 0) return
+      const available = wrapper.clientHeight
+      if (available < 10) return  // wrapper not yet sized
+      const perRow = Math.max(20, available / rows.length)
+      rows.forEach((tr) => {
+        ;(tr as HTMLElement).style.height = `${perRow}px`
+      })
+    }
+
+    // Initial sizing — run after Tiptap has rendered the table
+    requestAnimationFrame(resizeRows)
+    // Also when wrapper resizes (element resize / window resize / zoom change)
+    const ro = new ResizeObserver(resizeRows)
+    ro.observe(wrapper)
+    // And after each editor transaction (row added/removed)
+    const onUpdate = () => requestAnimationFrame(resizeRows)
+    editor.on("update", onUpdate)
+    return () => {
+      ro.disconnect()
+      editor.off("update", onUpdate)
+    }
+  }, [editor])
 
   // Save on blur — debounced so cell-to-cell tabbing doesn't hammer the API.
   const save = useCallback(async () => {
@@ -263,6 +301,7 @@ function PersistentTableEditor({
 
   return (
     <div
+      ref={wrapperRef}
       // Stop bubbling for pointer events so ElementOverlay's drag handler
       // doesn't interfere with cell focusing — but only while selected (so
       // unselected tables can still be dragged from anywhere on their face).
