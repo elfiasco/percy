@@ -223,9 +223,25 @@ function PersistentTableEditor({
       if (rows.length === 0) return
       const available = wrapper.clientHeight
       if (available < 10) return  // wrapper not yet sized
-      const perRow = Math.max(20, available / rows.length)
-      rows.forEach((tr) => {
-        ;(tr as HTMLElement).style.height = `${perRow}px`
+
+      // Preserve custom row proportions when the bridge model has them.
+      // - Empty row_heights → distribute equally (auto-fit)
+      // - Non-empty row_heights → scale each row proportionally to fill `available`
+      //   so the relative sizing the user (or PPTX import) authored is kept.
+      // If the row count grew (e.g., 'Insert row below' via context menu), the
+      // extra rows fall through to the equal-share branch for their own slot.
+      const modelHeights = content.row_heights ?? []
+      const modelTotal = modelHeights.length > 0 ? modelHeights.reduce((a, b) => a + b, 0) : 0
+      const canScale = modelTotal > 0 && modelHeights.length === rows.length
+
+      rows.forEach((tr, i) => {
+        let px: number
+        if (canScale) {
+          px = (modelHeights[i] / modelTotal) * available
+        } else {
+          px = available / rows.length
+        }
+        ;(tr as HTMLElement).style.height = `${Math.max(20, px)}px`
       })
     }
     // Debounced version for mutation events — gives Tiptap time to flush DOM
@@ -260,9 +276,14 @@ function PersistentTableEditor({
       editor.off("update", onUpdate)
       if (pending) clearTimeout(pending)
     }
-  }, [editor])
+    // Re-run when row_heights from the model change (custom proportions edited
+    // elsewhere — e.g., via Properties panel or column-resize handle).
+  }, [editor, content.row_heights, content.column_widths])
 
   // Save on blur — debounced so cell-to-cell tabbing doesn't hammer the API.
+  // Passes `content` as prevContent so tiptapToTable can preserve row_heights
+  // and column_widths proportions across edits (auto-extend on row insert,
+  // truncate on delete).
   const save = useCallback(async () => {
     if (!editor) return
     const json = editor.getJSON()
@@ -270,14 +291,14 @@ function PersistentTableEditor({
     if (jsonStr === lastSavedJSON.current) return
     lastSavedJSON.current = jsonStr
     try {
-      const next = tiptapToTable(json)
+      const next = tiptapToTable(json, content)
       const updated = await updateElementText(docId, slideN, elementId, next)
       studioStore.setTextPayload(elementId, updated)
       if (updated.kind === "table") onContentChange(updated)
     } catch (e) {
       console.error("[Percy] table save failed:", e)
     }
-  }, [editor, docId, slideN, elementId, onContentChange])
+  }, [editor, docId, slideN, elementId, onContentChange, content])
 
   // Debounced auto-save on every transaction (Google Sheets-style live save).
   useEffect(() => {

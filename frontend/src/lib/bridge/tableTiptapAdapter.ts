@@ -125,7 +125,27 @@ function dashToCss(dash: string | null): string | null {
 
 // ── Tiptap → Bridge ──────────────────────────────────────────────────────────
 
-export function tiptapToTable(json: JSONContent): TableTextContent {
+/**
+ * Convert Tiptap JSON back to the Bridge TableTextContent.
+ *
+ * The `prevContent` argument is the table content BEFORE the user edited it.
+ * We use it to preserve `row_heights` and `column_widths` proportions across
+ * edits — the Bridge model is the source of truth for table dimensions, and
+ * we only adjust the arrays when rows/cols were added or removed.
+ *
+ * Rules:
+ *   - If row count unchanged → preserve prevContent.row_heights as-is.
+ *   - If a row was added    → append the average row height for the new row.
+ *   - If a row was removed  → truncate. (Can't tell which row, default to
+ *     dropping the last; in practice Tiptap commands like deleteRow operate
+ *     on the active cell which the caller doesn't pass through here. Future
+ *     improvement: track row identity via Tiptap node attrs.)
+ *   - Same logic for columns / column_widths.
+ */
+export function tiptapToTable(
+  json: JSONContent,
+  prevContent?: TableTextContent,
+): TableTextContent {
   const tableNode = (json.content ?? []).find((c) => c.type === "table")
   if (!tableNode) {
     return { kind: "table", rows: 0, cols: 0, properties: null, cells: [] }
@@ -135,13 +155,39 @@ export function tiptapToTable(json: JSONContent): TableTextContent {
     const cells = row.content ?? []
     return cells.map((cell, c) => cellFromTiptap(cell, r, c))
   })
+  const newRowCount = grid.length
+  const newColCount = grid[0]?.length ?? 0
+
+  // Carry over the proportions from the previous content.
+  const prevRH = prevContent?.row_heights ?? []
+  const prevCW = prevContent?.column_widths ?? []
+
+  const row_heights = reconcileDimensions(prevRH, newRowCount)
+  const column_widths = reconcileDimensions(prevCW, newColCount)
+
   return {
     kind: "table",
-    rows: grid.length,
-    cols: grid[0]?.length ?? 0,
-    properties: null,
+    rows: newRowCount,
+    cols: newColCount,
+    column_widths: column_widths.length > 0 ? column_widths : undefined,
+    row_heights:   row_heights.length   > 0 ? row_heights   : undefined,
+    properties: prevContent?.properties ?? null,
     cells: grid,
   }
+}
+
+/** Reconcile a dimensions array (row_heights or column_widths) with a new count.
+ *  Keeps prefix, appends average for new slots, truncates for removed slots. */
+function reconcileDimensions(prev: number[], newCount: number): number[] {
+  if (newCount === 0) return []
+  if (prev.length === 0) return []   // no prior preference → empty (auto-fit)
+  if (prev.length === newCount) return [...prev]
+  if (prev.length > newCount) return prev.slice(0, newCount)
+  // newCount > prev.length: append average for new slots
+  const avg = prev.reduce((a, b) => a + b, 0) / prev.length
+  const out = [...prev]
+  while (out.length < newCount) out.push(avg)
+  return out
 }
 
 function cellFromTiptap(node: JSONContent, row: number, col: number): TableCellData {
