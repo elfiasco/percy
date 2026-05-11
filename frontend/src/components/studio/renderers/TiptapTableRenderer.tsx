@@ -514,6 +514,7 @@ function RowResizeHandles({
           onPointerDown={(e) => onPointerDown(e, b.idx)}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
+          onMouseDown={(e) => onPointerDown(e as unknown as React.PointerEvent, b.idx)}
           style={{
             position: "absolute",
             top:    b.top + b.height - 3,
@@ -521,13 +522,15 @@ function RowResizeHandles({
             right:  0,
             height: 6,
             cursor: "ns-resize",
-            zIndex: 5,
-            // Subtle hover affordance (transparent normally; light blue on hover)
-            background: "transparent",
+            zIndex: 7,
+            // Faintly visible bar — strong on hover. Backgroundcolor with tiny
+            // alpha keeps it hit-testable even when "invisible".
+            background: "rgba(26,115,232,0.001)",
+            pointerEvents: "all",
             transition: "background 80ms",
           }}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "rgba(26,115,232,0.18)" }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = "transparent" }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "rgba(26,115,232,0.25)" }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = "rgba(26,115,232,0.001)" }}
         />
       ))}
     </>
