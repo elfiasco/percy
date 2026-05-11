@@ -224,25 +224,37 @@ function PersistentTableEditor({
         ;(tr as HTMLElement).style.height = `${perRow}px`
       })
     }
+    // Debounced version for mutation events — gives Tiptap time to flush DOM
+    let pending: ReturnType<typeof setTimeout> | null = null
+    const scheduleResize = () => {
+      if (pending) clearTimeout(pending)
+      pending = setTimeout(resizeRows, 50)
+    }
 
-    // Initial sizing — run after Tiptap has rendered the table
+    // Initial sizing
     requestAnimationFrame(resizeRows)
-    // Also when wrapper resizes (element resize / window resize / zoom change)
+    // Wrapper resize (element resize / zoom)
     const ro = new ResizeObserver(resizeRows)
     ro.observe(wrapper)
-    // And after each editor transaction (row added/removed) — double rAF so
-    // we run AFTER Tiptap has flushed its DOM update.
-    const onUpdate = () => requestAnimationFrame(() => requestAnimationFrame(resizeRows))
+    // Tiptap transactions (row/column changes)
+    const onUpdate = () => scheduleResize()
     editor.on("update", onUpdate)
-    // Also observe DOM mutations on the editor root so a programmatic
-    // contextmenu insert (which Tiptap may not always 'update' for) still
-    // triggers a re-fit.
-    const mo = new MutationObserver(() => requestAnimationFrame(resizeRows))
+    // DOM mutations on the table (catches inserts/deletes from context menu)
+    const mo = new MutationObserver((mutations) => {
+      // Only re-fit if rows changed (added/removed). Style mutations from
+      // our own height-setting shouldn't trigger more resizes.
+      const rowChange = mutations.some((m) =>
+        Array.from(m.addedNodes).some((n) => (n as HTMLElement).tagName === "TR") ||
+        Array.from(m.removedNodes).some((n) => (n as HTMLElement).tagName === "TR")
+      )
+      if (rowChange) scheduleResize()
+    })
     mo.observe(editor.view.dom as HTMLElement, { childList: true, subtree: true })
     return () => {
       ro.disconnect()
       mo.disconnect()
       editor.off("update", onUpdate)
+      if (pending) clearTimeout(pending)
     }
   }, [editor])
 
