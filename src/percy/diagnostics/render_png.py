@@ -42,6 +42,32 @@ from typing import Any
 
 import matplotlib
 matplotlib.use("Agg")  # headless — no GUI window needed
+# Prefer Liberation Sans (metrically identical to Arial) over matplotlib's
+# default DejaVu Sans. Without this, "Arial"-named fonts in bridge data
+# fall back to DejaVu which is ~5% wider than Arial — causing wrap-point
+# differences vs the browser-side Studio rendering that uses real Arial.
+# Liberation Sans matches Arial's metrics exactly, so when both renderers
+# use it the text layout stays in lockstep. Falls back gracefully if the
+# Liberation fonts aren't installed (e.g. local dev on Windows/Mac).
+matplotlib.rcParams["font.sans-serif"] = [
+    "Liberation Sans",     # closest Arial-equivalent shipped with fonts-liberation
+    "Liberation Sans Narrow",
+    "Arial",               # native on Windows/Mac
+    "DejaVu Sans",         # matplotlib bundled fallback
+    "sans-serif",
+]
+matplotlib.rcParams["font.serif"] = [
+    "Liberation Serif",
+    "Times New Roman",
+    "DejaVu Serif",
+    "serif",
+]
+matplotlib.rcParams["font.monospace"] = [
+    "Liberation Mono",
+    "Courier New",
+    "DejaVu Sans Mono",
+    "monospace",
+]
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
@@ -2429,6 +2455,34 @@ def _get_measure_renderer() -> Any:
     return _measure_tls.renderer
 
 
+# Liberation Sans is metrically identical to Arial; when Arial isn't installed
+# (Linux containers without ms-corefonts), we prefer Liberation over matplotlib's
+# default DejaVu Sans (which is ~5% wider). Aliases map common font requests to
+# their Liberation equivalent. Resolved at first use.
+_FONT_ALIAS_FOR_LINUX = {
+    "arial":          "Liberation Sans",
+    "helvetica":      "Liberation Sans",
+    "verdana":        "Liberation Sans",
+    "tahoma":         "Liberation Sans",
+    "calibri":        "Liberation Sans",
+    "times":          "Liberation Serif",
+    "times new roman":"Liberation Serif",
+    "courier":        "Liberation Mono",
+    "courier new":    "Liberation Mono",
+}
+
+
+@functools.lru_cache(maxsize=2)
+def _liberation_available() -> bool:
+    """Cached check: is Liberation Sans installed and findable by font_manager?"""
+    import matplotlib.font_manager as fm
+    try:
+        p = fm.findfont(fm.FontProperties(family="Liberation Sans"), fallback_to_default=False)
+        return bool(p) and "liberation" in p.lower()
+    except Exception:
+        return False
+
+
 @functools.lru_cache(maxsize=512)
 def _resolve_font_path(family: str, bold: bool, italic: bool) -> str:
     """
@@ -2436,19 +2490,54 @@ def _resolve_font_path(family: str, bold: bool, italic: bool) -> str:
 
     Caching this separately keeps the per-word _text_width_in cache lean and
     suppresses the noisy "Font family not found" warnings in one place.
+
+    Linux Arial-fallback: when the requested family is Arial-family (or other
+    metrically-Arial Microsoft fonts) and Arial itself isn't installed on this
+    host, use Liberation Sans instead of letting matplotlib drop us into
+    DejaVu Sans (which has noticeably wider glyph metrics).
     """
     import logging
     import matplotlib.font_manager as fm
-    prop = fm.FontProperties(
-        family=family,
-        weight="bold" if bold else "normal",
-        style="italic" if italic else "normal",
-    )
+
+    # Try the requested family first with no fallback. If it doesn't actually
+    # resolve to the requested family, see if we can do better with an alias.
     fm_log = logging.getLogger("matplotlib.font_manager")
     prev = fm_log.level
-    fm_log.setLevel(logging.ERROR)  # suppress "not found" chatter
+    fm_log.setLevel(logging.ERROR)
     try:
-        return fm.findfont(prop)
+        # First attempt: exact request, no fallback. Tells us if Arial (or
+        # whatever) is actually installed locally.
+        try:
+            exact = fm.findfont(fm.FontProperties(
+                family=family,
+                weight="bold" if bold else "normal",
+                style="italic" if italic else "normal",
+            ), fallback_to_default=False)
+            if exact and family.lower() in exact.lower():
+                return exact
+        except Exception:
+            pass
+
+        # Fallback path: requested family wasn't a real match. Use Liberation
+        # alias when applicable AND Liberation is installed, else let matplotlib
+        # default (DejaVu) win.
+        alias = _FONT_ALIAS_FOR_LINUX.get(family.lower())
+        if alias and _liberation_available():
+            try:
+                return fm.findfont(fm.FontProperties(
+                    family=alias,
+                    weight="bold" if bold else "normal",
+                    style="italic" if italic else "normal",
+                ), fallback_to_default=False)
+            except Exception:
+                pass
+
+        # Last resort: matplotlib default fallback chain.
+        return fm.findfont(fm.FontProperties(
+            family=family,
+            weight="bold" if bold else "normal",
+            style="italic" if italic else "normal",
+        ))
     finally:
         fm_log.setLevel(prev)
 
