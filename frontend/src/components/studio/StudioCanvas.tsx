@@ -518,7 +518,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
             height: `${zoom * 85}vh`,
             minWidth: 0,
             overflow: rulerOn ? "visible" : "hidden",
-            backgroundColor: "white",
+            backgroundColor: bgColor ?? "white",
             // Scale factor: how many vh units equal one typographic point,
             // given this slide's height in inches. Used by BridgeTextStyle and
             // BridgeParagraph to render font/spacing in physical canvas units
