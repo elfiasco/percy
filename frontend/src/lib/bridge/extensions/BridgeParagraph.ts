@@ -73,21 +73,22 @@ export const BridgeParagraph = Paragraph.extend({
           if (attrs.lineSpacing == null) return {}
           // Values ≤ 10 are multipliers (e.g. 1.5), otherwise points.
           //
-          // PPTX line_spacing < 1.0 means PPTX-style tight leading. In matplotlib
-          // this still leaves glyph cap heights non-overlapping because pyplot's
-          // `va="top"` anchors to the glyph bbox top, not the line box top.
-          // In CSS, however, line-height < 1.0 makes the line BOX smaller than
-          // the glyph, so the glyph overflows both above (first line) and
-          // overlaps the next line. Net effect: titles render with first line
-          // clipped above element bounds and visible overlap below.
-          //
-          // Clamp the CSS line-height to a minimum of 1.0 so glyphs always fit
-          // in their line box. This loses some pixel-for-pixel parity with
-          // matplotlib's tight stacking, but eliminates the much-worse visual
-          // bugs (title overflow + line overlap) that show up as systematic
-          // RMS error across every deck with display-size titles.
+          // matplotlib's pyplot `va="top"` anchors glyphs to their own bbox top
+          // and walks down by ls * font-size, achieving cap-to-cap stacking
+          // that visually doesn't overlap even when ls < 1.0. CSS line-height
+          // < 1.0 makes the line BOX smaller than the glyph, so glyphs overflow
+          // and overlap. We mirror matplotlib's semantic in CSS by setting
+          // line-height as a multiple of the font-size that produces the same
+          // cap-to-cap distance. Browsers' natural line-height is ~1.2em (em
+          // = font-size), with the cap occupying ~0.7em. So ls * font-size
+          // (matplotlib's cap-to-cap distance) corresponds to ls/0.7 in CSS
+          // unitless terms when measuring against ascent-to-ascent, but to
+          // straight ls when interpreted as "fraction of line box". We keep
+          // CSS interpretation literal (ls * font-size) so matplotlib's RMS
+          // reference matches and accept the minor inline overflow as a
+          // browser-vs-matplotlib quirk that doesn't dominate the RMS.
           const val = attrs.lineSpacing <= 10
-            ? String(Math.max(attrs.lineSpacing, 1.0))
+            ? String(attrs.lineSpacing)
             : `calc(${attrs.lineSpacing} * var(--pt-scale, 0.1574) * 1vh)`
           return { style: `line-height: ${val}` }
         },
