@@ -761,7 +761,14 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
             {/* element overlays — each carries its own render PNG */}
             {[...elements].sort((a, b) => a.z_index - b.z_index).map((el) => (
               <ElementOverlay
-                key={el.id}
+                // Include slideN in the key so element id collisions across
+                // slides (slide-direct "8" on multiple slides, layout-derived
+                // "l11" etc.) force a fresh mount of ElementOverlay on
+                // navigation. Without this, the renderer component instance
+                // persists with the previous slide's cached text payload —
+                // visible as "! text load failed" overlays atop the prior
+                // slide's content when the new slide doesn't contain that id.
+                key={`${slideN}-${el.id}`}
                 element={el}
                 selected={selectedIds.has(el.id)}
                 isMultiSelected={selectedIds.size > 1 && selectedIds.has(el.id)}
