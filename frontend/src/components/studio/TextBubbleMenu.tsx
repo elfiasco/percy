@@ -95,6 +95,27 @@ export default function TextBubbleMenu({ editor }: { editor: Editor }) {
 
         <Divider />
 
+        {/* Lists (Google Slides parity) */}
+        <Btn label="•" title="Bulleted list"
+          active={editor.isActive("bulletList")}
+          onClick={() => editor.chain().focus().toggleBulletList().run()} />
+        <Btn label="1." title="Numbered list"
+          active={editor.isActive("orderedList")}
+          onClick={() => editor.chain().focus().toggleOrderedList().run()} />
+
+        <Divider />
+
+        {/* Link (Ctrl+K equivalent) — quick action without leaving the bubble */}
+        <Btn label="🔗" title="Insert / edit link (Ctrl+K)"
+          active={editor.isActive("link")}
+          onClick={() => {
+            // Dispatch the same shortcut as the Studio's Ctrl+K handler
+            const evt = new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true })
+            document.dispatchEvent(evt)
+          }} />
+
+        <Divider />
+
         {/* Font size stepper */}
         <button
           type="button"
