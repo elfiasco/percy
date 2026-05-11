@@ -235,20 +235,22 @@ async function screenshotSlides(browser, projId, docId, slideNums, outDir) {
       try { await thumb.first().scrollIntoViewIfNeeded({ timeout: 2000 }) }
       catch { /* tolerate */ }
       await thumb.first().click()
-      await page.waitForTimeout(2000)
-      // Verify the canvas actually navigated by checking that the canvas
-      // header / data attribute reflects the new slide number. Fall back to
-      // keyboard nav if click did nothing.
-      const got = await page.evaluate(() => {
-        const c = document.querySelector("[data-slide-canvas='true']")
-        return c?.getAttribute("data-slide-n") || null
-      })
-      if (String(got) !== String(n)) {
-        // Click didn't change slide — log warning. Studio doesn't expose a
-        // global goto, so we rely on the click. If this happens repeatedly,
-        // the test is silently scoring the wrong slide.
-        console.warn(`    slide ${n}: NAVIGATION FAILED (canvas still on slide ${got})`)
+      // Wait for the canvas's data-slide-n to update — proves the React store
+      // committed the slide change AND the new canvas is mounted. Fall back to
+      // a fixed 2s wait if the attribute never matches (older deploy / bug).
+      try {
+        await page.waitForFunction(
+          (target) => {
+            const c = document.querySelector("[data-slide-canvas='true']")
+            return c && c.getAttribute("data-slide-n") === String(target)
+          },
+          n,
+          { timeout: 8000 }
+        )
+      } catch {
+        console.warn(`    slide ${n}: nav attribute didn't update in 8s — likely showing stale slide`)
       }
+      await page.waitForTimeout(800)
     }
 
     // Wait for canvas
