@@ -6,6 +6,7 @@ import type { ElementStyleData, ParagraphsTextContent } from "../../../lib/studi
 import { updateElementText } from "../../../lib/studioApi"
 import { useStudioTextStylePayload } from "../../../lib/studio/payloadHooks"
 import { studioStore, useEditingElementId } from "../../../lib/studio/store"
+import { commitElementStyle } from "../../../lib/studio/commands"
 import { paragraphsToTiptap, tiptapToParagraphs } from "../../../lib/bridge/tiptapAdapter"
 import { bridgeExtensions } from "../../../lib/bridge/extensions"
 import { setActiveTiptapEditor } from "../../../lib/bridge/activeEditor"
@@ -487,8 +488,6 @@ function BridgeShapeRendererImpl({
   return (
     <div
       style={{ width: "100%", height: "100%", position: "relative", cursor: selected ? "text" : undefined }}
-      // ElementOverlay's onDoubleClick fires the edit signal atomically.
-      // Single-click on already-selected shape triggers the same path.
       onClick={() => { if (selected) studioStore.setEditingElement(element.id) }}
     >
       {/* SVG shape body */}
@@ -504,7 +503,177 @@ function BridgeShapeRendererImpl({
           />
         </div>
       )}
+      {/* Inline toolbar (Google Slides pattern): quick fill / border / shadow */}
+      {selected && !editing && style && (
+        <ShapeInlineToolbar elementId={element.id} style={style} />
+      )}
     </div>
+  )
+}
+
+// ── Shape inline toolbar (Google Slides parity) ──────────────────────────────
+// Quick-access fill, border, and shadow toggles. Mirrors the chart and image
+// toolbar pattern: floating bar above selected shape with popovers for color.
+
+function ShapeInlineToolbar({ elementId, style }: { elementId: string; style: ElementStyleData }) {
+  return (
+    <div
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: "absolute", top: 4, left: 4, zIndex: 6,
+        display: "flex", gap: 4,
+        background: "rgba(255,255,255,0.96)",
+        border: "1px solid #dadce0", borderRadius: 6,
+        padding: 3,
+        boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
+        fontFamily: "'Google Sans', system-ui, sans-serif",
+        backdropFilter: "blur(6px)",
+        fontSize: 11,
+      }}
+    >
+      <ShapeColorPicker
+        elementId={elementId}
+        currentColor={style.fill_color}
+        label="Fill"
+        field="fill_color"
+      />
+      <ShapeColorPicker
+        elementId={elementId}
+        currentColor={style.line_color}
+        label="Border"
+        field="line_color"
+      />
+      <ShapeShadowToggle elementId={elementId} on={style.shadow_on ?? false} />
+    </div>
+  )
+}
+
+const SHAPE_PALETTE = [
+  "#3366CC", "#DC3912", "#FF9900", "#109618", "#990099", "#0099C6",
+  "#DD4477", "#66AA00", "#FFFFFF", "#000000", "#80868b", "#dadce0",
+]
+
+function ShapeColorPicker({ elementId, currentColor, label, field }: {
+  elementId:    string
+  currentColor: string | null
+  label:        string
+  field:        "fill_color" | "line_color"
+}) {
+  const [open, setOpen] = useState(false)
+  const swatch = currentColor && /^#[0-9a-fA-F]{6}$/.test(currentColor) ? currentColor : "#fff"
+  return (
+    <div style={{ position: "relative" }}>
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v) }}
+        onMouseDown={(e) => e.stopPropagation()}
+        title={`Change ${label.toLowerCase()}`}
+        style={{
+          padding: "2px 8px", display: "flex", alignItems: "center", gap: 4,
+          background: open ? "#e8f0fe" : "transparent",
+          border: open ? "1px solid #1a73e8" : "1px solid transparent",
+          color: "#3c4043", borderRadius: 3, fontSize: 11,
+          fontFamily: "inherit", cursor: "pointer",
+        }}
+      >
+        <span style={{
+          width: 14, height: 14,
+          background: swatch === "#fff" ? "transparent" : swatch,
+          border: swatch === "#fff" ? "1px dashed #80868b" : "1px solid rgba(0,0,0,0.2)",
+          borderRadius: 2, display: "inline-block",
+        }} />
+        <span>{label}</span>
+      </button>
+      {open && (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 8 }} onClick={() => setOpen(false)} />
+          <div
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "absolute", top: 30, left: 0, zIndex: 10,
+              background: "#fff", border: "1px solid #dadce0", borderRadius: 6,
+              boxShadow: "0 4px 14px rgba(0,0,0,0.15)",
+              padding: 8, minWidth: 180, fontFamily: "inherit",
+            }}
+          >
+            <div style={{ fontSize: 10, color: "#5f6368", marginBottom: 4, fontWeight: 500 }}>
+              {label} color
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 3 }}>
+              {SHAPE_PALETTE.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => {
+                    commitElementStyle(elementId, { [field]: c } as Partial<ElementStyleData>)
+                      .catch((err) => console.error("[Percy] shape color save failed:", err))
+                    setOpen(false)
+                  }}
+                  title={c}
+                  style={{
+                    width: 22, height: 22, padding: 0,
+                    background: c, cursor: "pointer",
+                    border: currentColor?.toLowerCase() === c.toLowerCase() ? "2px solid #1a73e8" : "1px solid #dadce0",
+                    borderRadius: 3,
+                  }}
+                />
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+              <input
+                type="color"
+                value={swatch === "#fff" ? "#3366CC" : swatch}
+                onChange={(e) => {
+                  commitElementStyle(elementId, { [field]: e.target.value } as Partial<ElementStyleData>)
+                    .catch((err) => console.error(err))
+                }}
+                style={{ width: 28, height: 22, padding: 0, border: "1px solid #dadce0", borderRadius: 3, cursor: "pointer" }}
+                title="Custom color"
+              />
+              <button
+                onClick={() => {
+                  commitElementStyle(elementId, { [field]: null } as Partial<ElementStyleData>)
+                    .catch((err) => console.error(err))
+                  setOpen(false)
+                }}
+                style={{
+                  flex: 1, fontSize: 11, padding: "2px 8px",
+                  background: "#f1f3f4", border: "1px solid #dadce0", borderRadius: 3,
+                  cursor: "pointer", color: "#3c4043", fontFamily: "inherit",
+                }}
+              >
+                None
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function ShapeShadowToggle({ elementId, on }: { elementId: string; on: boolean }) {
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation()
+        commitElementStyle(elementId, { shadow_on: !on })
+          .catch((err) => console.error("[Percy] shadow toggle failed:", err))
+      }}
+      onMouseDown={(e) => e.stopPropagation()}
+      title="Toggle drop shadow"
+      style={{
+        padding: "2px 8px",
+        background: on ? "#e8f0fe" : "transparent",
+        border: on ? "1px solid #1a73e8" : "1px solid transparent",
+        color: on ? "#1a73e8" : "#3c4043",
+        borderRadius: 3, fontSize: 11,
+        fontFamily: "'Google Sans', system-ui, sans-serif",
+        cursor: "pointer",
+      }}
+    >
+      Shadow
+    </button>
   )
 }
 
