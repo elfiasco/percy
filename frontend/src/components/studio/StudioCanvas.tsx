@@ -746,16 +746,34 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
               const maxR = Math.max(...sel.map((e) => e.left_pct + e.width_pct))
               const maxB = Math.max(...sel.map((e) => e.top_pct + e.height_pct))
               return (
-                <div
-                  className="absolute pointer-events-none"
-                  style={{
-                    left: `${minL}%`, top: `${minT}%`,
-                    width: `${maxR - minL}%`, height: `${maxB - minT}%`,
-                    border: "1.5px dashed #1a73e8",
-                    zIndex: 10000,
-                    boxSizing: "border-box",
-                  }}
-                />
+                <>
+                  <div
+                    className="absolute pointer-events-none"
+                    style={{
+                      left: `${minL}%`, top: `${minT}%`,
+                      width: `${maxR - minL}%`, height: `${maxB - minT}%`,
+                      border: "1.5px dashed #1a73e8",
+                      zIndex: 10000,
+                      boxSizing: "border-box",
+                    }}
+                  />
+                  <MultiSelectToolbar
+                    count={selectedIds.size}
+                    style={{
+                      position: "absolute",
+                      left: `${minL}%`, top: `${minT}%`,
+                      transform: "translateY(-40px)",
+                      zIndex: 10001,
+                    }}
+                    onAlign={(a) => {
+                      // Hook into Studio's handleAlignElements via custom event
+                      window.dispatchEvent(new CustomEvent("percy:multi-align", { detail: { alignment: a } }))
+                    }}
+                    onGroup={() => {
+                      window.dispatchEvent(new CustomEvent("percy:multi-group"))
+                    }}
+                  />
+                </>
               )
             })()}
 
@@ -1108,6 +1126,82 @@ function ZoomControl({ zoom, setZoom }: { zoom: number; setZoom: (fn: (z: number
       )}
     </div>
   )
+}
+
+// ── Multi-select alignment/distribute toolbar (Figma/Slides parity) ────────
+// Floats above the multi-select bounding box. Provides quick access to
+// align-left/center/right/top/middle/bottom, distribute-horizontal/vertical,
+// and group. Dispatches custom events that Studio.tsx listens for.
+
+function MultiSelectToolbar({
+  count, style, onAlign, onGroup,
+}: {
+  count: number
+  style:  React.CSSProperties
+  onAlign: (alignment: string) => void
+  onGroup: () => void
+}) {
+  return (
+    <div
+      style={{
+        ...style,
+        display: "flex", gap: 2,
+        background: "#fff",
+        border: "1px solid #dadce0", borderRadius: 6,
+        padding: 3,
+        boxShadow: "0 2px 8px rgba(0,0,0,0.10)",
+        fontFamily: "'Google Sans', system-ui, sans-serif",
+        fontSize: 11, whiteSpace: "nowrap",
+        pointerEvents: "all",
+      }}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <span style={{ fontSize: 11, color: "#5f6368", padding: "4px 8px 4px 6px", fontWeight: 500 }}>
+        {count} selected
+      </span>
+      <MSDiv />
+      <MSBtn icon="⫷" title="Align left"    onClick={() => onAlign("left")} />
+      <MSBtn icon="⊟" title="Align center"  onClick={() => onAlign("center")} />
+      <MSBtn icon="⫸" title="Align right"   onClick={() => onAlign("right")} />
+      <MSDiv />
+      <MSBtn icon="⫳" title="Align top"     onClick={() => onAlign("top")} />
+      <MSBtn icon="⊟" title="Align middle"  onClick={() => onAlign("middle")} />
+      <MSBtn icon="⫴" title="Align bottom"  onClick={() => onAlign("bottom")} />
+      <MSDiv />
+      <MSBtn icon="↔" title="Distribute horizontally" onClick={() => onAlign("distribute_h")} />
+      <MSBtn icon="↕" title="Distribute vertically"   onClick={() => onAlign("distribute_v")} />
+      <MSDiv />
+      <MSBtn icon="◳" title="Group (⌘G)"   onClick={onGroup} />
+    </div>
+  )
+}
+
+function MSBtn({ icon, title, onClick }: { icon: string; title: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      onMouseDown={(e) => e.stopPropagation()}
+      title={title}
+      style={{
+        width: 26, height: 24,
+        padding: 0,
+        background: "transparent",
+        border: "1px solid transparent",
+        color: "#3c4043", fontSize: 13,
+        borderRadius: 3, cursor: "pointer",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontFamily: "inherit",
+      }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#f1f3f4" }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent" }}
+    >
+      {icon}
+    </button>
+  )
+}
+function MSDiv() {
+  return <div style={{ width: 1, background: "#e0e0e0", margin: "2px 2px" }} />
 }
 
 // ── Google Slides-style context menu ─────────────────────────────────────────

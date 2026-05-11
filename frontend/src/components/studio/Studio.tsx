@@ -974,6 +974,22 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
     } catch (e) { console.error("copy-to-slide failed:", e) }
   }, [doc.doc_id, markDirty])
 
+  // Listen for the floating multi-select toolbar's events
+  useEffect(() => {
+    const onAlign = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { alignment: string } | undefined
+      if (detail?.alignment) handleAlignElements(detail.alignment)
+    }
+    const onGroup = () => handleGroupElements()
+    window.addEventListener("percy:multi-align", onAlign)
+    window.addEventListener("percy:multi-group", onGroup)
+    return () => {
+      window.removeEventListener("percy:multi-align", onAlign)
+      window.removeEventListener("percy:multi-group", onGroup)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // ── align multiple selected elements ─────────────────────────────────────
   const handleAlignElements = useCallback(async (alignment: string) => {
     const ids = [...multiSelectIdsRef.current]
