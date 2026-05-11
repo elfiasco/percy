@@ -509,26 +509,51 @@ function RowResizeHandles({
   return (
     <>
       {rowBounds.slice(0, -1).map((b) => (
-        <div
+        <RowHandleDiv
           key={b.idx}
-          onMouseDown={(e) => handleMouseDown(e, b.idx)}
-          style={{
-            position: "absolute",
-            top:    b.top + b.height - 3,
-            left:   0,
-            right:  0,
-            height: 6,
-            cursor: "ns-resize",
-            zIndex: 7,
-            background: "rgba(26,115,232,0.001)",
-            pointerEvents: "all",
-            transition: "background 80ms",
-          }}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "rgba(26,115,232,0.25)" }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = "rgba(26,115,232,0.001)" }}
+          rowIdx={b.idx}
+          top={b.top + b.height - 3}
+          onStart={handleMouseDown}
         />
       ))}
     </>
+  )
+}
+
+/** Single drag handle that wires its onmousedown via a ref-callback so the
+ *  native listener fires even when React synthetic events are flaky under
+ *  test harnesses. */
+function RowHandleDiv({
+  rowIdx, top, onStart,
+}: {
+  rowIdx: number
+  top:    number
+  onStart: (e: MouseEvent | React.MouseEvent, rowIdx: number) => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const handler = (e: MouseEvent) => onStart(e, rowIdx)
+    el.addEventListener("mousedown", handler)
+    return () => el.removeEventListener("mousedown", handler)
+  }, [rowIdx, onStart])
+  return (
+    <div
+      ref={ref}
+      style={{
+        position: "absolute",
+        top, left: 0, right: 0,
+        height: 6,
+        cursor: "ns-resize",
+        zIndex: 7,
+        background: "rgba(26,115,232,0.001)",
+        pointerEvents: "all",
+        transition: "background 80ms",
+      }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "rgba(26,115,232,0.25)" }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = "rgba(26,115,232,0.001)" }}
+    />
   )
 }
 
