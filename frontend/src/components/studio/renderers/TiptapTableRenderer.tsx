@@ -309,6 +309,18 @@ function PersistentTableEditor({
       onPointerDown={selected ? (e) => e.stopPropagation() : undefined}
       onMouseDown={selected ? (e) => e.stopPropagation() : undefined}
       onClick={selected ? (e) => e.stopPropagation() : undefined}
+      onContextMenu={selected ? (e) => {
+        // Only handle right-clicks INSIDE the table; outside the table area
+        // (rare since editor fills wrapper) fall through to browser default.
+        const target = e.target as HTMLElement
+        if (target.closest("table")) {
+          e.preventDefault()
+          e.stopPropagation()
+          window.dispatchEvent(new CustomEvent("percy:table-cell-ctx", {
+            detail: { x: e.clientX, y: e.clientY, elementId },
+          }))
+        }
+      } : undefined}
       style={{
         ...containerStyle,
         cursor:   selected ? "text" : "default",
@@ -316,6 +328,7 @@ function PersistentTableEditor({
         position: "relative",
       }}
     >
+      {selected && <TableCellContextMenu editor={editor} elementId={elementId} />}
       {selected && <TableMergeSplitHint editor={editor} />}
       {selected && <TextBubbleMenu editor={editor} />}
       <EditorContent editor={editor} onBlur={save} />
@@ -324,6 +337,125 @@ function PersistentTableEditor({
 }
 
 // ── Merge/split toolbar hint (shown when cells are selected) ────────────────
+
+// ── Right-click table cell context menu (Google Sheets parity) ─────────────
+// Listens for the global 'percy:table-cell-ctx' event dispatched by the
+// renderer's onContextMenu and shows a Material Design menu at the click
+// position. Items execute Tiptap table commands via the editor chain.
+
+function TableCellContextMenu({
+  editor, elementId,
+}: { editor: ReturnType<typeof useEditor>; elementId: string }) {
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
+
+  useEffect(() => {
+    const onShow = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { x: number; y: number; elementId: string }
+      if (detail?.elementId !== elementId) return
+      setPos({ x: detail.x, y: detail.y })
+    }
+    window.addEventListener("percy:table-cell-ctx", onShow)
+    return () => window.removeEventListener("percy:table-cell-ctx", onShow)
+  }, [elementId])
+
+  useEffect(() => {
+    if (!pos) return
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement
+      if (!target.closest("[data-table-ctx]")) setPos(null)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setPos(null) }
+    document.addEventListener("mousedown", onDown)
+    document.addEventListener("keydown", onKey)
+    return () => {
+      document.removeEventListener("mousedown", onDown)
+      document.removeEventListener("keydown", onKey)
+    }
+  }, [pos])
+
+  if (!pos || !editor) return null
+
+  const exec = (fn: () => void) => () => { fn(); setPos(null) }
+
+  // Capabilities query Tiptap can answer right now
+  const canMerge       = editor.can().mergeCells()
+  const canSplit       = editor.can().splitCell()
+  const canDeleteRow   = editor.can().deleteRow()
+  const canDeleteCol   = editor.can().deleteColumn()
+  const canDeleteTable = editor.can().deleteTable()
+
+  interface Item { label: string; shortcut?: string; onClick: () => void; disabled?: boolean; danger?: boolean }
+  const items: (Item | "divider")[] = [
+    { label: "Cut",        shortcut: "⌘X", onClick: exec(() => { document.execCommand("cut") }) },
+    { label: "Copy",       shortcut: "⌘C", onClick: exec(() => { document.execCommand("copy") }) },
+    { label: "Paste",      shortcut: "⌘V", onClick: exec(() => { document.execCommand("paste") }) },
+    "divider",
+    { label: "Insert row above",   onClick: exec(() => editor.chain().focus().addRowBefore().run()) },
+    { label: "Insert row below",   onClick: exec(() => editor.chain().focus().addRowAfter().run()) },
+    { label: "Insert column left", onClick: exec(() => editor.chain().focus().addColumnBefore().run()) },
+    { label: "Insert column right",onClick: exec(() => editor.chain().focus().addColumnAfter().run()) },
+    "divider",
+    { label: "Delete row",     onClick: exec(() => editor.chain().focus().deleteRow().run()),    disabled: !canDeleteRow },
+    { label: "Delete column",  onClick: exec(() => editor.chain().focus().deleteColumn().run()), disabled: !canDeleteCol },
+    "divider",
+    { label: "Merge cells",      shortcut: "⌘M",  onClick: exec(() => editor.chain().focus().mergeCells().run()), disabled: !canMerge },
+    { label: "Split cell",       shortcut: "⌘⇧M", onClick: exec(() => editor.chain().focus().splitCell().run()),  disabled: !canSplit },
+    { label: "Distribute rows",   onClick: exec(() => {
+      // Tiptap doesn't have native "distribute rows" — let runtime ResizeObserver re-equalize
+      const root = editor.view.dom as HTMLElement
+      root.querySelectorAll("tr").forEach((tr) => { (tr as HTMLElement).style.removeProperty("height") })
+      // The ResizeObserver in PersistentTableEditor will pick this up
+      window.dispatchEvent(new Event("resize"))
+    }) },
+    "divider",
+    { label: "Delete table", onClick: exec(() => editor.chain().focus().deleteTable().run()), danger: true, disabled: !canDeleteTable },
+  ]
+
+  const left = Math.min(pos.x, window.innerWidth  - 240)
+  const top  = Math.min(pos.y, window.innerHeight - 420)
+
+  return (
+    <div
+      data-table-ctx="true"
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: "fixed", left, top, zIndex: 100000,
+        background: "#fff", border: "1px solid #dadce0", borderRadius: 4,
+        boxShadow: "0 2px 10px rgba(0,0,0,0.18), 0 1px 3px rgba(0,0,0,0.10)",
+        minWidth: 220, padding: "4px 0",
+        fontFamily: "'Google Sans', system-ui, sans-serif",
+        fontSize: 13, color: "#3c4043",
+      }}
+    >
+      {items.map((item, i) =>
+        item === "divider" ? (
+          <div key={i} style={{ height: 1, background: "#e0e0e0", margin: "4px 0" }} />
+        ) : (
+          <button
+            key={i}
+            onClick={item.disabled ? undefined : item.onClick}
+            style={{
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+              width: "100%", padding: "6px 16px",
+              background: "none", border: "none",
+              color: item.disabled ? "#bdc1c6" : item.danger ? "#d93025" : "#3c4043",
+              fontSize: 13, lineHeight: "20px",
+              fontFamily: "inherit", textAlign: "left",
+              cursor: item.disabled ? "default" : "pointer",
+              opacity: item.disabled ? 0.6 : 1,
+            }}
+            onMouseEnter={(e) => { if (!item.disabled) (e.currentTarget as HTMLButtonElement).style.background = "#f1f3f4" }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "none" }}
+          >
+            <span>{item.label}</span>
+            {item.shortcut && <span style={{ fontSize: 11, color: "#80868b", marginLeft: 16 }}>{item.shortcut}</span>}
+          </button>
+        )
+      )}
+    </div>
+  )
+}
 
 function TableMergeSplitHint({ editor }: { editor: ReturnType<typeof useEditor> }) {
   if (!editor) return null
