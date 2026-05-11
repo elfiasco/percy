@@ -55,10 +55,10 @@ function TiptapTableRendererImpl({
     width:     "100%",
     height:    "100%",
     boxSizing: "border-box",
-    overflow:  "auto",
+    overflow:  "hidden",     // table should fit element exactly; no scrollbars
     background: style?.fill_color ?? "transparent",
     opacity:   style?.opacity ?? 1,
-    padding:   "0.05em",
+    padding:   0,            // table CSS already provides cell padding
     fontSize:  "10pt",
   }
 
