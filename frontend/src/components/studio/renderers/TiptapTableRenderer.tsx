@@ -354,7 +354,7 @@ function PersistentTableEditor({
       {selected && <TableCellContextMenu editor={editor} elementId={elementId} />}
       {selected && <TableMergeSplitHint editor={editor} />}
       {selected && <TextBubbleMenu editor={editor} />}
-      <EditorContent editor={editor} onBlur={save} />
+      <EditorContent editor={editor} onBlur={save} style={{ height: "100%" }} />
     </div>
   )
 }
