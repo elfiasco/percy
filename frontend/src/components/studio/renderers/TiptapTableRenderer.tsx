@@ -450,58 +450,58 @@ function RowResizeHandles({
     }
   }, [editor, wrapperRef, content])
 
-  const onPointerDown = (e: React.PointerEvent, rowIdx: number) => {
+  // Native mousedown handler — install document-level mousemove/mouseup so
+  // the drag continues even if the cursor leaves the handle's 6px hitbox.
+  const handleMouseDown = (e: MouseEvent | React.MouseEvent, rowIdx: number) => {
     e.preventDefault()
     e.stopPropagation()
     const wrapper = wrapperRef.current
     if (!wrapper) return
     const a = rowBounds[rowIdx]
     const b = rowBounds[rowIdx + 1]
-    if (!a || !b) return  // need a row below to resize against
+    if (!a || !b) return
     dragRef.current = {
       rowIdx,
       startY: e.clientY,
       topPx: a.top,
       bottomPx: b.top + b.height,
     }
-    ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
     document.body.style.cursor = "ns-resize"
-  }
 
-  const onPointerMove = (e: React.PointerEvent) => {
-    const drag = dragRef.current
-    if (!drag) return
-    const wrapper = wrapperRef.current
-    if (!wrapper) return
-    const wrapperRect = wrapper.getBoundingClientRect()
-    const newSplit = e.clientY - wrapperRect.top
-    const minRow = 20
-    const top = drag.topPx, bot = drag.bottomPx
-    const clamped = Math.max(top + minRow, Math.min(bot - minRow, newSplit))
-    // Live-update the DOM rows for visual feedback (committed on pointerup)
-    const root = editor!.view.dom as HTMLElement
-    const trs = Array.from(root.querySelectorAll("tr")) as HTMLElement[]
-    if (trs[drag.rowIdx])     trs[drag.rowIdx].style.height     = `${clamped - top}px`
-    if (trs[drag.rowIdx + 1]) trs[drag.rowIdx + 1].style.height = `${bot - clamped}px`
-  }
-
-  const onPointerUp = (_e: React.PointerEvent) => {
-    const drag = dragRef.current
-    dragRef.current = null
-    document.body.style.cursor = ""
-    if (!drag) return
-    // Read final pixel heights and convert to proportions relative to the
-    // model's existing row_heights sum (preserving overall table inches).
-    const root = editor!.view.dom as HTMLElement
-    const trs = Array.from(root.querySelectorAll("tr")) as HTMLElement[]
-    const pxHeights = trs.map((tr) => tr.getBoundingClientRect().height)
-    const totalPx = pxHeights.reduce((a, b) => a + b, 0)
-    if (totalPx === 0) return
-    const totalInches = (content.row_heights && content.row_heights.length === pxHeights.length)
-      ? content.row_heights.reduce((a, b) => a + b, 0)
-      : pxHeights.length  // default to 1 inch per row when no prior model
-    const nextHeights = pxHeights.map((px) => (px / totalPx) * totalInches)
-    onCommit(nextHeights)
+    const onMove = (ev: MouseEvent) => {
+      const drag = dragRef.current
+      if (!drag) return
+      const wrapperRect = wrapper.getBoundingClientRect()
+      const newSplit = ev.clientY - wrapperRect.top
+      const minRow = 20
+      const top = drag.topPx, bot = drag.bottomPx
+      const clamped = Math.max(top + minRow, Math.min(bot - minRow, newSplit))
+      const root = editor!.view.dom as HTMLElement
+      const trs = Array.from(root.querySelectorAll("tr")) as HTMLElement[]
+      if (trs[drag.rowIdx])     trs[drag.rowIdx].style.height     = `${clamped - top}px`
+      if (trs[drag.rowIdx + 1]) trs[drag.rowIdx + 1].style.height = `${bot - clamped}px`
+    }
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove)
+      document.removeEventListener("mouseup", onUp)
+      const drag = dragRef.current
+      dragRef.current = null
+      document.body.style.cursor = ""
+      if (!drag) return
+      // Compute final proportions and commit.
+      const root = editor!.view.dom as HTMLElement
+      const trs = Array.from(root.querySelectorAll("tr")) as HTMLElement[]
+      const pxHeights = trs.map((tr) => tr.getBoundingClientRect().height)
+      const totalPx = pxHeights.reduce((a, b) => a + b, 0)
+      if (totalPx === 0) return
+      const totalInches = (content.row_heights && content.row_heights.length === pxHeights.length)
+        ? content.row_heights.reduce((a, b) => a + b, 0)
+        : pxHeights.length
+      const nextHeights = pxHeights.map((px) => (px / totalPx) * totalInches)
+      onCommit(nextHeights)
+    }
+    document.addEventListener("mousemove", onMove)
+    document.addEventListener("mouseup", onUp)
   }
 
   if (!editor || rowBounds.length < 2) return null
@@ -511,10 +511,7 @@ function RowResizeHandles({
       {rowBounds.slice(0, -1).map((b) => (
         <div
           key={b.idx}
-          onPointerDown={(e) => onPointerDown(e, b.idx)}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onMouseDown={(e) => onPointerDown(e as unknown as React.PointerEvent, b.idx)}
+          onMouseDown={(e) => handleMouseDown(e, b.idx)}
           style={{
             position: "absolute",
             top:    b.top + b.height - 3,
@@ -523,8 +520,6 @@ function RowResizeHandles({
             height: 6,
             cursor: "ns-resize",
             zIndex: 7,
-            // Faintly visible bar — strong on hover. Backgroundcolor with tiny
-            // alpha keeps it hit-testable even when "invisible".
             background: "rgba(26,115,232,0.001)",
             pointerEvents: "all",
             transition: "background 80ms",
