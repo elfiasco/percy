@@ -239,16 +239,25 @@ async function screenshotSlides(browser, projId, docId, slideNums, outDir) {
       // committed the slide change AND the new canvas is mounted. Fall back to
       // a fixed 2s wait if the attribute never matches (older deploy / bug).
       try {
+        // Wait for BOTH:
+        //  - data-slide-n     (click-target proxy, updates instantly)
+        //  - data-hydrated-slide-n  (set only after the API response arrives
+        //    and the store's elements list reflects the new slide)
+        // Without the hydrated wait, slideN updates immediately on click but
+        // the rendered elements still belong to the previous slide for up to
+        // ~1s, so screenshots capture stale content.
         await page.waitForFunction(
           (target) => {
             const c = document.querySelector("[data-slide-canvas='true']")
-            return c && c.getAttribute("data-slide-n") === String(target)
+            return c
+              && c.getAttribute("data-slide-n") === String(target)
+              && c.getAttribute("data-hydrated-slide-n") === String(target)
           },
           n,
-          { timeout: 8000 }
+          { timeout: 12000 }
         )
       } catch {
-        console.warn(`    slide ${n}: nav attribute didn't update in 8s — likely showing stale slide`)
+        console.warn(`    slide ${n}: nav/hydrate didn't complete in 12s — likely showing stale slide`)
       }
       await page.waitForTimeout(800)
     }

@@ -62,6 +62,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
   const loading                     = studio.loading
   const error                       = studio.error
   const renderKeys                  = studio.renderKeys
+  const hydratedSlideN              = studio.hydratedSlideN
   const elementsRef                 = useRef<StudioElement[]>([])
   const selectedIdsRef              = useRef<Set<string>>(new Set())
   const [zoom, setZoom]             = useState(1.0)
@@ -510,6 +511,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
         <div
           data-slide-canvas="true"
           data-slide-n={slideN}
+          data-hydrated-slide-n={hydratedSlideN}
           className="relative shadow-2xl shrink-0"
           style={{
             aspectRatio: `${aspectRatio}`,

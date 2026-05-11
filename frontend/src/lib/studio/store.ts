@@ -45,6 +45,13 @@ export interface StudioSessionState {
   loading: boolean
   error: string | null
   version: number
+  /** Slide number whose elements/dimensions have actually been hydrated.
+      Differs from slideN during navigation: slideN updates immediately on
+      click, then hydratedSlideN catches up once the API response arrives.
+      The canvas exposes this as `data-hydrated-slide-n` so screenshot tests
+      can wait for "the rendered content actually reflects slideN" rather
+      than the click-only proxy. */
+  hydratedSlideN: number
 }
 
 type Listener = () => void
@@ -52,6 +59,7 @@ type Listener = () => void
 const EMPTY_STATE: StudioSessionState = {
   docId: null,
   slideN: 1,
+  hydratedSlideN: 0,
   slideWidthIn: 13.333,
   slideHeightIn: 7.5,
   backgroundColor: null,
@@ -186,6 +194,7 @@ class StudioStore {
       selectedIds: this.state.slideN === response.slide_number ? this.state.selectedIds : [],
       loading: false,
       error: null,
+      hydratedSlideN: response.slide_number,
     })
   }
 
