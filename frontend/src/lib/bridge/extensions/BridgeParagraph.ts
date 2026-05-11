@@ -71,9 +71,23 @@ export const BridgeParagraph = Paragraph.extend({
         },
         renderHTML: (attrs: { lineSpacing?: number | null }) => {
           if (attrs.lineSpacing == null) return {}
-          // Values ≤ 10 treated as multipliers (e.g. 1.5), otherwise as points.
+          // Values ≤ 10 are multipliers (e.g. 1.5), otherwise points.
+          //
+          // PPTX line_spacing < 1.0 means PPTX-style tight leading. In matplotlib
+          // this still leaves glyph cap heights non-overlapping because pyplot's
+          // `va="top"` anchors to the glyph bbox top, not the line box top.
+          // In CSS, however, line-height < 1.0 makes the line BOX smaller than
+          // the glyph, so the glyph overflows both above (first line) and
+          // overlaps the next line. Net effect: titles render with first line
+          // clipped above element bounds and visible overlap below.
+          //
+          // Clamp the CSS line-height to a minimum of 1.0 so glyphs always fit
+          // in their line box. This loses some pixel-for-pixel parity with
+          // matplotlib's tight stacking, but eliminates the much-worse visual
+          // bugs (title overflow + line overlap) that show up as systematic
+          // RMS error across every deck with display-size titles.
           const val = attrs.lineSpacing <= 10
-            ? String(attrs.lineSpacing)
+            ? String(Math.max(attrs.lineSpacing, 1.0))
             : `calc(${attrs.lineSpacing} * var(--pt-scale, 0.1574) * 1vh)`
           return { style: `line-height: ${val}` }
         },
