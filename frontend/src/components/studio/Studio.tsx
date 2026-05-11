@@ -4993,39 +4993,61 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
         />
       )}
 
-      {/* canvas right-click slide context menu */}
+      {/* canvas right-click slide context menu — Google Slides Material Design */}
       {slideCtxMenu && (
         <>
           <div className="fixed inset-0 z-[99998]" onClick={() => setSlideCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setSlideCtxMenu(null) }} />
           <div
-            className="fixed z-[99999] bg-surface border border-edge rounded shadow-xl py-1 min-w-[180px] text-xs"
-            style={{ left: slideCtxMenu.x, top: slideCtxMenu.y }}
+            style={{
+              position: "fixed", zIndex: 99999,
+              left: Math.min(slideCtxMenu.x, window.innerWidth - 220),
+              top:  Math.min(slideCtxMenu.y, window.innerHeight - 360),
+              background: "#fff",
+              border: "1px solid #dadce0",
+              borderRadius: 4,
+              boxShadow: "0 2px 10px rgba(0,0,0,0.18), 0 1px 3px rgba(0,0,0,0.10)",
+              minWidth: 220,
+              padding: "4px 0",
+              fontFamily: "'Google Sans', system-ui, sans-serif",
+              fontSize: 13,
+              color: "#3c4043",
+            }}
             onMouseDown={(e) => e.stopPropagation()}
           >
-            <div className="px-3 py-0.5 text-[10px] text-muted uppercase tracking-wide border-b border-edge/50 mb-1">
-              Slide {selectedSlide} / {localSlideCount}
+            <div style={{ padding: "4px 16px 6px", fontSize: 11, color: "#5f6368", fontWeight: 500, borderBottom: "1px solid #f1f3f4", marginBottom: 4 }}>
+              Slide {selectedSlide} of {localSlideCount}
             </div>
-            {[
-              { label: "Add slide after this", action: async () => { try { const r = await addSlide(doc.doc_id, selectedSlide); handleSlideCountChange(r.slide_count, r.new_slide_n ?? selectedSlide + 1); setRefreshKey((k) => k + 1) } catch { /* */ } } },
-              { label: "Duplicate this slide", action: async () => { try { const r = await duplicateSlide(doc.doc_id, selectedSlide); handleSlideCountChange(r.slide_count, r.new_slide_n ?? selectedSlide + 1); setRefreshKey((k) => k + 1) } catch { /* */ } } },
+            {([
+              { label: "Add slide after this", shortcut: "⌘M", action: async () => { try { const r = await addSlide(doc.doc_id, selectedSlide); handleSlideCountChange(r.slide_count, r.new_slide_n ?? selectedSlide + 1); setRefreshKey((k) => k + 1) } catch { /* */ } } },
+              { label: "Duplicate this slide", shortcut: "⌘D", action: async () => { try { const r = await duplicateSlide(doc.doc_id, selectedSlide); handleSlideCountChange(r.slide_count, r.new_slide_n ?? selectedSlide + 1); setRefreshKey((k) => k + 1) } catch { /* */ } } },
               null,
-              { label: pinnedSlides.has(selectedSlide) ? "Unpin slide" : "Pin slide (Ctrl+B)", action: () => { const isPinned = pinnedSlides.has(selectedSlide); pinSlide(doc.doc_id, selectedSlide, !isPinned).then(() => setPinnedSlides((prev) => { const next = new Set(prev); if (isPinned) next.delete(selectedSlide); else next.add(selectedSlide); return next })).catch(() => {}) } },
+              { label: "Change background…", action: () => setBgColorOpen(true) },
+              { label: pinnedSlides.has(selectedSlide) ? "Unpin slide" : "Pin slide", shortcut: "⌘B", action: () => { const isPinned = pinnedSlides.has(selectedSlide); pinSlide(doc.doc_id, selectedSlide, !isPinned).then(() => setPinnedSlides((prev) => { const next = new Set(prev); if (isPinned) next.delete(selectedSlide); else next.add(selectedSlide); return next })).catch(() => {}) } },
               null,
-              { label: "Insert text box (Ctrl+T)", action: () => handleInsertShape("text_box") },
+              { label: "Insert text box", shortcut: "⌘T", action: () => handleInsertShape("text_box") },
               { label: "Insert rectangle", action: () => handleInsertShape("rect") },
-              { label: "Insert ellipse", action: () => handleInsertShape("ellipse") },
+              { label: "Insert ellipse",   action: () => handleInsertShape("ellipse") },
               null,
-              { label: "Select all elements (Ctrl+A)", action: () => { /* handled by keyboard */ document.dispatchEvent(new KeyboardEvent("keydown", { key: "a", ctrlKey: true, bubbles: true })) } },
-            ].map((item, i) =>
+              { label: "Select all elements", shortcut: "⌘A", action: () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "a", ctrlKey: true, bubbles: true })) } },
+            ] as Array<{ label: string; shortcut?: string; action: () => void } | null>).map((item, i) =>
               item === null ? (
-                <div key={i} className="border-t border-edge/50 my-1" />
+                <div key={i} style={{ height: 1, background: "#e0e0e0", margin: "4px 0" }} />
               ) : (
                 <button
                   key={i}
                   onClick={() => { item.action(); setSlideCtxMenu(null) }}
-                  className="w-full text-left px-3 py-1.5 text-slate-300 hover:bg-white/10 transition-colors"
+                  style={{
+                    display: "flex", justifyContent: "space-between", alignItems: "center",
+                    width: "100%", padding: "6px 16px",
+                    background: "none", border: "none",
+                    color: "#3c4043", fontSize: 13, lineHeight: "20px",
+                    fontFamily: "inherit", textAlign: "left", cursor: "pointer",
+                  }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#f1f3f4" }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "none" }}
                 >
-                  {item.label}
+                  <span>{item.label}</span>
+                  {item.shortcut && <span style={{ fontSize: 11, color: "#80868b", marginLeft: 16 }}>{item.shortcut}</span>}
                 </button>
               )
             )}
