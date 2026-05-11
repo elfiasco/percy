@@ -696,18 +696,62 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
             <RemotePresenceLayer elements={elements} />
             <LiveCursorLayer room={room} />
 
-            {/* PowerPoint-style empty-state hint when slide has no elements */}
+            {/* Empty-slide state — rich Google Slides-style insertion buttons */}
             {!loading && elements.length === 0 && (
               <div
-                className="absolute inset-0 flex items-center justify-center pointer-events-none"
+                className="absolute inset-0 flex items-center justify-center"
                 style={{ zIndex: 1 }}
               >
-                <div className="text-center select-none" style={{ color: "rgba(0,0,0,0.30)" }}>
-                  <div style={{ fontSize: "clamp(18px, 2.4vw, 32px)", fontWeight: 300, letterSpacing: "-0.01em" }}>
-                    Click to add a text box
+                <div className="text-center select-none flex flex-col items-center" style={{ color: "#5f6368" }}>
+                  <div style={{
+                    fontSize: "clamp(16px, 2vw, 24px)", fontWeight: 400, letterSpacing: "-0.01em",
+                    color: "#3c4043", marginBottom: 4, fontFamily: "'Google Sans', system-ui, sans-serif",
+                  }}>
+                    Add content to this slide
                   </div>
-                  <div className="mt-2 text-[11px] uppercase tracking-[0.16em]" style={{ opacity: 0.6 }}>
-                    or use the Insert tab to add shapes, charts, images
+                  <div style={{ fontSize: 12, color: "#80868b", marginBottom: 24, fontFamily: "'Google Sans', system-ui, sans-serif" }}>
+                    Drop an image, paste data, or pick an element below
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    {[
+                      { label: "Text", icon: "T",  type: "text_box" },
+                      { label: "Shape", icon: "■", type: "rect" },
+                      { label: "Image", icon: "🖼", type: "__image__" },
+                      { label: "Chart", icon: "📊", type: "__chart__" },
+                      { label: "Table", icon: "▦", type: "__table__" },
+                    ].map((b) => (
+                      <button
+                        key={b.label}
+                        onClick={() => {
+                          // Dispatch a custom event that Studio handles
+                          window.dispatchEvent(new CustomEvent("percy:empty-slide-insert", { detail: { type: b.type } }))
+                        }}
+                        style={{
+                          display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+                          padding: "12px 18px",
+                          background: "#fff", border: "1px solid #dadce0", borderRadius: 8,
+                          color: "#3c4043", fontSize: 12,
+                          fontFamily: "'Google Sans', system-ui, sans-serif",
+                          cursor: "pointer",
+                          transition: "background 80ms, border-color 80ms, transform 80ms",
+                        }}
+                        onMouseEnter={(e) => {
+                          const el = e.currentTarget as HTMLButtonElement
+                          el.style.background = "#f8f9fa"
+                          el.style.borderColor = "#1a73e8"
+                          el.style.color = "#1a73e8"
+                        }}
+                        onMouseLeave={(e) => {
+                          const el = e.currentTarget as HTMLButtonElement
+                          el.style.background = "#fff"
+                          el.style.borderColor = "#dadce0"
+                          el.style.color = "#3c4043"
+                        }}
+                      >
+                        <span style={{ fontSize: 24, lineHeight: 1 }}>{b.icon}</span>
+                        <span>{b.label}</span>
+                      </button>
+                    ))}
                   </div>
                 </div>
               </div>

@@ -981,11 +981,27 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
       if (detail?.alignment) handleAlignElements(detail.alignment)
     }
     const onGroup = () => handleGroupElements()
+    const onEmptyInsert = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { type: string } | undefined
+      if (!detail) return
+      if (detail.type === "__image__")      { /* Trigger insert image — opens file picker. */
+        const inp = document.createElement("input")
+        inp.type = "file"
+        inp.accept = "image/*"
+        inp.onchange = () => { const f = inp.files?.[0]; if (f) handleInsertImage(f) }
+        inp.click()
+      }
+      else if (detail.type === "__chart__") handleInsertChart()
+      else if (detail.type === "__table__") handleInsertTable()
+      else                                  handleInsertShape(detail.type)
+    }
     window.addEventListener("percy:multi-align", onAlign)
     window.addEventListener("percy:multi-group", onGroup)
+    window.addEventListener("percy:empty-slide-insert", onEmptyInsert)
     return () => {
       window.removeEventListener("percy:multi-align", onAlign)
       window.removeEventListener("percy:multi-group", onGroup)
+      window.removeEventListener("percy:empty-slide-insert", onEmptyInsert)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
