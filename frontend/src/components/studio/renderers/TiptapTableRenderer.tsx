@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react"
 import { useEditor, EditorContent } from "@tiptap/react"
-import { updateElementText } from "../../../lib/studioApi"
+import { updateElementText, updateTableData } from "../../../lib/studioApi"
 import type { ParagraphData, TableTextContent, ElementStyleData } from "../../../lib/studioTypes"
 import { useStudioTextStylePayload } from "../../../lib/studio/payloadHooks"
 import { studioStore } from "../../../lib/studio/store"
@@ -383,14 +383,15 @@ function PersistentTableEditor({
           wrapperRef={wrapperRef}
           onCommit={(nextRowHeights) => {
             // Write proportional heights back into the bridge model & re-save.
+            // Row/column dimensions live on BridgeTable.dimensions, which the
+            // /text endpoint doesn't accept — we go through /table-data which
+            // has a dedicated row_heights/column_widths field.
             const updated: TableTextContent = { ...content, row_heights: nextRowHeights }
             onContentChange(updated)
-            // Eager save so the new heights persist even if the user clicks away
+            studioStore.setTextPayload(elementId, updated)
             ;(async () => {
               try {
-                const next = tiptapToTable(editor.getJSON(), updated)
-                await updateElementText(docId, slideN, elementId, next)
-                studioStore.setTextPayload(elementId, next)
+                await updateTableData(docId, slideN, elementId, { row_heights: nextRowHeights })
               } catch (e) {
                 console.error("[Percy] row resize save failed:", e)
               }
@@ -460,6 +461,7 @@ function RowResizeHandles({
     const a = rowBounds[rowIdx]
     const b = rowBounds[rowIdx + 1]
     if (!a || !b) return
+    console.log(`[Percy] row drag start rowIdx=${rowIdx}`)
     dragRef.current = {
       rowIdx,
       startY: e.clientY,

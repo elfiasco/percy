@@ -19,6 +19,10 @@ await mkdir(OUT, { recursive: true })
 const browser = await chromium.launch({ headless: true })
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, ignoreHTTPSErrors: true })
 const page = await ctx.newPage()
+page.on("console", (m) => {
+  const t = m.text()
+  if (t.includes("[Percy]")) console.log("BROWSER:", t)
+})
 
 const su = await page.request.post(`${BASE}/api/auth/signup`, {
   data: { email: EMAIL, password: PW, display_name: "TR" },
