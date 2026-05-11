@@ -230,11 +230,18 @@ function PersistentTableEditor({
     // Also when wrapper resizes (element resize / window resize / zoom change)
     const ro = new ResizeObserver(resizeRows)
     ro.observe(wrapper)
-    // And after each editor transaction (row added/removed)
-    const onUpdate = () => requestAnimationFrame(resizeRows)
+    // And after each editor transaction (row added/removed) — double rAF so
+    // we run AFTER Tiptap has flushed its DOM update.
+    const onUpdate = () => requestAnimationFrame(() => requestAnimationFrame(resizeRows))
     editor.on("update", onUpdate)
+    // Also observe DOM mutations on the editor root so a programmatic
+    // contextmenu insert (which Tiptap may not always 'update' for) still
+    // triggers a re-fit.
+    const mo = new MutationObserver(() => requestAnimationFrame(resizeRows))
+    mo.observe(editor.view.dom as HTMLElement, { childList: true, subtree: true })
     return () => {
       ro.disconnect()
+      mo.disconnect()
       editor.off("update", onUpdate)
     }
   }, [editor])
