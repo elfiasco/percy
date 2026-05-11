@@ -73,24 +73,27 @@ export const BridgeParagraph = Paragraph.extend({
           if (attrs.lineSpacing == null) return {}
           // Values ≤ 10 are multipliers (e.g. 1.5), otherwise points.
           //
-          // matplotlib's pyplot `va="top"` anchors glyphs to their own bbox top
-          // and walks down by ls * font-size, achieving cap-to-cap stacking
-          // that visually doesn't overlap even when ls < 1.0. CSS line-height
-          // < 1.0 makes the line BOX smaller than the glyph, so glyphs overflow
-          // and overlap. We mirror matplotlib's semantic in CSS by setting
-          // line-height as a multiple of the font-size that produces the same
-          // cap-to-cap distance. Browsers' natural line-height is ~1.2em (em
-          // = font-size), with the cap occupying ~0.7em. So ls * font-size
-          // (matplotlib's cap-to-cap distance) corresponds to ls/0.7 in CSS
-          // unitless terms when measuring against ascent-to-ascent, but to
-          // straight ls when interpreted as "fraction of line box". We keep
-          // CSS interpretation literal (ls * font-size) so matplotlib's RMS
-          // reference matches and accept the minor inline overflow as a
-          // browser-vs-matplotlib quirk that doesn't dominate the RMS.
-          const val = attrs.lineSpacing <= 10
-            ? String(attrs.lineSpacing)
-            : `calc(${attrs.lineSpacing} * var(--pt-scale, 0.1574) * 1vh)`
-          return { style: `line-height: ${val}` }
+          // CSS line-height < 1.0 makes the line box smaller than the glyph,
+          // so the first line's glyph cap-top renders ABOVE the element's top
+          // edge by ((1 - ls) / 2) * font-size. matplotlib's `va="top"` instead
+          // places the glyph cap-top exactly at y0, so the same `ls` produces
+          // visibly different vertical positions. Compensate by adding the
+          // same delta as padding-top so CSS lines align to matplotlib's.
+          //
+          // This matches all lines (not just the first) because the per-line
+          // glyph offset is identical inside CSS line boxes — the padding
+          // shifts the whole paragraph down by the constant offset.
+          const styles: string[] = []
+          if (attrs.lineSpacing <= 10) {
+            styles.push(`line-height: ${attrs.lineSpacing}`)
+            if (attrs.lineSpacing < 1.0) {
+              const padEm = ((1.0 - attrs.lineSpacing) / 2).toFixed(4)
+              styles.push(`padding-top: ${padEm}em`)
+            }
+          } else {
+            styles.push(`line-height: calc(${attrs.lineSpacing} * var(--pt-scale, 0.1574) * 1vh)`)
+          }
+          return { style: styles.join("; ") }
         },
       },
       bulletType: {
