@@ -509,6 +509,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
         {/* canvas wrapper — maintains slide aspect ratio */}
         <div
           data-slide-canvas="true"
+          data-slide-n={slideN}
           className="relative shadow-2xl shrink-0"
           style={{
             aspectRatio: `${aspectRatio}`,

@@ -225,11 +225,30 @@ async function screenshotSlides(browser, projId, docId, slideNums, outDir) {
 
   const shots = {}
   for (const n of slideNums) {
-    // Navigate to slide N via the strip
+    // Navigate to slide N via the strip. Scroll the thumbnail into view first
+    // so slides past the initial visible window (e.g. 11+ in a 50-slide deck)
+    // can be clicked — without scrollIntoViewIfNeeded the click would target
+    // an off-screen element and silently do nothing, leaving the canvas on
+    // the previous slide.
     const thumb = page.locator(`[data-slide-n="${n}"]`)
     if (await thumb.count() > 0) {
+      try { await thumb.first().scrollIntoViewIfNeeded({ timeout: 2000 }) }
+      catch { /* tolerate */ }
       await thumb.first().click()
       await page.waitForTimeout(2000)
+      // Verify the canvas actually navigated by checking that the canvas
+      // header / data attribute reflects the new slide number. Fall back to
+      // keyboard nav if click did nothing.
+      const got = await page.evaluate(() => {
+        const c = document.querySelector("[data-slide-canvas='true']")
+        return c?.getAttribute("data-slide-n") || null
+      })
+      if (String(got) !== String(n)) {
+        // Click didn't change slide — log warning. Studio doesn't expose a
+        // global goto, so we rely on the click. If this happens repeatedly,
+        // the test is silently scoring the wrong slide.
+        console.warn(`    slide ${n}: NAVIGATION FAILED (canvas still on slide ${got})`)
+      }
     }
 
     // Wait for canvas
@@ -255,6 +274,23 @@ async function screenshotSlides(browser, projId, docId, slideNums, outDir) {
     ).catch(() => {})
     // Extra settle time for Recharts to finish drawing SVG bars/paths after data loads.
     await page.waitForTimeout(2000)
+    // Also wait until all text-bearing elements (BridgeText/BridgeShape) actually
+    // have text content visible. Without this, async payload fetches can mean the
+    // screenshot captures empty containers at correct positions — same visual as
+    // "missing element," but root cause is timing.
+    await page.waitForFunction(() => {
+      const els = document.querySelectorAll('[data-slide-canvas="true"] [data-element="true"]')
+      let nonempty = 0
+      for (const e of els) {
+        const t = (e.textContent || "").trim()
+        if (t.length > 0) nonempty++
+      }
+      // If there are NO text elements at all, accept immediately. Otherwise
+      // wait for at least one of them to have rendered (not literally all —
+      // BridgeImage/Freeform have no text, only Text/Shape contribute).
+      return els.length === 0 || nonempty > 0
+    }, { timeout: 6000 }).catch(() => {})
+    await page.waitForTimeout(800)
 
     // Hide all Studio chrome so only the canvas remains, then screenshot.
     // Walk all the way up the DOM and at each level hide siblings that don't
@@ -276,6 +312,70 @@ async function screenshotSlides(browser, projId, docId, slideNums, outDir) {
     })
     await page.waitForTimeout(300)
 
+    // Diagnostic: count what's rendered in DOM. Helps identify when bridge
+    // data has more elements than studio rendered (silent render failures).
+    const renderedCount = await page.evaluate(() => {
+      const els = document.querySelectorAll('[data-slide-canvas="true"] [data-element="true"]')
+      return Array.from(els).map((e) => {
+        const r = e.getBoundingClientRect()
+        const txt = (e.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80)
+        const hasImg = !!e.querySelector("img")
+        const hasSvg = !!e.querySelector("svg")
+        return {
+          rect: { x:r.x|0, y:r.y|0, w:r.width|0, h:r.height|0 },
+          text: txt,
+          hasImg, hasSvg,
+        }
+      })
+    })
+    if (true || n <= 3 || renderedCount.length < 5) {
+      console.log(`    slide ${n}: rendered ${renderedCount.length} elements`)
+      for (const re of renderedCount) {
+        console.log(`      rect=${JSON.stringify(re.rect)} img=${re.hasImg?"Y":"-"} svg=${re.hasSvg?"Y":"-"} text="${re.text}"`)
+      }
+      // Diagnostic: for text-bearing elements check if they're VISIBLE
+      // (CSS visibility, opacity, z-index, color vs background).
+      const visibility = await page.evaluate(() => {
+        const out = []
+        document.querySelectorAll('[data-slide-canvas="true"] [data-element="true"]').forEach((e) => {
+          const t = (e.textContent || "").trim().slice(0, 30)
+          if (!t) return
+          // Find a text-bearing descendant <p> or shape
+          const p = e.querySelector("p")
+          const target = p || e
+          const cs = getComputedStyle(target)
+          const er = e.getBoundingClientRect()
+          out.push({
+            text:    t,
+            color:   cs.color,
+            opacity: cs.opacity,
+            visibility: cs.visibility,
+            fontSize:   cs.fontSize,
+            lineHeight: cs.lineHeight,
+            tag:        target.tagName,
+            pos:        { x:er.x|0, y:er.y|0 },
+            elementVis: getComputedStyle(e).visibility,
+            elementZ:   getComputedStyle(e).zIndex,
+          })
+        })
+        return out
+      })
+      for (const v of visibility) {
+        console.log(`      VIS "${v.text}" color=${v.color} fs=${v.fontSize} lh=${v.lineHeight} op=${v.opacity} z=${v.elementZ}`)
+      }
+      // Dump actual inline HTML for first text element so we can see what styles are present
+      const html = await page.evaluate(() => {
+        const el = document.querySelector('[data-slide-canvas="true"] [data-element="true"] p')
+        return el?.outerHTML?.slice(0, 500) || ""
+      })
+      console.log(`      HTML sample: ${html}`)
+      // Check the --pt-scale CSS variable
+      const ptScale = await page.evaluate(() => {
+        const c = document.querySelector('[data-slide-canvas="true"]')
+        return c ? getComputedStyle(c).getPropertyValue("--pt-scale") : "?"
+      })
+      console.log(`      --pt-scale = ${ptScale}`)
+    }
     const bb = await canvas.boundingBox()
     if (!bb) {
       // Restore chrome and skip
@@ -359,20 +459,91 @@ async function runDeck(browser, pptxPath, docIdOverride, projIdOverride) {
   const slideNums = parseSlideRange(SLIDES_ARG, total)
   console.log(`  ${slideNums.length} slides to test (total: ${total})`)
 
-  // Reference renders
+  // Reference renders + per-slide element dump (diagnostic)
   console.log("\n  Fetching reference renders (Bridge model via matplotlib)…")
+  const elementsDir = join(outDir, "elements")
+  await mkdir(elementsDir, { recursive: true })
   for (const n of slideNums) {
     const name = `slide-${String(n).padStart(3, "0")}.png`
     const dest = join(refDir, name)
-    if (!FORCE_REF && existsSync(dest)) { process.stdout.write("."); continue }
-    try {
-      const buf = await fetchReferencePng(docId, n, DPI)
-      await writeFile(dest, buf)
-      process.stdout.write("•")
-    } catch (e) {
-      process.stdout.write("✗")
-      console.error(`\n    slide ${n}: ${e.message}`)
+    const needFetch = FORCE_REF || !existsSync(dest)
+    if (!needFetch) { process.stdout.write(".") }
+    else {
+      try {
+        const buf = await fetchReferencePng(docId, n, DPI)
+        await writeFile(dest, buf)
+        process.stdout.write("•")
+      } catch (e) {
+        process.stdout.write("✗")
+        console.error(`\n    slide ${n}: ${e.message}`)
+      }
     }
+    // Element dump — bridge model snapshot for this slide. Used to root-cause
+    // RMS diffs by inspecting what data Studio/matplotlib are working from.
+    try {
+      const slide = await apiJson(`/api/docs/${docId}/slides/${n}/elements`)
+      const elems = Array.isArray(slide) ? slide : (slide.elements || [])
+      const enriched = []
+      for (const el of elems) {
+        const e = {
+          id: el.id,
+          type: el.element_type || el.type || "?",
+          left: el.left_in ?? el.left,
+          top:  el.top_in  ?? el.top,
+          w:    el.width_in ?? el.w,
+          h:    el.height_in ?? el.h,
+          preset: el.geometry_preset,
+          z:      el.z_index ?? null,
+        }
+        // BridgeFreeform: dump fill/stroke + path count so we can see when a
+        // freeform has no visual (empty fill_color + invisible line) — common
+        // root cause for "missing arrow / decorative shape" diffs.
+        if (e.type === "BridgeFreeform") {
+          try {
+            const ff = await apiJson(`/api/docs/${docId}/slides/${n}/elements/${el.id}/freeform-data`)
+            e.freeform = {
+              fill_type:    ff.fill_type,
+              fill_color:   ff.fill_color,
+              has_gradient: !!ff.gradient_stops?.length,
+              line_visible: ff.line_visible,
+              opacity:      ff.opacity,
+              paths_count:  (ff.paths || []).length,
+            }
+          } catch { /* tolerate */ }
+        }
+        // BridgeImage: dump src so we know if it's a referenced asset
+        if (e.type === "BridgeImage") {
+          e.image = { src_present: !!(el.image_src || el.src) }
+        }
+        // BridgeShape: dump fill, preset
+        if (e.type === "BridgeShape") {
+          try {
+            const sty = await apiJson(`/api/docs/${docId}/slides/${n}/elements/${el.id}/style`)
+            e.shape = { fill_color: sty?.fill_color, fill_type: sty?.fill_type }
+          } catch { /* tolerate */ }
+        }
+        try {
+          const t = await apiJson(`/api/docs/${docId}/slides/${n}/elements/${el.id}/text`)
+          if (t.kind === "paragraphs") {
+            e.paragraphs = (t.paragraphs || []).map((p) => ({
+              align: p.alignment,
+              line_spacing: p.line_spacing,
+              text:  (p.runs || []).map((r) => r.text).join("").slice(0, 120),
+              runs:  (p.runs || []).map((r) => ({
+                size: r.font_size,
+                bold: r.font_bold || undefined,
+                name: r.font_name,
+                color: r.font_color,
+              })),
+            }))
+          } else if (t.kind === "table") {
+            e.table = { rows: t.rows, cols: t.cols, row_heights: t.row_heights, column_widths: t.column_widths }
+          }
+        } catch { /* not all elements have text */ }
+        enriched.push(e)
+      }
+      await writeFile(join(elementsDir, `slide-${String(n).padStart(3, "0")}.json`), JSON.stringify(enriched, null, 2))
+    } catch { /* tolerate */ }
   }
   console.log()
 
