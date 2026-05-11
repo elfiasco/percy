@@ -156,10 +156,19 @@ class StudioStore {
   }
 
   hydrateSlide(docId: string, response: SlideElementsResponse): void {
+    // BUMP renderKeys for every element on hydrate. Without this, when an
+    // element id (e.g. slide-direct "8") is reused across slides with
+    // DIFFERENT bridge content, the renderer component sees the same key and
+    // does not re-fetch its text/style payload, leaving stale slide-10
+    // content visible while showing slide-11's URL. Inflated snowflake
+    // slide 11 RMS from ~30 (single-slide solo run) to 107 (multi-slide).
     const prevKeys = this.state.renderKeys
+    const prevSlide = this.state.slideN
+    const slideChanging = prevSlide !== response.slide_number
     const renderKeys: Record<string, number> = {}
     for (const el of response.elements) {
-      renderKeys[el.id] = prevKeys[el.id] ?? 0
+      const prev = prevKeys[el.id] ?? 0
+      renderKeys[el.id] = slideChanging ? prev + 1 : prev
     }
     const slideKey = `${docId}:${response.slide_number}`
     // Drop payloads for elements whose cached slide doesn't match the incoming slide.
