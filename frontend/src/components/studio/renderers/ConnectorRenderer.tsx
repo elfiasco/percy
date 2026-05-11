@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import type { ConnectorData } from "../../../lib/studioTypes"
-import { fetchConnectorData } from "../../../lib/studioApi"
+import { fetchConnectorData, updateConnectorData } from "../../../lib/studioApi"
+import { studioStore } from "../../../lib/studio/store"
 import type { NativeRendererProps } from "./RendererRegistry"
 import { registerRenderer } from "./RendererRegistry"
 
@@ -42,7 +43,7 @@ function ArrowDef({ id, end, size, color }: { id: string; end: string; size: str
   )
 }
 
-function ConnectorRendererImpl({ element, docId, slideN, renderKey }: NativeRendererProps) {
+function ConnectorRendererImpl({ element, docId, slideN, renderKey, selected }: NativeRendererProps) {
   const [data, setData]   = useState<ConnectorData | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -94,44 +95,265 @@ function ConnectorRendererImpl({ element, docId, slideN, renderKey }: NativeRend
   }
 
   return (
-    <svg
-      width="100%" height="100%"
-      viewBox="0 0 100 100"
-      preserveAspectRatio="none"
-      style={{ pointerEvents: "none", overflow: "visible" }}
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <defs>
-        {data.line.head_end && data.line.head_end !== "none" && (
-          <ArrowDef id={headId} end={data.line.head_end} size={data.line.head_size} color={color} />
+    <div style={{ width: "100%", height: "100%", position: "relative" }}>
+      <svg
+        width="100%" height="100%"
+        viewBox="0 0 100 100"
+        preserveAspectRatio="none"
+        style={{ pointerEvents: "none", overflow: "visible" }}
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <defs>
+          {data.line.head_end && data.line.head_end !== "none" && (
+            <ArrowDef id={headId} end={data.line.head_end} size={data.line.head_size} color={color} />
+          )}
+          {data.line.tail_end && data.line.tail_end !== "none" && (
+            <ArrowDef id={tailId} end={data.line.tail_end} size={data.line.tail_size} color={color} />
+          )}
+        </defs>
+        {pathD ? (
+          <path
+            d={pathD}
+            fill="none"
+            stroke={color}
+            strokeWidth={width}
+            strokeDasharray={dash}
+            markerStart={arrowMarker(data.line.tail_end, data.line.tail_size, color, "tail")}
+            markerEnd={arrowMarker(data.line.head_end, data.line.head_size, color, "head")}
+            vectorEffect="non-scaling-stroke"
+          />
+        ) : (
+          <line
+            x1={x1} y1={y1} x2={x2} y2={y2}
+            stroke={color}
+            strokeWidth={width}
+            strokeDasharray={dash}
+            markerStart={arrowMarker(data.line.tail_end, data.line.tail_size, color, "tail")}
+            markerEnd={arrowMarker(data.line.head_end, data.line.head_size, color, "head")}
+            vectorEffect="non-scaling-stroke"
+          />
         )}
-        {data.line.tail_end && data.line.tail_end !== "none" && (
-          <ArrowDef id={tailId} end={data.line.tail_end} size={data.line.tail_size} color={color} />
-        )}
-      </defs>
-      {pathD ? (
-        <path
-          d={pathD}
-          fill="none"
-          stroke={color}
-          strokeWidth={width}
-          strokeDasharray={dash}
-          markerStart={arrowMarker(data.line.tail_end, data.line.tail_size, color, "tail")}
-          markerEnd={arrowMarker(data.line.head_end, data.line.head_size, color, "head")}
-          vectorEffect="non-scaling-stroke"
-        />
-      ) : (
-        <line
-          x1={x1} y1={y1} x2={x2} y2={y2}
-          stroke={color}
-          strokeWidth={width}
-          strokeDasharray={dash}
-          markerStart={arrowMarker(data.line.tail_end, data.line.tail_size, color, "tail")}
-          markerEnd={arrowMarker(data.line.head_end, data.line.head_size, color, "head")}
-          vectorEffect="non-scaling-stroke"
+      </svg>
+      {selected && (
+        <ConnectorInlineToolbar
+          elementId={element.id}
+          docId={docId}
+          slideN={slideN}
+          data={data}
+          onUpdated={() => studioStore.bumpRenderKeys([element.id])}
         />
       )}
-    </svg>
+    </div>
+  )
+}
+
+// ── Connector inline toolbar (Google Slides parity) ────────────────────────
+// Floating bar above the selected connector with:
+//   [■ Color ▾] [Width ▾] [Style ▾] [Start ▾] [End ▾]
+
+function ConnectorInlineToolbar({
+  elementId, docId, slideN, data, onUpdated,
+}: {
+  elementId: string; docId: string; slideN: number
+  data: ConnectorData
+  onUpdated: () => void
+}) {
+  const patch = async (line: Partial<ConnectorData["line"]>) => {
+    try {
+      await updateConnectorData(docId, slideN, elementId, { line: { ...data.line, ...line } })
+      onUpdated()
+    } catch (e) {
+      console.error("[Percy] connector patch failed:", e)
+    }
+  }
+
+  return (
+    <div
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: "absolute", top: -34, left: 0,
+        zIndex: 6,
+        display: "flex", gap: 4,
+        background: "#fff",
+        border: "1px solid #dadce0", borderRadius: 6,
+        padding: 3,
+        boxShadow: "0 2px 8px rgba(0,0,0,0.10)",
+        fontFamily: "'Google Sans', system-ui, sans-serif",
+        fontSize: 11, whiteSpace: "nowrap",
+      }}
+    >
+      <CnColorPicker currentColor={data.line.color} onChange={(c) => patch({ color: c })} />
+      <CnSelect
+        label="Width" value={String(data.line.width ?? 1.5)}
+        options={[
+          { value: "0.5", label: "0.5 pt" },
+          { value: "1",   label: "1 pt"   },
+          { value: "1.5", label: "1.5 pt" },
+          { value: "2",   label: "2 pt"   },
+          { value: "3",   label: "3 pt"   },
+          { value: "4.5", label: "4.5 pt" },
+          { value: "6",   label: "6 pt"   },
+        ]}
+        onChange={(v) => patch({ width: parseFloat(v) })}
+      />
+      <CnSelect
+        label="Style" value={(data.line.dash_style || "solid").toLowerCase()}
+        options={[
+          { value: "solid",   label: "Solid"      },
+          { value: "dash",    label: "Dashed"     },
+          { value: "dot",     label: "Dotted"     },
+          { value: "dashdot", label: "Dash-dot"   },
+          { value: "longdash",label: "Long dash"  },
+        ]}
+        onChange={(v) => patch({ dash_style: v })}
+      />
+      <CnSelect
+        label="Start" value={data.line.tail_end || "none"}
+        options={[
+          { value: "none",    label: "None"    },
+          { value: "arrow",   label: "Arrow"   },
+          { value: "stealth", label: "Stealth" },
+          { value: "diamond", label: "Diamond" },
+          { value: "oval",    label: "Circle"  },
+          { value: "triangle",label: "Triangle"},
+        ]}
+        onChange={(v) => patch({ tail_end: v === "none" ? null : v })}
+      />
+      <CnSelect
+        label="End" value={data.line.head_end || "none"}
+        options={[
+          { value: "none",    label: "None"    },
+          { value: "arrow",   label: "Arrow"   },
+          { value: "stealth", label: "Stealth" },
+          { value: "diamond", label: "Diamond" },
+          { value: "oval",    label: "Circle"  },
+          { value: "triangle",label: "Triangle"},
+        ]}
+        onChange={(v) => patch({ head_end: v === "none" ? null : v })}
+      />
+    </div>
+  )
+}
+
+function CnColorPicker({ currentColor, onChange }: { currentColor: string | null; onChange: (c: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const swatch = currentColor && /^#[0-9a-fA-F]{6}$/.test(currentColor) ? currentColor : "#444"
+  const PALETTE = ["#3366CC", "#DC3912", "#FF9900", "#109618", "#990099", "#0099C6", "#000000", "#80868b", "#444444"]
+  return (
+    <div style={{ position: "relative" }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          padding: "2px 8px", display: "flex", alignItems: "center", gap: 4,
+          background: open ? "#e8f0fe" : "transparent",
+          border: "1px solid transparent", borderRadius: 3,
+          color: "#3c4043", fontSize: 11, fontFamily: "inherit", cursor: "pointer",
+        }}
+        title="Line color"
+      >
+        <span style={{ width: 14, height: 14, background: swatch, border: "1px solid rgba(0,0,0,0.2)", borderRadius: 2 }} />
+        <span>Color</span>
+      </button>
+      {open && (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 8 }} onClick={() => setOpen(false)} />
+          <div
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{
+              position: "absolute", top: 30, left: 0, zIndex: 10,
+              background: "#fff", border: "1px solid #dadce0", borderRadius: 6,
+              boxShadow: "0 4px 14px rgba(0,0,0,0.15)",
+              padding: 6, fontFamily: "inherit",
+              display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 3,
+            }}
+          >
+            {PALETTE.map((c) => (
+              <button
+                key={c}
+                onClick={() => { onChange(c); setOpen(false) }}
+                style={{
+                  width: 20, height: 20, padding: 0,
+                  background: c,
+                  border: currentColor?.toLowerCase() === c.toLowerCase() ? "2px solid #1a73e8" : "1px solid #dadce0",
+                  borderRadius: 3, cursor: "pointer",
+                }}
+              />
+            ))}
+            <input
+              type="color"
+              value={swatch}
+              onChange={(e) => onChange(e.target.value)}
+              style={{ gridColumn: "span 5", width: "100%", height: 22, border: "1px solid #dadce0", borderRadius: 3, marginTop: 3 }}
+            />
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function CnSelect({
+  label, value, options, onChange,
+}: {
+  label: string; value: string
+  options: Array<{ value: string; label: string }>
+  onChange: (v: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const current = options.find((o) => o.value === value)?.label ?? value
+  return (
+    <div style={{ position: "relative" }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          padding: "2px 8px", display: "flex", alignItems: "center", gap: 4,
+          background: open ? "#e8f0fe" : "transparent",
+          border: "1px solid transparent", borderRadius: 3,
+          color: "#3c4043", fontSize: 11, fontFamily: "inherit", cursor: "pointer",
+        }}
+        title={label}
+      >
+        <span style={{ color: "#5f6368", fontSize: 10 }}>{label}:</span>
+        <span>{current}</span>
+        <span style={{ fontSize: 9 }}>▾</span>
+      </button>
+      {open && (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 8 }} onClick={() => setOpen(false)} />
+          <div
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{
+              position: "absolute", top: 30, left: 0, zIndex: 10,
+              background: "#fff", border: "1px solid #dadce0", borderRadius: 6,
+              boxShadow: "0 4px 14px rgba(0,0,0,0.15)",
+              padding: 4, minWidth: 120, fontFamily: "inherit",
+            }}
+          >
+            {options.map((o) => (
+              <button
+                key={o.value}
+                onClick={() => { onChange(o.value); setOpen(false) }}
+                style={{
+                  display: "block", width: "100%", textAlign: "left",
+                  padding: "4px 10px", fontSize: 12,
+                  background: o.value === value ? "#e8f0fe" : "transparent",
+                  color: o.value === value ? "#1a73e8" : "#3c4043",
+                  border: "none", borderRadius: 3, cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+                onMouseEnter={(e) => { if (o.value !== value) (e.currentTarget as HTMLButtonElement).style.background = "#f1f3f4" }}
+                onMouseLeave={(e) => { if (o.value !== value) (e.currentTarget as HTMLButtonElement).style.background = "transparent" }}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 
