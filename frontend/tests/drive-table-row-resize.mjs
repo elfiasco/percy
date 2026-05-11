@@ -21,8 +21,9 @@ const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, i
 const page = await ctx.newPage()
 page.on("console", (m) => {
   const t = m.text()
-  if (t.includes("[Percy]")) console.log("BROWSER:", t)
+  if (t.includes("[Percy]") || t.includes("ERR") || t.includes("Warning")) console.log("BROWSER:", t)
 })
+page.on("pageerror", (e) => console.log("PAGEERROR:", e.message))
 
 const su = await page.request.post(`${BASE}/api/auth/signup`, {
   data: { email: EMAIL, password: PW, display_name: "TR" },
@@ -78,10 +79,16 @@ const dispatchResult = await page.evaluate(({ hx, hy, dy }) => {
   const r = handle.getBoundingClientRect()
   const cx = r.left + r.width / 2
   const cy = r.top  + r.height / 2
+  // What is actually at that point? May be different from handle if z-index is off.
+  const topMost = document.elementFromPoint(cx, cy)
+  const topClass = (topMost?.className || "(none)").toString().slice(0, 60)
+  const topTag = topMost?.tagName
+  const isHandleTop = topMost === handle
+  // Try dispatching on the handle directly first
   handle.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: cx, clientY: cy, button: 0 }))
   document.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: cx, clientY: cy + dy }))
   document.dispatchEvent(new MouseEvent("mouseup",   { bubbles: true, clientX: cx, clientY: cy + dy }))
-  return { ok: true, cx, cy, hx, hy }
+  return { ok: true, cx, cy, hx, hy, topTag, topClass, isHandleTop }
 }, { hx: handleX, hy: handleY, dy: 40 })
 console.log("Direct dispatch result:", dispatchResult)
 await page.waitForTimeout(1800)  // let save complete
