@@ -8,6 +8,7 @@ import { tableToTiptap, tiptapToTable } from "../../../lib/bridge/tableTiptapAda
 import { bridgeTableExtensions } from "../../../lib/bridge/extensions/bridgeTableKit"
 import { setActiveTiptapEditor } from "../../../lib/bridge/activeEditor"
 import { registerRenderer, type NativeRendererProps } from "./RendererRegistry"
+import TextBubbleMenu from "../TextBubbleMenu"
 
 /**
  * Native renderer for BridgeTable — Google Sheets-style "always editable" pattern.
@@ -316,6 +317,7 @@ function PersistentTableEditor({
       }}
     >
       {selected && <TableMergeSplitHint editor={editor} />}
+      {selected && <TextBubbleMenu editor={editor} />}
       <EditorContent editor={editor} onBlur={save} />
     </div>
   )
