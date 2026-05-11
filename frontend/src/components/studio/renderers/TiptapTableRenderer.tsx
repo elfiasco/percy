@@ -376,11 +376,163 @@ function PersistentTableEditor({
       {selected && <TableMergeSplitHint editor={editor} />}
       {selected && <TextBubbleMenu editor={editor} />}
       <EditorContent editor={editor} onBlur={save} style={{ height: "100%" }} />
+      {selected && (
+        <RowResizeHandles
+          editor={editor}
+          content={content}
+          wrapperRef={wrapperRef}
+          onCommit={(nextRowHeights) => {
+            // Write proportional heights back into the bridge model & re-save.
+            const updated: TableTextContent = { ...content, row_heights: nextRowHeights }
+            onContentChange(updated)
+            // Eager save so the new heights persist even if the user clicks away
+            ;(async () => {
+              try {
+                const next = tiptapToTable(editor.getJSON(), updated)
+                await updateElementText(docId, slideN, elementId, next)
+                studioStore.setTextPayload(elementId, next)
+              } catch (e) {
+                console.error("[Percy] row resize save failed:", e)
+              }
+            })()
+          }}
+        />
+      )}
     </div>
   )
 }
 
 // ── Merge/split toolbar hint (shown when cells are selected) ────────────────
+
+// ── Row drag-resize handles (Google Sheets parity) ─────────────────────────
+// Tiptap has native column resize but no row resize. We add small invisible
+// drag bars at each row's bottom edge. Dragging adjusts the proportions
+// between the resized row and the one below it (sum stays constant so the
+// table doesn't grow/shrink unexpectedly).
+
+function RowResizeHandles({
+  editor, content, wrapperRef, onCommit,
+}: {
+  editor: ReturnType<typeof useEditor>
+  content: TableTextContent
+  wrapperRef: React.RefObject<HTMLDivElement | null>
+  onCommit: (nextRowHeights: number[]) => void
+}) {
+  const [rowBounds, setRowBounds] = useState<Array<{ top: number; height: number; idx: number }>>([])
+  const dragRef = useRef<{ rowIdx: number; startY: number; topPx: number; bottomPx: number } | null>(null)
+
+  // Re-measure row positions whenever the editor changes (after layout settles).
+  useEffect(() => {
+    if (!editor) return
+    const compute = () => {
+      const wrapper = wrapperRef.current
+      if (!wrapper) return
+      const root = editor.view.dom as HTMLElement
+      const trs = Array.from(root.querySelectorAll("tr")) as HTMLElement[]
+      const wrapperRect = wrapper.getBoundingClientRect()
+      const bounds = trs.map((tr, idx) => {
+        const r = tr.getBoundingClientRect()
+        return { top: r.top - wrapperRect.top, height: r.height, idx }
+      })
+      setRowBounds(bounds)
+    }
+    // Initial + on every editor update + every animation frame for a short
+    // period after mount to catch async layout settling.
+    const t1 = requestAnimationFrame(() => requestAnimationFrame(compute))
+    const onUpdate = () => requestAnimationFrame(compute)
+    editor.on("update", onUpdate)
+    const ro = new ResizeObserver(compute)
+    if (wrapperRef.current) ro.observe(wrapperRef.current)
+    return () => {
+      cancelAnimationFrame(t1)
+      editor.off("update", onUpdate)
+      ro.disconnect()
+    }
+  }, [editor, wrapperRef, content])
+
+  const onPointerDown = (e: React.PointerEvent, rowIdx: number) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const wrapper = wrapperRef.current
+    if (!wrapper) return
+    const a = rowBounds[rowIdx]
+    const b = rowBounds[rowIdx + 1]
+    if (!a || !b) return  // need a row below to resize against
+    dragRef.current = {
+      rowIdx,
+      startY: e.clientY,
+      topPx: a.top,
+      bottomPx: b.top + b.height,
+    }
+    ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+    document.body.style.cursor = "ns-resize"
+  }
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    const drag = dragRef.current
+    if (!drag) return
+    const wrapper = wrapperRef.current
+    if (!wrapper) return
+    const wrapperRect = wrapper.getBoundingClientRect()
+    const newSplit = e.clientY - wrapperRect.top
+    const minRow = 20
+    const top = drag.topPx, bot = drag.bottomPx
+    const clamped = Math.max(top + minRow, Math.min(bot - minRow, newSplit))
+    // Live-update the DOM rows for visual feedback (committed on pointerup)
+    const root = editor!.view.dom as HTMLElement
+    const trs = Array.from(root.querySelectorAll("tr")) as HTMLElement[]
+    if (trs[drag.rowIdx])     trs[drag.rowIdx].style.height     = `${clamped - top}px`
+    if (trs[drag.rowIdx + 1]) trs[drag.rowIdx + 1].style.height = `${bot - clamped}px`
+  }
+
+  const onPointerUp = (_e: React.PointerEvent) => {
+    const drag = dragRef.current
+    dragRef.current = null
+    document.body.style.cursor = ""
+    if (!drag) return
+    // Read final pixel heights and convert to proportions relative to the
+    // model's existing row_heights sum (preserving overall table inches).
+    const root = editor!.view.dom as HTMLElement
+    const trs = Array.from(root.querySelectorAll("tr")) as HTMLElement[]
+    const pxHeights = trs.map((tr) => tr.getBoundingClientRect().height)
+    const totalPx = pxHeights.reduce((a, b) => a + b, 0)
+    if (totalPx === 0) return
+    const totalInches = (content.row_heights && content.row_heights.length === pxHeights.length)
+      ? content.row_heights.reduce((a, b) => a + b, 0)
+      : pxHeights.length  // default to 1 inch per row when no prior model
+    const nextHeights = pxHeights.map((px) => (px / totalPx) * totalInches)
+    onCommit(nextHeights)
+  }
+
+  if (!editor || rowBounds.length < 2) return null
+
+  return (
+    <>
+      {rowBounds.slice(0, -1).map((b) => (
+        <div
+          key={b.idx}
+          onPointerDown={(e) => onPointerDown(e, b.idx)}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          style={{
+            position: "absolute",
+            top:    b.top + b.height - 3,
+            left:   0,
+            right:  0,
+            height: 6,
+            cursor: "ns-resize",
+            zIndex: 5,
+            // Subtle hover affordance (transparent normally; light blue on hover)
+            background: "transparent",
+            transition: "background 80ms",
+          }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "rgba(26,115,232,0.18)" }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = "transparent" }}
+        />
+      ))}
+    </>
+  )
+}
 
 // ── Right-click table cell context menu (Google Sheets parity) ─────────────
 // Listens for the global 'percy:table-cell-ctx' event dispatched by the

@@ -34,6 +34,15 @@ const BridgeTableRow = TableRow.extend({
         renderHTML: (attrs: { style?: string | null }) =>
           attrs.style ? { style: attrs.style } : {},
       },
+      // Stable row identity that survives insert/delete reorders. Used by
+      // tiptapToTable() to reconcile row_heights against the model — knowing
+      // exactly which row was removed when a user deletes from the middle.
+      rowId: {
+        default: null as string | null,
+        parseHTML: (el) => (el as HTMLElement).getAttribute("data-row-id") || null,
+        renderHTML: (attrs: { rowId?: string | null }) =>
+          attrs.rowId ? { "data-row-id": attrs.rowId } : {},
+      },
     }
   },
 })

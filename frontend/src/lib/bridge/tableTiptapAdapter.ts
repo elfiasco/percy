@@ -29,8 +29,14 @@ export function tableToTiptap(content: TableTextContent): JSONContent {
       {
         type: "table",
         content: content.cells.map((row, rowIdx) => {
+          // Per-row id matching this row's slot in the source content.row_heights[].
+          // tiptapToTable() reads this back to know which rows survived an
+          // insert/delete (middle-row deletes are now position-accurate).
+          // Rows added by Tiptap after the initial mount have no rowId — they're
+          // treated as "new" in the reconciliation logic.
           return {
             type: "tableRow",
+            attrs: { rowId: `r${rowIdx}` },
             content: row.map((cell, colIdx) => {
               const colWidthPct = (colWidths && totalColWidth > 0 && colIdx < colWidths.length)
                 ? (colWidths[colIdx] / totalColWidth * 100)
@@ -43,6 +49,7 @@ export function tableToTiptap(content: TableTextContent): JSONContent {
     ],
   }
 }
+
 
 function cellToTiptap(cell: TableCellData, content: TableTextContent, rowIdx: number, colWidthPct: number | null = null): JSONContent {
   const paragraphs: ParagraphData[] =
@@ -158,12 +165,49 @@ export function tiptapToTable(
   const newRowCount = grid.length
   const newColCount = grid[0]?.length ?? 0
 
-  // Carry over the proportions from the previous content.
+  // ── Row heights via rowId reconciliation ────────────────────────────────
+  // Each Tiptap row carries attrs.rowId = "rN" pointing back to its original
+  // index in prevContent.row_heights. Rows added by Tiptap commands have
+  // rowId=null and get the average height for new slots. This handles
+  // middle-row deletes correctly — we know exactly which height to drop.
   const prevRH = prevContent?.row_heights ?? []
-  const prevCW = prevContent?.column_widths ?? []
+  const row_heights: number[] = rows.length > 0 && prevRH.length > 0
+    ? rows.map((row) => {
+        const id = ((row.attrs as { rowId?: string } | undefined)?.rowId) || ""
+        const m = id.match(/^r(\d+)$/)
+        if (m) {
+          const origIdx = parseInt(m[1], 10)
+          if (origIdx >= 0 && origIdx < prevRH.length) return prevRH[origIdx]
+        }
+        // New row: use average of existing rows in prev model
+        return prevRH.reduce((a, b) => a + b, 0) / prevRH.length
+      })
+    : []
 
-  const row_heights = reconcileDimensions(prevRH, newRowCount)
-  const column_widths = reconcileDimensions(prevCW, newColCount)
+  // ── Column widths from Tiptap's native column-resize ────────────────────
+  // Tiptap's TableCell extension stores resized widths on attrs.colwidth as
+  // an array of numbers (px per spanned col). We read the FIRST row's cells
+  // and convert to relative proportions, then scale to match the prevContent
+  // total (or the model's element width — we use prev sum to preserve user
+  // intent without needing the slide context here).
+  const prevCW = prevContent?.column_widths ?? []
+  const firstRow = rows[0]
+  const tipColWidths: (number | null)[] = (firstRow?.content ?? []).map((cell) => {
+    const cw = (cell.attrs as { colwidth?: number[] | null } | undefined)?.colwidth
+    if (!cw || cw.length === 0 || !Number.isFinite(cw[0])) return null
+    return cw[0]
+  })
+  const allColsHaveWidth = tipColWidths.length > 0 && tipColWidths.every((w) => w !== null)
+  let column_widths: number[]
+  if (allColsHaveWidth) {
+    // User has resized columns — convert px ratios to inches scaled to prev total
+    const tipSum = tipColWidths.reduce<number>((a, b) => a + (b ?? 0), 0)
+    const prevTotal = prevCW.length > 0 ? prevCW.reduce((a, b) => a + b, 0) : tipSum
+    column_widths = tipColWidths.map((w) => ((w ?? 0) / tipSum) * prevTotal)
+  } else {
+    // No native resize info — fall back to reconciling prev against new col count
+    column_widths = reconcileDimensions(prevCW, newColCount)
+  }
 
   return {
     kind: "table",
