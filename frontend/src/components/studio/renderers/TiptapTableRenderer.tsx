@@ -176,6 +176,10 @@ function PersistentTableEditor({
       attributes: {
         class: "tiptap-bridge-table-editor",
         spellcheck: "true",
+        // Force the contenteditable to fill its wrapper. Tiptap/ProseMirror's
+        // own CSS uses 'height: auto' which beats our class-based rule in
+        // some specificity orders, so set it inline.
+        style: "height: 100%; box-sizing: border-box;",
       },
       handlePaste(view, event) {
         const text = event.clipboardData?.getData("text/plain")
