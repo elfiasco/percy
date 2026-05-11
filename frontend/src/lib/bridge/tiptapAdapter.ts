@@ -50,6 +50,11 @@ function paragraphToTiptap(p: ParagraphData): JSONContent {
   if (p.line_spacing != null) attrs.lineSpacing  = p.line_spacing
   if (p.bullet_type && p.bullet_type !== "none") attrs.bulletType = p.bullet_type
   if (p.bullet_char) attrs.bulletChar = p.bullet_char
+  // Dominant font-size for the paragraph — anchors line-height so unitless
+  // multipliers like 0.7 produce sensible line boxes around the actual text
+  // size (60pt span → 42pt line box), not the 16px browser default.
+  const runSizes = p.runs.map((r) => r.font_size).filter((s): s is number => typeof s === "number")
+  if (runSizes.length > 0) attrs.paraFontSize = Math.max(...runSizes)
 
   const inline: JSONContent[] = []
   for (const run of p.runs) {

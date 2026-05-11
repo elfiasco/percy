@@ -16,6 +16,25 @@ export const BridgeParagraph = Paragraph.extend({
   addAttributes() {
     return {
       ...this.parent?.(),
+      // Dominant font-size for the paragraph in pt. Used as the line-height
+      // anchor so that lineSpacing (a unitless multiplier in CSS) computes
+      // against the actual content size, not the browser default 16px <p>.
+      // Without this, line-height: 0.7 on a paragraph containing 60pt spans
+      // produces an 11px line box and lines stack on top of each other.
+      // Derived in paragraphToTiptap from runs[0].font_size (or max if mixed).
+      paraFontSize: {
+        default: null as number | null,
+        parseHTML: (el) => {
+          const v = (el as HTMLElement).style.fontSize
+          if (!v) return null
+          const m = /([\d.]+)/.exec(v)
+          return m ? parseFloat(m[1]) : null
+        },
+        renderHTML: (attrs: { paraFontSize?: number | null }) =>
+          attrs.paraFontSize != null
+            ? { style: `font-size: calc(${attrs.paraFontSize} * var(--pt-scale, 0.1574) * 1vh)` }
+            : {},
+      },
       spaceBefore: {
         default: null as number | null,
         parseHTML: (el) => {

@@ -2007,6 +2007,12 @@ class SlideRenderer:
             line_h = fs_pt * ls_mult / 72
 
             align = (para.alignment or "left").lower()
+            # Normalize PPTX raw codes ("ctr"/"r"/"l"/"just") to canonical names
+            # before mapping. Without this, paragraphs whose alignment came
+            # straight from python-pptx (which uses "ctr"/etc.) silently fell
+            # through to the "left" default and centered/right text rendered
+            # at the wrong horizontal anchor.
+            align = {"ctr": "center", "r": "right", "l": "left", "just": "justify"}.get(align, align)
             if align in {"justify", "distribute", "thai_distribute"}:
                 align = "left"
             ha = {"center": "center", "right": "right"}.get(align, "left")
