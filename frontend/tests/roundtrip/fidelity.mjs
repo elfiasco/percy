@@ -257,7 +257,15 @@ async function screenshotSlides(browser, projId, docId, slideNums, outDir) {
           { timeout: 12000 }
         )
       } catch {
-        console.warn(`    slide ${n}: nav/hydrate didn't complete in 12s — likely showing stale slide`)
+        // Report which attribute didn't update — helps debug navigation flakes
+        const state = await page.evaluate(() => {
+          const c = document.querySelector("[data-slide-canvas='true']")
+          return {
+            slideN: c?.getAttribute("data-slide-n"),
+            hydratedSlideN: c?.getAttribute("data-hydrated-slide-n"),
+          }
+        })
+        console.warn(`    slide ${n}: nav/hydrate timeout — data-slide-n=${state.slideN} data-hydrated-slide-n=${state.hydratedSlideN}`)
       }
       await page.waitForTimeout(800)
     }
