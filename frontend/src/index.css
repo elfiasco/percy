@@ -176,9 +176,16 @@
   .bridge-table th { font-weight: 600; }
 
   /* Tiptap table editor — cell borders and selection (Google Slides style) */
+  /* The editor wrapper, ProseMirror, and table must all fill the element bounds
+     so the selection rectangle matches the visible table footprint exactly. */
+  .tiptap-bridge-table-editor {
+    height: 100%;
+    box-sizing: border-box;
+  }
   .tiptap-bridge-table-editor table {
     border-collapse: collapse;
     width: 100%;
+    height: 100%;
     table-layout: fixed;
   }
   .tiptap-bridge-table-editor td,
@@ -190,7 +197,10 @@
     position: relative;
     word-break: break-word;
   }
-  .tiptap-bridge-table-editor .ProseMirror { outline: none; }
+  .tiptap-bridge-table-editor .ProseMirror { outline: none; height: 100%; }
+  /* The tableWrapper div that Tiptap inserts around the table — must also fill
+     the available height for the percentage row-heights to work. */
+  .tiptap-bridge-table-editor .tableWrapper { height: 100%; }
 
   /* Selected cell highlight (Google blue tint) */
   .ProseMirror .selectedCell {

@@ -17,6 +17,9 @@ export function tableToTiptap(content: TableTextContent): JSONContent {
   const totalColWidth = colWidths && colWidths.length > 0
     ? colWidths.reduce((a, b) => a + b, 0)
     : 0
+  const rowHeights = content.row_heights ?? []
+  const totalRowHeight = rowHeights.length > 0 ? rowHeights.reduce((a, b) => a + b, 0) : 0
+  const rowCount = content.cells.length || 1
 
   return {
     type: "doc",
@@ -24,11 +27,18 @@ export function tableToTiptap(content: TableTextContent): JSONContent {
       {
         type: "table",
         content: content.cells.map((row, rowIdx) => {
-          const rowHeightIn = content.row_heights?.[rowIdx]
-          const rowStyle = rowHeightIn ? `height: ${(rowHeightIn * 72).toFixed(1)}pt` : null
+          // Use PERCENTAGE row heights instead of absolute pt so the table
+          // fills the element bounds at any zoom level. Without this, rows
+          // render at 72pt = 96px regardless of the element's actual pixel
+          // size, leaving a gap at the bottom of the selection box.
+          const rowHeightIn = rowHeights[rowIdx]
+          const pct = rowHeightIn && totalRowHeight > 0
+            ? (rowHeightIn / totalRowHeight) * 100
+            : 100 / rowCount
+          const rowStyle = `height: ${pct.toFixed(2)}%`
           return {
             type: "tableRow",
-            ...(rowStyle ? { attrs: { style: rowStyle } } : {}),
+            attrs: { style: rowStyle },
             content: row.map((cell, colIdx) => {
               const colWidthPct = (colWidths && totalColWidth > 0 && colIdx < colWidths.length)
                 ? (colWidths[colIdx] / totalColWidth * 100)
