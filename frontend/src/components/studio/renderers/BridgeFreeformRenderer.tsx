@@ -119,7 +119,7 @@ function BridgeFreeformRendererImpl({ element, docId, slideN, renderKey }: Nativ
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docId, slideN, element.id, renderKey])
 
-  if (!data) return <div style={{ width: "100%", height: "100%" }} />
+  if (!data) return <div style={{ width: "100%", height: "100%" }} data-percy-loading="freeform" />
 
   const fillTypeLower = data.fill_type?.toLowerCase()
   const isGradient = (fillTypeLower === "gradient" || fillTypeLower === "gradfill") && data.gradient_stops && data.gradient_stops.length >= 2

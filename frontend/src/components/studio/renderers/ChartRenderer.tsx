@@ -705,7 +705,7 @@ function ChartRendererImpl({ element, docId, slideN, renderKey, selected }: Nati
   }
   if (!data) {
     return (
-      <div style={{
+      <div data-percy-loading="chart" style={{
         width: "100%", height: "100%",
         display: "flex", alignItems: "center", justifyContent: "center",
         background: "#f8f9fa",

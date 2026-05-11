@@ -50,7 +50,7 @@ function TiptapTableRendererImpl({
   }, [payload.error, payload.text, payload.style])
 
   if (error)    return <div style={ERR_STYLE}>! table load failed</div>
-  if (!content) return <div style={{ width: "100%", height: "100%" }} />
+  if (!content) return <div style={{ width: "100%", height: "100%" }} data-percy-loading="table" />
 
   const containerStyle: React.CSSProperties = {
     width:     "100%",

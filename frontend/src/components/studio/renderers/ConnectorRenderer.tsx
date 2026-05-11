@@ -65,7 +65,7 @@ function ConnectorRendererImpl({ element, docId, slideN, renderKey, selected }: 
     )
   }
   if (!data) {
-    return <div style={{ width: "100%", height: "100%" }} />
+    return <div style={{ width: "100%", height: "100%" }} data-percy-loading="connector" />
   }
 
   // Endpoints are absolute slide inches. Map into 0..100% of the element's

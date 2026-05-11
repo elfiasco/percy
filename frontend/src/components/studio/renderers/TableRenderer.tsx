@@ -74,7 +74,7 @@ function TableRendererImpl({ element, docId, slideN, renderKey }: NativeRenderer
   }
   if (!data) {
     return (
-      <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center",
+      <div data-percy-loading="table" style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center",
                     background: "transparent", color: "#9ca3af", fontSize: 10, fontFamily: "monospace" }}>
         Loading table…
       </div>

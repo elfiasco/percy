@@ -268,11 +268,14 @@ async function screenshotSlides(browser, projId, docId, slideNums, outDir) {
       () => !document.querySelector('[data-slide-canvas="true"]')?.textContent?.includes("Loading chart"),
       { timeout: 6000 }
     ).catch(() => {})
-    // Wait for text elements to finish loading their payload (data-percy-loading="text"
-    // is set while content is null; cleared once the text payload arrives).
+    // Wait for all renderers to finish loading their payloads. Renderers set
+    // [data-percy-loading="<kind>"] on a placeholder while their payload is
+    // null (text/freeform/chart/connector/table) and remove it once loaded.
+    // Without this wait, the screenshot can fire mid-load and miss rich
+    // content (charts, freeforms, tables), inflating RMS.
     await page.waitForFunction(
-      () => !document.querySelector('[data-slide-canvas="true"] [data-percy-loading="text"]'),
-      { timeout: 8000 }
+      () => !document.querySelector('[data-slide-canvas="true"] [data-percy-loading]'),
+      { timeout: 10000 }
     ).catch(() => {})
     // Extra settle time for Recharts to finish drawing SVG bars/paths after data loads.
     await page.waitForTimeout(2000)
