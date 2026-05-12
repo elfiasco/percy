@@ -381,7 +381,7 @@ async function screenshotSlides(browser, projId, docId, slideNums, outDir) {
         }
       })
     })
-    if (true || n <= 3 || renderedCount.length < 5) {
+    if (process.env.PERCY_FIDELITY_DEBUG === "1") {
       console.log(`    slide ${n}: rendered ${renderedCount.length} elements`)
       for (const re of renderedCount) {
         console.log(`      rect=${JSON.stringify(re.rect)} img=${re.hasImg?"Y":"-"} svg=${re.hasSvg?"Y":"-"} text="${re.text}"`)
@@ -666,6 +666,8 @@ async function runDeck(browser, pptxPath, docIdOverride, projIdOverride) {
           if (sty) {
             e.style_vertical_anchor = sty.vertical_anchor
             e.style_text_insets = sty.text_insets
+            e.style_font_scale = sty.font_scale
+            e.style_lnSpcReduction = sty.lnSpcReduction
           }
         } catch { /* tolerate */ }
         // BridgeShape: dump fill, preset
