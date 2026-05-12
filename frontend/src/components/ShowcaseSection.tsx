@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import TemplatePreview from "./TemplatePreview"
+import SlideSvg from "./SlideSvg"
 
 /**
  * ShowcaseSection — the scroll-cycling demo on the splash page.
@@ -48,6 +49,14 @@ interface ShowcaseBrand {
       tags?: string[]
     }
   }>
+  demo?: {
+    doc_id: string
+    project_id: string
+    generated_at: number
+    slides_applied: number
+    demo_id?: string
+    demo_name?: string
+  } | null
 }
 
 interface WeatherRow { city: string; code: string; temp_f: number | null; wind_kph?: number | null }
@@ -273,8 +282,8 @@ const BrandSection = ({
   index: number
   ref: (el: HTMLDivElement | null) => void
 }) => {
-  // Cap previews — we want a tight visual hit, not all 8 templates.
-  const itemsToShow = brand.items.slice(0, 6)
+  const bgColor = brand.palette[0]?.hex || "#F9F8F4"
+  const demo = brand.demo
 
   return (
     <div
@@ -293,12 +302,48 @@ const BrandSection = ({
       <p className="text-[12px] text-muted mb-6 max-w-md leading-relaxed">
         {brand.description}
       </p>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        {itemsToShow.map((item) => {
+
+      {/* ── Generated demo slides — the proof ─────────────────────── */}
+      {demo && demo.slides_applied > 0 ? (
+        <div className="mb-8">
+          <div className="text-[10px] uppercase tracking-[0.18em] text-muted mb-2">
+            Generated deck · {demo.slides_applied} slides
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {Array.from({ length: Math.min(demo.slides_applied, 8) }).map((_, i) => (
+              <div
+                key={i}
+                className="border border-edge bg-surface/30 overflow-hidden"
+              >
+                <SlideSvg
+                  docId={demo.doc_id}
+                  slideN={i + 1}
+                  width={460}
+                  background={bgColor}
+                />
+                <div className="px-3 py-1.5 text-[10px] text-muted font-mono">
+                  Slide {i + 1}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="mb-8 border border-dashed border-edge p-6 text-center">
+          <div className="text-[12px] text-muted">
+            Demo deck is being generated…
+          </div>
+        </div>
+      )}
+
+      {/* ── Templates inventory — what the agent had to choose from ── */}
+      <div className="text-[10px] uppercase tracking-[0.18em] text-muted mb-2">
+        Templates in this set · {brand.items.length}
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        {brand.items.slice(0, 6).map((item) => {
           const layout = (item.template?.layout as Array<Record<string, unknown>>) ?? []
           const sampleInputs = (item.template?.sample_inputs as Record<string, unknown>) ?? {}
-          // Honor the brand's palette by passing it through; TemplatePreview
-          // resolves named tokens against it.
           return (
             <div
               key={item.template_id}
@@ -309,18 +354,16 @@ const BrandSection = ({
                   layout={layout}
                   sampleInputs={sampleInputs}
                   palette={brand.palette}
-                  width={460}
-                  background={brand.palette[0]?.hex || "#F9F8F4"}
+                  width={300}
+                  background={bgColor}
                 />
               ) : (
                 <div className="aspect-video bg-ink/40 flex items-center justify-center text-[10px] text-muted">
                   (no layout)
                 </div>
               )}
-              <div className="px-3 py-2 text-[10px] text-muted">
-                <span className="uppercase tracking-wider">{item.kind}</span>
-                {" · "}
-                <span className="text-paper">{item.template?.name || "?"}</span>
+              <div className="px-2 py-1 text-[9px] text-muted truncate">
+                {item.kind} · {item.template?.name || "?"}
               </div>
             </div>
           )

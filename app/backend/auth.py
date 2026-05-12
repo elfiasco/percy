@@ -58,6 +58,7 @@ _PUBLIC_PATTERNS = [
     # Slide thumbnails for the showcase decks. The doc_ids are random 8-char
     # strings so they're not enumerable; only auth'd routes leak doc lists.
     re.compile(r"^/api/docs/[a-zA-Z0-9]+/slides/\d+/bridge\.png$"),
+    re.compile(r"^/api/docs/[a-zA-Z0-9]+/slides/\d+/svg-data$"),
     re.compile(r"^/openapi\.json$"),
     re.compile(r"^/docs"),
     re.compile(r"^/redoc"),

@@ -1202,6 +1202,181 @@ def rerun_auto_demo(request: Request, set_id: str):
     return result
 
 
+# ── Standalone demo-deck API ────────────────────────────────────────────────
+
+
+class CreateDemoDeckRequest(BaseModel):
+    """Body for POST /api/demo-decks — see app.backend.demo_deck_runner."""
+    template_set_id: str
+    prompt_id: str | None = None
+    force: bool = False
+
+
+@router.post("/api/demo-decks")
+def create_demo_deck(request: Request, req: CreateDemoDeckRequest):
+    """Generate a demo deck for a template set.
+
+    This is a STANDALONE operation — the demo deck is a regular
+    studio_project artifact, NOT part of the template set itself. The set
+    is the *input*; the project is the *output*. A set can have many
+    demos over time.
+
+    Forces Bedrock Sonnet 4.6 for the underlying generate-deck call —
+    the demo is meant to showcase the best possible output, so we don't
+    let it fall back to local LM Studio or smaller models.
+
+    Returns:
+      {
+        ok, throttled, project_id, doc_id, set_id, prompt_id, summary
+      }
+
+    Errors:
+      400 if the template set doesn't exist
+      500 if generation fails (logs detail server-side)
+    """
+    auth.require_user(request)
+    from app.backend import demo_deck_runner
+    result = demo_deck_runner.run_demo(
+        template_set_id=req.template_set_id,
+        prompt_id=req.prompt_id,
+        force=req.force,
+        asgi_app=request.app,
+        auth_token=request.cookies.get("percy_session"),
+    )
+    if not result.get("ok"):
+        raise HTTPException(500, result.get("error", "demo generation failed"))
+    return result
+
+
+@router.get("/api/docs/{doc_id}/slides/{n}/svg-data")
+def get_slide_svg_data(request: Request, doc_id: str, n: int):
+    """Return a compact JSON payload of a slide's elements suitable for
+    client-side SVG rendering.
+
+    The endpoint is unauthenticated (already in the showcase allowlist
+    pattern via random doc_ids) so the marketing splash can render
+    real generated decks without forcing the visitor to sign in.
+    """
+    from . import main as _backend_main
+    doc_record = _backend_main._docs.get(doc_id)
+    if not doc_record:
+        raise HTTPException(404, "doc not in memory")
+    doc = doc_record["doc"]
+    if n < 1 or n > len(doc.slides):
+        raise HTTPException(404, f"slide {n} out of range (doc has {len(doc.slides)})")
+    slide = doc.slides[n - 1]
+    theme = getattr(doc, "theme_colors", None) or {}
+
+    elements_out: list[dict[str, Any]] = []
+    for el in (slide.elements or []):
+        elements_out.append(_serialize_element_for_svg(el, theme))
+
+    return {
+        "doc_id": doc_id,
+        "slide_n": n,
+        "width_in": getattr(slide, "width", 13.333),
+        "height_in": getattr(slide, "height", 7.5),
+        "elements": elements_out,
+    }
+
+
+def _serialize_element_for_svg(el: Any, theme: dict[str, str]) -> dict[str, Any]:
+    """Compact element representation for the SlideSvg frontend renderer.
+
+    Returns the minimum fields needed to faithfully reproduce the element
+    visually: type, position, fill, text content + formatting, line, etc.
+    Trims giant blobs (image bytes, chart_xml_blob, workbook bytes) that
+    we don't need for SVG render.
+    """
+    def _resolve(c: Any) -> str | None:
+        if c is None or not getattr(c, "value", None): return None
+        try:
+            h = c.resolve(theme)
+            return h if h and h.startswith("#") else None
+        except Exception:
+            return None
+
+    et = getattr(el, "element_type", el.__class__.__name__)
+    pos = getattr(el, "position", None)
+    out: dict[str, Any] = {
+        "type": et,
+        "position": {
+            "left_in": getattr(pos, "left", 0) if pos else 0,
+            "top_in": getattr(pos, "top", 0) if pos else 0,
+            "width_in": getattr(pos, "width", 0) if pos else 0,
+            "height_in": getattr(pos, "height", 0) if pos else 0,
+        } if pos else None,
+    }
+
+    # Fill (shape)
+    fill = getattr(el, "fill", None)
+    if fill is not None:
+        fc = getattr(fill, "color", None) or getattr(fill, "fill_color", None)
+        out["fill"] = {
+            "type": getattr(fill, "fill_type", None),
+            "color": _resolve(fc),
+        }
+    # Text content
+    texts: list[dict[str, Any]] = []
+    for path in ("text_frame.paragraphs", "paragraphs", "text_content.paragraphs"):
+        cursor: Any = el
+        for attr in path.split("."):
+            cursor = getattr(cursor, attr, None)
+            if cursor is None: break
+        for para in (cursor or []):
+            for run in (getattr(para, "runs", None) or []):
+                t = getattr(run, "text", None)
+                if not t: continue
+                texts.append({
+                    "text": t,
+                    "font_name": getattr(run, "font_name", None),
+                    "font_size": getattr(run, "font_size", None),
+                    "font_bold": getattr(run, "font_bold", None),
+                    "font_italic": getattr(run, "font_italic", None),
+                    "color": _resolve(getattr(run, "font_color", None)),
+                })
+    if texts:
+        out["text_runs"] = texts
+        # Also surface alignment if at the paragraph level.
+        for path in ("text_frame.paragraphs", "paragraphs", "text_content.paragraphs"):
+            cursor = el
+            for attr in path.split("."):
+                cursor = getattr(cursor, attr, None)
+                if cursor is None: break
+            if cursor:
+                first_para = cursor[0] if isinstance(cursor, list) else None
+                if first_para:
+                    out["text_align"] = getattr(first_para, "alignment", None)
+                break
+
+    # Line (connectors, borders)
+    line = getattr(el, "line", None)
+    if line is not None:
+        lc = getattr(line, "color", None)
+        out["line"] = {
+            "visible": getattr(line, "visible", True),
+            "color": _resolve(lc),
+            "width": getattr(line, "width", None),
+        }
+
+    # Chart placeholder marker
+    if et == "BridgeChart":
+        out["chart_type"] = getattr(el, "chart_type", None)
+        cats = getattr(el, "categories", None)
+        if cats and getattr(cats, "categories", None):
+            out["chart_categories"] = list(cats.categories)[:8]
+        series = getattr(el, "series", None) or []
+        if series:
+            out["chart_series_count"] = len(series)
+
+    # Table placeholder marker
+    if et == "BridgeTable":
+        data = getattr(el, "data", None) or []
+        out["table_dim"] = [len(data), len(data[0]) if data else 0]
+
+    return out
+
+
 @router.get("/api/demo-prompts")
 def list_demo_prompts(request: Request):
     """Catalog of available canned demo prompts. Used by the editor's

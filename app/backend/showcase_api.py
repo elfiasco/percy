@@ -177,6 +177,23 @@ def get_showcase() -> dict[str, Any]:
                 it["template"] = _agent_tpls.get_template(it["template_id"])
         except Exception:
             pass
+        # Demo deck info — the splash uses this to render real generated
+        # slides side-by-side. The demo is a separate artifact (a
+        # studio_project) but we surface its doc_id + slide count via
+        # the convenience columns the runner stamps on the set row.
+        demo_block = None
+        demo_doc_id = tpl.get("last_demo_doc_id")
+        demo_summary = tpl.get("last_demo_summary") or {}
+        if demo_doc_id:
+            demo_block = {
+                "doc_id": demo_doc_id,
+                "project_id": tpl.get("last_demo_project_id"),
+                "generated_at": tpl.get("last_demo_at"),
+                "slides_applied": demo_summary.get("slides_applied", 0),
+                "demo_id": demo_summary.get("demo_id"),
+                "demo_name": demo_summary.get("demo_name"),
+            }
+
         brands.append({
             "slug": slug,
             "set_id": set_id,
@@ -189,6 +206,7 @@ def get_showcase() -> dict[str, Any]:
             "instructions_md": tpl.get("instructions_md") or "",
             "style_profile": tpl.get("style_profile") or {},
             "items": items,
+            "demo": demo_block,
         })
 
     weather = _get_weather_cached()
