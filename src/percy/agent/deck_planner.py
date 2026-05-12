@@ -299,6 +299,8 @@ def apply_blueprint(
     llm_call: Callable[[str, str], str],
     parallel: bool = True,
     max_workers: int = 7,
+    vision_pass: bool = True,
+    vision_max_retries: int = 1,
 ) -> BlueprintResult:
     """Plan every slide in parallel, then apply them sequentially.
 
@@ -386,12 +388,22 @@ def apply_blueprint(
                 "apply_errors": result.get("errors") or [],
             })
 
+        # ── Vision-pass critique (on by default) ──
+        critique_dict: dict[str, Any] | None = None
+        if vision_pass:
+            critique_dict = _run_vision_pass(
+                spec=spec, studio=studio, available_templates=available_templates,
+                plan=plan, llm_call=llm_call,
+                max_retries=vision_max_retries,
+            )
+
         applied.append({
             "slot": spec.slot,
             "applications": applications_run,
             "elements_total": slot_elements_total,
             "rationale": plan.rationale,
             "apply_errors": slot_apply_errors,
+            "critique": critique_dict,
         })
         if slot_apply_errors:
             errors.extend(f"slot {spec.slot}: {e}" for e in slot_apply_errors)
@@ -403,6 +415,52 @@ def apply_blueprint(
         errors=errors,
         ok=(len(applied) == len(blueprint.slides)),
     )
+
+
+# ── Vision-pass plumbing ────────────────────────────────────────────────────
+
+
+def _read_slide_elements(studio: Any, slot: int) -> list[dict[str, Any]]:
+    """Pull the current state of a slide's elements via the studio HTTP
+    surface. We use the svg-data endpoint which already returns the same
+    JSON shape the critic expects."""
+    try:
+        result = studio._get(f"/api/docs/{studio.doc_id}/slides/{slot}/svg-data")
+        return result.get("elements") or []
+    except Exception as exc:
+        log.warning("_read_slide_elements[slot=%d]: failed: %s", slot, exc)
+        return []
+
+
+def _run_vision_pass(
+    *,
+    spec: SlideSpec,
+    studio: Any,
+    available_templates: list[dict[str, Any]],
+    plan: SlidePlan,
+    llm_call: Callable[[str, str], str],
+    max_retries: int = 1,
+) -> dict[str, Any]:
+    """Render slide → critique → optional one retry. Returns the final
+    critique dict for inclusion in the apply result."""
+    from percy.agent.slide_critic import critique_slide
+
+    elements = _read_slide_elements(studio, spec.slot)
+    critique = critique_slide(
+        slide_elements=elements,
+        instruction=spec.instruction,
+        llm_call=llm_call,
+    )
+
+    log.info("vision_pass[slot=%d]: %s — %d issues, would_regenerate=%s",
+             spec.slot, critique.overall_quality,
+             len(critique.issues), critique.would_regenerate)
+
+    # NOTE: actual retry-with-feedback isn't wired yet — would require
+    # clearing the slide's elements + re-planning + re-applying. For v1
+    # the critique is purely informational (surfaced on each applied
+    # slide so callers can see quality issues at a glance).
+    return critique.to_dict()
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────

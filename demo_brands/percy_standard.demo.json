@@ -9,7 +9,7 @@
     "slides_applied": 7,
     "errors": [],
     "ok": true,
-    "elapsed_seconds": 10.5
+    "elapsed_seconds": 22.8
   },
   "demo_slides_json": [
     {
@@ -851,7 +851,7 @@
           },
           "text_runs": [
             {
-              "text": "Migration finished Nov 12. Read latency down 38% on customer-facing queries.",
+              "text": "Migration finished Nov 12. Read latency down 38% on customer-facing queries. Cost held flat.",
               "font_name": "Inter",
               "font_size": 14,
               "font_bold": null,
@@ -927,7 +927,7 @@
           },
           "text_runs": [
             {
-              "text": "Launched this quarter. 14% of new logos used it to get started on their own.",
+              "text": "Launched this quarter. 14% of new logos used it \u2014 no sales or CS touch required.",
               "font_name": "Inter",
               "font_size": 14,
               "font_bold": null,
@@ -1003,7 +1003,7 @@
           },
           "text_runs": [
             {
-              "text": "Now in public beta \u2014 2,100 users and a 4.6-star rating.",
+              "text": "Now in public beta. 2,100 active users, 4.6 stars. Strongest early signal of any mobile release.",
               "font_name": "Inter",
               "font_size": 14,
               "font_bold": null,
@@ -1031,7 +1031,7 @@
             "left_in": 0.5,
             "top_in": 0.55,
             "width_in": 12.33,
-            "height_in": 0.3
+            "height_in": 0.35
           },
           "fill": {
             "type": "none",
@@ -1039,33 +1039,15 @@
           },
           "text_runs": [
             {
-              "text": "LOGO ATTAINMENT \u2014 Q4 MISS",
+              "text": "LOGO CLOSINGS \u2014 Q4 MISS",
               "font_name": "Inter",
               "font_size": 10,
               "font_bold": true,
               "font_italic": null,
-              "color": "#C5994A"
+              "color": "#7DA1CC"
             }
           ],
           "text_align": "left",
-          "line": {
-            "visible": false,
-            "color": null,
-            "width": null
-          }
-        },
-        {
-          "type": "BridgeShape",
-          "position": {
-            "left_in": 0.5,
-            "top_in": 0.55,
-            "width_in": 12.33,
-            "height_in": 0.35
-          },
-          "fill": {
-            "type": "none",
-            "color": null
-          },
           "line": {
             "visible": false,
             "color": null,
@@ -1086,7 +1068,7 @@
           },
           "text_runs": [
             {
-              "text": "We closed 47 logos vs the 51 plan.",
+              "text": "We closed 47 logos vs. the 51 plan.",
               "font_name": "Inter",
               "font_size": 32,
               "font_bold": true,
@@ -1264,5 +1246,5 @@
     }
   ],
   "snapshot_version": 1,
-  "generated_at": 1778599226
+  "generated_at": 1778599723
 }

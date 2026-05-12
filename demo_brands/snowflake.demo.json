@@ -9,7 +9,7 @@
     "slides_applied": 7,
     "errors": [],
     "ok": true,
-    "elapsed_seconds": 13.7
+    "elapsed_seconds": 33.6
   },
   "demo_slides_json": [
     {
@@ -244,7 +244,7 @@
           },
           "text_runs": [
             {
-              "text": "ARR ADDED: $2.4M  \u25b2 18% QoQ",
+              "text": "ARR ADDED",
               "font_name": "Arial",
               "font_size": 36.0,
               "font_bold": true,
@@ -374,7 +374,7 @@
           },
           "text_runs": [
             {
-              "text": "THREE THINGS WE SHIPPED THIS QUARTER",
+              "text": "WHAT WE SHIPPED THIS QUARTER",
               "font_name": "Arial",
               "font_size": 36.0,
               "font_bold": true,
@@ -392,28 +392,10 @@
         {
           "type": "BridgeShape",
           "position": {
-            "left_in": 0.4042,
-            "top_in": 0.3538,
-            "width_in": 12.525,
-            "height_in": 0.9986
-          },
-          "fill": {
-            "type": "none",
-            "color": null
-          },
-          "line": {
-            "visible": false,
-            "color": null,
-            "width": null
-          }
-        },
-        {
-          "type": "BridgeShape",
-          "position": {
-            "left_in": 0.4167,
-            "top_in": 1.3753,
-            "width_in": 12.5,
-            "height_in": 0.4302
+            "left_in": 1.0,
+            "top_in": 2.2,
+            "width_in": 10.5,
+            "height_in": 0.3333
           },
           "fill": {
             "type": "none",
@@ -421,73 +403,15 @@
           },
           "text_runs": [
             {
-              "text": "\u2014 Aurora migration complete (Nov 12): read latency down 38%\n\u2014 Self-serve onboarding launched: 14% of new logos used it\n\u2014 Mobile app v2 in public beta: 2,100 users, 4.6 stars",
+              "text": "\u2014 Aurora migration complete Nov 12 \u2014 read latency down 38%, \u2014 Self-serve onboarding launched \u2014 14% of new logos used it in Q4   I   \u2014 Mobile app v2 in public beta \u2014 2,100 users, 4.6 stars",
               "font_name": "Arial",
-              "font_size": 21.0,
-              "font_bold": false,
+              "font_size": 14.0,
+              "font_bold": true,
               "font_italic": false,
               "color": "#5C5C5C"
             }
           ],
-          "text_align": "center",
-          "line": {
-            "visible": false,
-            "color": null,
-            "width": null
-          }
-        },
-        {
-          "type": "BridgeShape",
-          "position": {
-            "left_in": 0.6956,
-            "top_in": 7.099,
-            "width_in": 2.3547,
-            "height_in": 0.2356
-          },
-          "fill": {
-            "type": "solid",
-            "color": "#888888"
-          },
-          "text_runs": [
-            {
-              "text": "\u00a9 2025 Northwind. All Rights Reserved.",
-              "font_name": "Arial",
-              "font_size": 8.0,
-              "font_bold": false,
-              "font_italic": false,
-              "color": "#929292"
-            }
-          ],
           "text_align": "left",
-          "line": {
-            "visible": false,
-            "color": null,
-            "width": null
-          }
-        },
-        {
-          "type": "BridgeShape",
-          "position": {
-            "left_in": 12.6245,
-            "top_in": 7.1021,
-            "width_in": 0.375,
-            "height_in": 0.2356
-          },
-          "fill": {
-            "type": "none",
-            "color": null
-          },
-          "text_runs": [
-            {
-              "text": "5",
-              "font_name": "Arial",
-              "font_size": 8.0,
-              "font_bold": false,
-              "font_italic": false,
-              "color": "#929292"
-            }
-          ],
-          "text_align": "right",
           "line": {
             "visible": false,
             "color": null,
@@ -693,5 +617,5 @@
     }
   ],
   "snapshot_version": 1,
-  "generated_at": 1778599240
+  "generated_at": 1778599756
 }
