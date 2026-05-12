@@ -129,16 +129,17 @@ export default function ShowcaseSection() {
             — Showcase —
           </div>
           <h2 className="text-[32px] sm:text-[42px] font-semibold tracking-[-0.01em] text-paper leading-[1.05] mb-4 max-w-3xl">
-            One prompt. <span className="text-muted">Four brand books.</span>
+            One prompt. <span className="text-muted">Two brand books.</span>
             <br />
-            Wildly different decks.
+            Two completely different decks.
           </h2>
           <p className="text-[13px] text-muted leading-[1.7] max-w-2xl">
-            {data.prompt_summary} Every set below was mined from a real
-            investor document — Snowflake's template deck, Salesforce and
-            Caterpillar's earnings PDFs, BlackRock's research report. Same
-            10-slide prompt for all of them. Look how different the agent's
-            output is.
+            {data.prompt_summary} On the left is Percy's own brand —
+            warm cream, powder cobalt, hand-crafted. On the right is
+            Snowflake, mined automatically from their 57-slide template
+            deck. Same 10-slide prompt for both. Same data. Wildly
+            different visual output, driven entirely by the brand the
+            agent reads.
           </p>
         </div>
       </div>
@@ -167,9 +168,9 @@ export default function ShowcaseSection() {
       {/* Closing line */}
       <div className="border-t border-edge px-8 sm:px-12 lg:px-20 py-12 text-center">
         <div className="text-[14px] text-muted max-w-2xl mx-auto leading-[1.7]">
-          The agent didn't memorize these brands. It mined each one from a
-          single document, in seconds. Bring your own decks and it'll do the
-          same for you.
+          The agent didn't memorize Snowflake's brand. It mined it from
+          their template deck in under a minute. Bring your own decks
+          and it'll do the same for you.
         </div>
       </div>
     </section>

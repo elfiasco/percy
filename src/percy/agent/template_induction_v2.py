@@ -339,6 +339,22 @@ The `body` shape mirrors the create_<kind> endpoint bodies:
                   header_fill, header_font, cell_font, band_fills,
                   borders, position, name}
 
+When authoring CHART templates:
+  * PRESERVE the exact axis styling (visible flags, tick fonts, gridline
+    settings) — these are the brand's chart conventions.
+  * PRESERVE the color sequence — extract the actual hex colors from the
+    series and bake them in via series[*].color or point_colors.
+  * PRESERVE legend position, font, and visibility.
+  * PARAMETERIZE: title text, categories list, series values list.
+    Use `{{categories}}` and `{{values}}` so the caller passes a
+    DataFrame-derived list.
+
+When authoring TABLE templates:
+  * PRESERVE the header fill, header font, banded_rows flag, band fills,
+    border styles — these define the brand's table look.
+  * PARAMETERIZE: title text, headers list, rows list (list of lists).
+  * Always declare `first_row_header` true if the source table has one.
+
 If on closer inspection this pattern isn't actually template-worthy
 (e.g. you flagged it in phase 1 but the full data shows it's a one-off),
 respond with: {"keep": false, "reason": "<why>"}.
@@ -411,6 +427,60 @@ def author_template(
 # ── Public entry point ──────────────────────────────────────────────────────
 
 
+def _slide_has_chart_or_table(slide: Any) -> bool:
+    """True when the slide contains at least one BridgeChart or BridgeTable
+    element. We use this as an automatic 'flag for authoring' rule because
+    charts and tables are almost always template-worthy (their formatting
+    captures a brand decision worth preserving) — and the LLM's discovery
+    phase tends to under-flag them."""
+    for el in (slide.elements or []):
+        et = getattr(el, "element_type", el.__class__.__name__)
+        if et in ("BridgeChart", "BridgeTable"):
+            return True
+    return False
+
+
+def _build_auto_chart_table_want(slide: Any) -> _Want | None:
+    """Synthesize a full_slide want for chart/table slides. The agent's
+    authoring phase will then write the actual Template dict with full
+    fidelity to the chart's axes, legend, color sequence, etc.
+
+    Looks for the chart/table as the centerpiece + supporting title/source
+    elements (anything near the chart). The author phase decides which to
+    actually preserve.
+    """
+    chart_or_table_ids: list[str] = []
+    supporting_ids: list[str] = []
+    has_chart = False
+    has_table = False
+    for el in (slide.elements or []):
+        et = getattr(el, "element_type", el.__class__.__name__)
+        ident = getattr(el, "identification", None)
+        eid = str(getattr(ident, "shape_id", "") or "") if ident else ""
+        if et == "BridgeChart":
+            chart_or_table_ids.append(eid); has_chart = True
+        elif et == "BridgeTable":
+            chart_or_table_ids.append(eid); has_table = True
+        elif et in ("BridgeText", "BridgeShape"):
+            # Include supporting text + simple shapes as part of the slide
+            # context — title, source line, accent rule. The author can
+            # decide what to keep.
+            supporting_ids.append(eid)
+    if not chart_or_table_ids:
+        return None
+    kind_label = "Chart slide" if has_chart else "Table slide"
+    if has_chart and has_table:
+        kind_label = "Chart + Table slide"
+    return _Want(
+        kind="full_slide",
+        name=kind_label,  # The author phase will rename based on actual content.
+        description=f"{kind_label} (auto-detected from BridgeChart/BridgeTable).",
+        tags=["auto", "chart" if has_chart else "table"],
+        element_ids=chart_or_table_ids + supporting_ids,
+        slide_n=getattr(slide, "slide_number", 0) or 0,
+    )
+
+
 def induce_templates_agentic(
     docs_by_ref: dict[str, Any],
     *,
@@ -420,37 +490,87 @@ def induce_templates_agentic(
 ) -> list[dict[str, Any]]:
     """Top-level: walk every slide of every doc, run discovery + authoring.
 
-    Returns the same shape as v1's induce_templates: a list of candidate
-    dicts ready to be reviewed and accepted.
+    Pipeline per slide:
+      1. If the slide contains a BridgeChart or BridgeTable element,
+         AUTOMATICALLY add a full_slide want (the LLM discovery phase
+         under-flags chart/table slides; charts almost always represent
+         a brand decision worth preserving).
+      2. Run discovery for ADDITIONAL wants (titles, footers, etc.).
+      3. For every want (auto + discovered), call author_template with
+         the full Bridge JSON.
 
-    Dedupes by normalized name across the final list — if both phase-1
-    runs across two slides surface a "Slide Title" candidate, only the
-    higher-confidence one survives.
+    Dedupes by normalized name across the final list.
     """
     if llm_call is None:
         log.warning("induce_templates_agentic: llm_call is required — returning []")
         return []
 
+    # Three-pass pipeline so the cap doesn't starve chart/table slides:
+    #   Pass A: walk every slide, collect AUTO chart/table wants (no LLM).
+    #   Pass B: walk every slide, run discovery (one LLM call/slide); apply
+    #           cap to discovery wants only.
+    #   Pass C: author every collected want (one LLM call each).
+    #
+    # Chart/table wants are NEVER dropped by the cap — they're the highest-
+    # value templates and shouldn't compete with dozens of "Footer Text"
+    # variants for a slot.
     candidates: list[dict[str, Any]] = []
-    wants_total = 0
+    discovery_cap = max_wants_per_doc * len(docs_by_ref)
+
+    auto_wants: list[tuple[Any, _Want]] = []
+    other_wants: list[tuple[Any, _Want]] = []
+
     for ref_id, doc in docs_by_ref.items():
         log.info("agent_induction: ref=%s, %d slides", ref_id, len(doc.slides or []))
+
+        # Pass A — auto chart/table wants
         for slide in (doc.slides or []):
             if len(slide.elements or []) < skip_slides_under_elements:
                 continue
-            wants = discover_slide_wants(slide, llm_call=llm_call)
-            if not wants:
+            auto_want = _build_auto_chart_table_want(slide)
+            if auto_want:
+                auto_wants.append((slide, auto_want))
+                log.info("agent_induction: AUTO-flagged slide %d (%s)",
+                         auto_want.slide_n, auto_want.name)
+
+        # Pass B — discovery (capped)
+        discovery_count = 0
+        auto_slide_nums = {w.slide_n for _, w in auto_wants}
+        for slide in (doc.slides or []):
+            if len(slide.elements or []) < skip_slides_under_elements:
                 continue
-            for w in wants:
-                if wants_total >= max_wants_per_doc * len(docs_by_ref):
-                    log.info("agent_induction: hit max_wants cap")
+            if discovery_count >= discovery_cap:
+                log.info("agent_induction: discovery cap reached at slide %s",
+                         getattr(slide, "slide_number", "?"))
+                break
+            discovered = discover_slide_wants(slide, llm_call=llm_call)
+            # Filter: drop full_slide wants that overlap an auto-want (auto
+            # takes precedence); keep element wants.
+            slide_n = getattr(slide, "slide_number", 0) or 0
+            for w in discovered:
+                if w.kind == "full_slide" and slide_n in auto_slide_nums:
+                    continue
+                other_wants.append((slide, w))
+                discovery_count += 1
+                if discovery_count >= discovery_cap:
                     break
-                wants_total += 1
-                tpl = author_template(w, slide, llm_call=llm_call)
-                if tpl:
-                    candidates.append(tpl)
-    log.info("agent_induction: %d wants processed → %d candidates",
-             wants_total, len(candidates))
+
+    # Pass C — consolidate wants BEFORE authoring (saves LLM tokens by not
+    # re-authoring the same pattern N times). Two wants are duplicates when
+    # they share a normalized name OR cover the same set of element_ids.
+    # Auto wants always survive (they're rule-derived, not LLM-proposed).
+    all_wants = auto_wants + other_wants
+    consolidated = _dedupe_wants(all_wants)
+    log.info("agent_induction: %d auto + %d discovery wants → %d unique after consolidation",
+             len(auto_wants), len(other_wants), len(consolidated))
+
+    # Pass D — author each unique want (one LLM call each).
+    for slide, want in consolidated:
+        tpl = author_template(want, slide, llm_call=llm_call)
+        if tpl:
+            candidates.append(tpl)
+
+    log.info("agent_induction: %d candidates total before name-dedupe", len(candidates))
 
     # Dedupe by lowercased name; keep highest-confidence per name.
     by_name: dict[str, dict[str, Any]] = {}
@@ -466,6 +586,58 @@ def induce_templates_agentic(
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
+
+
+def _normalize_want_name(name: str) -> str:
+    """Squash near-duplicate want names so 'Slide Title' + 'Slide Title
+    Placeholder' + 'Title Placeholder' all collapse to one canonical key."""
+    s = re.sub(r"\s+", " ", (name or "").lower().strip())
+    # Drop common noise words that pad LLM-generated names.
+    for noise in ("placeholder", "element", "text", "block", "box",
+                  "group", "the ", "a ", "small ", "tiny "):
+        s = s.replace(noise, " ")
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _dedupe_wants(
+    wants: list[tuple[Any, _Want]],
+) -> list[tuple[Any, _Want]]:
+    """Consolidate wants before authoring.
+
+    Two wants are duplicates when:
+      * Their normalized names match, OR
+      * Their element_ids sets are identical.
+
+    Auto-promoted wants (chart/table slides — kind='full_slide' with
+    'auto' tag) ALWAYS survive — they're rule-derived and represent
+    high-value templates we deliberately want every instance of.
+
+    For LLM-proposed wants, we keep the first occurrence and drop
+    subsequent matches.
+    """
+    seen_names: set[str] = set()
+    seen_id_sets: list[set[str]] = []
+    out: list[tuple[Any, _Want]] = []
+    for slide, want in wants:
+        is_auto = "auto" in (want.tags or [])
+        if is_auto:
+            out.append((slide, want))
+            continue
+        name_key = _normalize_want_name(want.name)
+        ids_key = frozenset(want.element_ids or [])
+        # Name collision?
+        if name_key and name_key in seen_names:
+            continue
+        # ID-set collision (only when both have ids)?
+        if ids_key:
+            if any(ids_key == s for s in seen_id_sets):
+                continue
+            seen_id_sets.append(set(ids_key))
+        if name_key:
+            seen_names.add(name_key)
+        out.append((slide, want))
+    return out
 
 
 def _parse_json_response(text: str) -> dict[str, Any] | None:

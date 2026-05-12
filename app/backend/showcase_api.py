@@ -42,26 +42,24 @@ router = APIRouter(tags=["showcase"])
 # explain WHY each brand is in the showcase, which is "they look totally
 # different from each other."
 
+# Two-brand showcase for v1 of the marketing splash:
+#   - Percy Standard (our own hand-crafted brand) acts as the anchor
+#   - Snowflake (mined from their real template PPTX) is the customer demo
+# Both share the same underlying agent + the same demo prompt — the visual
+# difference is entirely driven by mined brand data. We'll add Caterpillar /
+# BlackRock / Salesforce back later once their source documents yield
+# richer template extractions.
 SHOWCASE_BRANDS: list[dict[str, str]] = [
     {
+        "slug": "percy_standard",
+        "set_id": "tpl_percy_standard_v1",          # Special — hand-crafted, not from a snapshot
+        "tagline": "Percy's own brand · warm cream + powder cobalt · hand-crafted",
+        "source_kind": "Crafted",
+    },
+    {
         "slug": "snowflake",
-        "tagline": "Cloud data platform · cyan brand · 57-slide source",
+        "tagline": "Cloud data platform · Snowflake cyan · 57-slide source PPTX",
         "source_kind": "PPTX",
-    },
-    {
-        "slug": "salesforce",
-        "tagline": "Cloud CRM · blue brand · 26-slide source",
-        "source_kind": "PDF",
-    },
-    {
-        "slug": "caterpillar",
-        "tagline": "Industrial · iconic yellow · 20-slide source",
-        "source_kind": "PDF",
-    },
-    {
-        "slug": "blackrock",
-        "tagline": "Investment research · editorial yellow + orange · 12-slide source",
-        "source_kind": "PDF",
     },
 ]
 
@@ -164,7 +162,8 @@ def get_showcase() -> dict[str, Any]:
     brands: list[dict[str, Any]] = []
     for entry in SHOWCASE_BRANDS:
         slug = entry["slug"]
-        set_id = f"tpl_demo_{slug}"
+        # Allow override (Percy Standard uses tpl_percy_standard_v1).
+        set_id = entry.get("set_id") or f"tpl_demo_{slug}"
         tpl = auth_db.get_template(set_id)
         if not tpl:
             log.warning("showcase: demo brand %s not seeded yet — skipping", slug)
