@@ -7,6 +7,7 @@
 .percy-tableau-extracts
 infra/.tmp
 infra/cdk.out
+infra/cdk.out.*
 infra/.venv
 __pycache__
 *.pyc
@@ -20,12 +21,31 @@ out
 spec
 frontend/node_modules
 frontend/dist
+frontend/tests/out
 outreach/dump_pptx
 outreach/manual_dump_pptx
 outreach/rebuilt
 outreach/downloads
 outreach/tableau
 outreach/.rendercache
+
+# User uploads — per-deployment artifacts that should NEVER be baked
+# into a build image. They live in S3/persistent volume in prod, not
+# in the repo. Including them was causing disk-full deploys (this dir
+# can be many GB if a user has uploaded large PPTXs).
+uploads
+data/template_set_refs
+
+# Demo / debug scripts that accumulated at repo root during dev
+check_*.py
+debug_*.py
+debug_*.mjs
+trace_*.py
+gen_preview.py
+
+# Test outputs (sometimes 100s of MB of slide PNGs)
+tests/out
+tests/results
 
 *_bridge.png
 *_diff.png
