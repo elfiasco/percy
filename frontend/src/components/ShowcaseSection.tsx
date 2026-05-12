@@ -1,27 +1,15 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 import TemplatePreview from "./TemplatePreview"
 import SlideSvg from "./SlideSvg"
 
 /**
- * ShowcaseSection — the scroll-cycling demo on the splash page.
+ * ShowcaseSection — toggle between two brand books on the splash.
  *
- * Vision the user articulated:
- *   "Same prompt, same data → wildly different brand-faithful decks."
- *
- * Layout:
- *   - sticky LEFT (40%): the prompt + live data + active brand indicator
- *   - scrolling RIGHT (60%): per-brand slide grids stacked vertically;
- *     as the user scrolls, brand sections cycle past and the left side
- *     updates to reflect whichever section is in view.
- *
- * Data is fetched from /api/showcase on mount. Brand template previews
- * are rendered client-side via the existing TemplatePreview component
- * (no round trip per thumbnail).
- *
- * Live weather is server-side cached (5 min TTL) and refreshes on
- * remount. The point isn't real-time freshness — it's proof that the
- * numbers come from an API, not a frozen example. The legend on the
- * panel makes that explicit ("Open-Meteo · fetched 14:38 UTC").
+ * The proof: same 7-slide quarterly update prompt + same data, fed to
+ * two different agents (one per template set). The user toggles between
+ * brands and sees the deck output for each. Different template choices,
+ * different visual results — driven entirely by which templates each
+ * set makes available to the agent.
  */
 
 interface Palette { hex: string; name?: string; role?: string }
@@ -59,22 +47,8 @@ interface ShowcaseBrand {
   } | null
 }
 
-interface WeatherRow { city: string; code: string; temp_f: number | null; wind_kph?: number | null }
-interface WeatherSummary {
-  hottest_city?: string; hottest_temp_f?: number
-  coldest_city?: string; coldest_temp_f?: number
-  avg_temp_f?: number; city_count?: number
-  oneliner?: string
-}
-
 interface ShowcaseResponse {
   brands: ShowcaseBrand[]
-  weather: {
-    rows: WeatherRow[]
-    summary: WeatherSummary
-    source: string
-    fetched_at: number
-  }
   prompt_summary: string
 }
 
@@ -82,40 +56,53 @@ interface ShowcaseResponse {
 export default function ShowcaseSection() {
   const [data, setData] = useState<ShowcaseResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [activeBrandIdx, setActiveBrandIdx] = useState(0)
-  const brandRefs = useRef<(HTMLDivElement | null)[]>([])
+  const [activeSlug, setActiveSlug] = useState<string>("")
+  // Track which brands we've already kicked a demo for in this session, so
+  // a user toggling back and forth doesn't fire repeated requests.
+  const [demoTriggered, setDemoTriggered] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     fetch("/api/showcase", { credentials: "include" })
       .then((r) => r.ok ? r.json() : Promise.reject(`${r.status}`))
-      .then(setData)
+      .then((d) => {
+        setData(d)
+        if (d.brands.length > 0) setActiveSlug(d.brands[0].slug)
+      })
       .catch((e) => setError(String(e)))
   }, [])
 
-  // IntersectionObserver to update which brand is "active" as the user scrolls.
+  // Lazy-trigger demo generation when the active brand has no demo yet.
+  // Fire-and-forget; we refetch /api/showcase a few seconds later to pick
+  // up the new doc_id. Idempotent on the server side via throttle.
   useEffect(() => {
-    if (!data) return
-    const observer = new IntersectionObserver(
-      (entries) => {
-        // Pick the entry with the highest intersection ratio.
-        const visible = entries
-          .filter((e) => e.isIntersecting)
-          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0]
-        if (visible) {
-          const idx = Number(visible.target.getAttribute("data-brand-idx"))
-          if (!Number.isNaN(idx)) setActiveBrandIdx(idx)
-        }
-      },
-      { threshold: [0.3, 0.5, 0.7], rootMargin: "-20% 0px -30% 0px" },
-    )
-    brandRefs.current.forEach((el) => { if (el) observer.observe(el) })
-    return () => observer.disconnect()
-  }, [data])
+    if (!data || !activeSlug) return
+    const brand = data.brands.find((b) => b.slug === activeSlug)
+    if (!brand) return
+    if (brand.demo && brand.demo.slides_applied > 0) return
+    if (demoTriggered.has(activeSlug)) return
+
+    setDemoTriggered((prev) => { const n = new Set(prev); n.add(activeSlug); return n })
+
+    fetch("/api/demo-decks", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ template_set_id: brand.set_id }),
+    })
+      .then((r) => r.ok ? r.json() : null)
+      .then(() => {
+        // Refetch to grab the newly-stamped demo block.
+        return fetch("/api/showcase", { credentials: "include" })
+      })
+      .then((r) => r?.ok ? r.json() : null)
+      .then((d) => { if (d) setData(d) })
+      .catch(() => {})
+  }, [data, activeSlug, demoTriggered])
 
   if (error) {
     return (
       <div className="px-8 py-16 text-center text-[12px] text-muted">
-        Showcase unavailable ({error}). Demo brands seed at boot — check back in a moment.
+        Showcase unavailable ({error}).
       </div>
     )
   }
@@ -127,7 +114,8 @@ export default function ShowcaseSection() {
     )
   }
 
-  const activeBrand = data.brands[activeBrandIdx]
+  const active = data.brands.find((b) => b.slug === activeSlug) ?? data.brands[0]
+  if (!active) return null
 
   return (
     <section className="border-t border-edge bg-ink/80 relative">
@@ -138,48 +126,53 @@ export default function ShowcaseSection() {
             — Showcase —
           </div>
           <h2 className="text-[32px] sm:text-[42px] font-semibold tracking-[-0.01em] text-paper leading-[1.05] mb-4 max-w-3xl">
-            One prompt. <span className="text-muted">Two brand books.</span>
+            One prompt. Same data. <span className="text-muted">Different agents.</span>
             <br />
-            Two completely different decks.
+            Wildly different decks.
           </h2>
           <p className="text-[13px] text-muted leading-[1.7] max-w-2xl">
-            {data.prompt_summary} On the left is Percy's own brand —
-            warm cream, powder cobalt, hand-crafted. On the right is
-            Snowflake, mined automatically from their 57-slide template
-            deck. Same 10-slide prompt for both. Same data. Wildly
-            different visual output, driven entirely by the brand the
-            agent reads.
+            {data.prompt_summary} Toggle between the two brand books below.
+            Each agent saw the IDENTICAL 7-slide brief — same wording, same
+            numbers, same data — and was told to pick the templates from
+            its own set that best fulfilled each slot. The visual
+            difference is entirely the agent's choice of templates, not
+            a recolored palette.
           </p>
         </div>
       </div>
 
-      {/* Two-column split: sticky left + scrolling right */}
-      <div className="max-w-6xl mx-auto px-4 sm:px-8 lg:px-12 grid grid-cols-1 lg:grid-cols-[42%_58%] gap-8">
-        {/* ─── Sticky left — active brand context + live weather ───────── */}
-        <aside className="lg:sticky lg:top-8 self-start py-12 lg:max-h-[100vh] lg:overflow-hidden">
-          <ActiveBrandPanel brand={activeBrand} weather={data.weather} />
-        </aside>
-
-        {/* ─── Scrolling right — brand sections stacked ──────────────── */}
-        <div className="py-12 space-y-32">
-          {data.brands.map((brand, idx) => (
-            <BrandSection
-              key={brand.slug}
-              ref={(el) => { brandRefs.current[idx] = el }}
-              brand={brand}
-              isActive={idx === activeBrandIdx}
-              index={idx}
-            />
-          ))}
+      {/* Toggle */}
+      <div className="max-w-6xl mx-auto px-4 sm:px-8 lg:px-12 pt-8 pb-2">
+        <div className="flex items-center justify-center gap-2">
+          {data.brands.map((b) => {
+            const isActive = b.slug === activeSlug
+            return (
+              <button
+                key={b.slug}
+                onClick={() => setActiveSlug(b.slug)}
+                className={`px-5 py-2.5 text-[12px] tracking-[0.12em] uppercase font-medium transition-all border ${
+                  isActive
+                    ? "border-paper bg-paper text-ink"
+                    : "border-edge text-muted hover:text-paper hover:border-paper/40"
+                }`}
+              >
+                {b.name}
+              </button>
+            )
+          })}
         </div>
+      </div>
+
+      {/* Active brand body */}
+      <div className="max-w-6xl mx-auto px-4 sm:px-8 lg:px-12 py-10">
+        <BrandPanel brand={active} />
       </div>
 
       {/* Closing line */}
       <div className="border-t border-edge px-8 sm:px-12 lg:px-20 py-12 text-center">
         <div className="text-[14px] text-muted max-w-2xl mx-auto leading-[1.7]">
-          The agent didn't memorize Snowflake's brand. It mined it from
-          their template deck in under a minute. Bring your own decks
-          and it'll do the same for you.
+          Bring your own decks. Percy mines the brand in seconds and the
+          agent uses it from then on.
         </div>
       </div>
     </section>
@@ -187,130 +180,52 @@ export default function ShowcaseSection() {
 }
 
 
-// ── Active brand panel (sticky left) ────────────────────────────────────────
-
-
-function ActiveBrandPanel({
-  brand, weather,
-}: {
-  brand: ShowcaseBrand | undefined
-  weather: ShowcaseResponse["weather"]
-}) {
-  if (!brand) return null
-
-  return (
-    <div>
-      {/* Active brand */}
-      <div className="text-[9px] tracking-[0.22em] uppercase text-muted mb-2">
-        — Active brand —
-      </div>
-      <div className="text-[28px] font-semibold text-paper leading-tight mb-1 transition-all">
-        {brand.name}
-      </div>
-      <div className="text-[11px] text-muted mb-5">{brand.tagline}</div>
-
-      {/* Palette swatches */}
-      <div className="text-[9px] tracking-[0.18em] uppercase text-muted mb-2">
-        Palette · mined from source
-      </div>
-      <div className="flex flex-wrap gap-1.5 mb-5">
-        {brand.palette.slice(0, 10).map((c, i) => (
-          <div
-            key={i}
-            className="w-8 h-8 border border-edge rounded-sm"
-            style={{ backgroundColor: c.hex }}
-            title={c.hex}
-          />
-        ))}
-      </div>
-
-      {/* Fonts */}
-      <div className="text-[9px] tracking-[0.18em] uppercase text-muted mb-2">Fonts</div>
-      <div className="space-y-1 mb-6">
-        {brand.fonts.slice(0, 3).map((f, i) => (
-          <div key={i} className="text-[12px] text-paper">
-            <span className="text-paper">{f.name}</span>
-            {f.role && <span className="text-muted ml-2">· {f.role}</span>}
-          </div>
-        ))}
-      </div>
-
-      {/* Prompt */}
-      <div className="border border-edge bg-surface/30 p-3 mb-4 text-[11px] text-muted font-mono leading-[1.6] max-h-[140px] overflow-hidden">
-        <span className="text-paper">$</span> generate-deck --set "{brand.slug}"
-        <br />
-        <span className="text-paper">prompt</span>: "10-slide quarterly update.
-        Mix data and storytelling. Slide 5 fetches live weather."
-      </div>
-
-      {/* Live weather */}
-      <div className="border border-edge bg-surface/30 p-4">
-        <div className="flex items-center justify-between mb-2">
-          <div className="text-[9px] tracking-[0.18em] uppercase text-muted">
-            Live data · slide 5
-          </div>
-          <span className="text-[9px] text-accent tracking-wider uppercase animate-pulse">● LIVE</span>
-        </div>
-        <div className="space-y-1 font-mono">
-          {weather.rows.map((r) => (
-            <div key={r.code} className="flex items-center justify-between text-[11px]">
-              <span className="text-muted w-12">{r.code}</span>
-              <span className="flex-1 text-paper">{r.city}</span>
-              <span className="text-paper tabular-nums">
-                {r.temp_f != null ? `${r.temp_f}°F` : "—"}
-              </span>
-            </div>
-          ))}
-        </div>
-        <div className="text-[9px] text-muted mt-2 leading-relaxed">
-          {weather.source}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-
-// ── Brand section (scrolling right) ─────────────────────────────────────────
-
-
-const BrandSection = ({
-  brand, isActive, index, ref,
-}: {
-  brand: ShowcaseBrand
-  isActive: boolean
-  index: number
-  ref: (el: HTMLDivElement | null) => void
-}) => {
+function BrandPanel({ brand }: { brand: ShowcaseBrand }) {
   const bgColor = brand.palette[0]?.hex || "#F9F8F4"
   const demo = brand.demo
 
   return (
-    <div
-      ref={ref}
-      data-brand-idx={index}
-      className={`transition-opacity duration-500 ${
-        isActive ? "opacity-100" : "opacity-50"
-      }`}
-    >
-      <div className="flex items-baseline gap-3 mb-4">
-        <span className="text-[10px] tracking-[0.22em] uppercase text-muted font-mono">
-          0{index + 1}
-        </span>
-        <h3 className="text-[22px] font-semibold text-paper">{brand.name}</h3>
-      </div>
-      <p className="text-[12px] text-muted mb-6 max-w-md leading-relaxed">
-        {brand.description}
-      </p>
-
-      {/* ── Generated demo slides — the proof ─────────────────────── */}
-      {demo && demo.slides_applied > 0 ? (
-        <div className="mb-8">
-          <div className="text-[10px] uppercase tracking-[0.18em] text-muted mb-2">
-            Generated deck · {demo.slides_applied} slides
+    <div>
+      {/* Brand metadata header */}
+      <div className="mb-8 flex items-start justify-between gap-6 flex-wrap">
+        <div className="min-w-0">
+          <div className="text-[10px] tracking-[0.18em] uppercase text-muted mb-1">{brand.source_kind}</div>
+          <h3 className="text-[24px] font-semibold text-paper mb-1">{brand.name}</h3>
+          <p className="text-[12px] text-muted leading-relaxed max-w-md">{brand.tagline}</p>
+        </div>
+        <div className="text-right">
+          <div className="text-[10px] tracking-[0.18em] uppercase text-muted mb-2">Palette · mined</div>
+          <div className="flex items-center gap-1 justify-end mb-3">
+            {brand.palette.slice(0, 10).map((c, i) => (
+              <div
+                key={i}
+                className="w-7 h-7 border border-edge rounded-sm"
+                style={{ backgroundColor: c.hex }}
+                title={c.hex}
+              />
+            ))}
           </div>
+          <div className="text-[10px] text-muted">
+            {brand.fonts.slice(0, 2).map((f) => f.name).join(" · ")}
+          </div>
+        </div>
+      </div>
+
+      {/* Generated deck — the proof */}
+      <div className="mb-10">
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-[11px] uppercase tracking-[0.18em] text-muted">
+            Generated deck {demo ? `· ${demo.slides_applied} slides` : ""}
+          </div>
+          {demo && (
+            <div className="text-[10px] text-muted">
+              prompt: <code className="text-paper">demo.showcase v1</code>
+            </div>
+          )}
+        </div>
+        {demo && demo.slides_applied > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {Array.from({ length: Math.min(demo.slides_applied, 8) }).map((_, i) => (
+            {Array.from({ length: Math.min(demo.slides_applied, 10) }).map((_, i) => (
               <div
                 key={i}
                 className="border border-edge bg-surface/30 overflow-hidden"
@@ -318,7 +233,7 @@ const BrandSection = ({
                 <SlideSvg
                   docId={demo.doc_id}
                   slideN={i + 1}
-                  width={460}
+                  width={520}
                   background={bgColor}
                 />
                 <div className="px-3 py-1.5 text-[10px] text-muted font-mono">
@@ -327,47 +242,56 @@ const BrandSection = ({
               </div>
             ))}
           </div>
-        </div>
-      ) : (
-        <div className="mb-8 border border-dashed border-edge p-6 text-center">
-          <div className="text-[12px] text-muted">
-            Demo deck is being generated…
-          </div>
-        </div>
-      )}
-
-      {/* ── Templates inventory — what the agent had to choose from ── */}
-      <div className="text-[10px] uppercase tracking-[0.18em] text-muted mb-2">
-        Templates in this set · {brand.items.length}
-      </div>
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-        {brand.items.slice(0, 6).map((item) => {
-          const layout = (item.template?.layout as Array<Record<string, unknown>>) ?? []
-          const sampleInputs = (item.template?.sample_inputs as Record<string, unknown>) ?? {}
-          return (
-            <div
-              key={item.template_id}
-              className="border border-edge bg-surface/30 overflow-hidden"
-            >
-              {layout.length > 0 ? (
-                <TemplatePreview
-                  layout={layout}
-                  sampleInputs={sampleInputs}
-                  palette={brand.palette}
-                  width={300}
-                  background={bgColor}
-                />
-              ) : (
-                <div className="aspect-video bg-ink/40 flex items-center justify-center text-[10px] text-muted">
-                  (no layout)
-                </div>
-              )}
-              <div className="px-2 py-1 text-[9px] text-muted truncate">
-                {item.kind} · {item.template?.name || "?"}
-              </div>
+        ) : (
+          <div className="border border-dashed border-edge p-10 text-center">
+            <div className="inline-block w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin mb-3" />
+            <div className="text-[12px] text-paper mb-1">Generating demo deck…</div>
+            <div className="text-[10px] text-muted">
+              First load fires off generation. Refresh in 30-60 seconds.
             </div>
-          )
-        })}
+          </div>
+        )}
+      </div>
+
+      {/* Templates inventory */}
+      <div>
+        <div className="text-[11px] uppercase tracking-[0.18em] text-muted mb-3">
+          What the agent had to choose from · {brand.items.length} templates
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          {brand.items.slice(0, 6).map((item) => {
+            const layout = (item.template?.layout as Array<Record<string, unknown>>) ?? []
+            const sampleInputs = (item.template?.sample_inputs as Record<string, unknown>) ?? {}
+            return (
+              <div
+                key={item.template_id}
+                className="border border-edge bg-surface/30 overflow-hidden"
+              >
+                {layout.length > 0 ? (
+                  <TemplatePreview
+                    layout={layout}
+                    sampleInputs={sampleInputs}
+                    palette={brand.palette}
+                    width={320}
+                    background={bgColor}
+                  />
+                ) : (
+                  <div className="aspect-video bg-ink/40 flex items-center justify-center text-[10px] text-muted">
+                    (no layout)
+                  </div>
+                )}
+                <div className="px-2 py-1 text-[9px] text-muted truncate">
+                  {item.kind} · {item.template?.name || "?"}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        {brand.items.length > 6 && (
+          <div className="text-[10px] text-muted mt-2 text-center">
+            + {brand.items.length - 6} more
+          </div>
+        )}
       </div>
     </div>
   )
