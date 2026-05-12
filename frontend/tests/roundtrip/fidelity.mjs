@@ -178,10 +178,19 @@ async function getSlideCount(docId) {
 }
 
 // ── API: reference render ─────────────────────────────────────────────────────
-// Uses the pre-rendered bridge.png cached during onboarding (matplotlib render).
-// Falls back to /render.png (on-demand fresh render) if bridge.png returns 404.
-// When FORCE_REF is set, goes straight to render.png to pick up any render_png.py changes.
+// PRIMARY REFERENCE: /original.png is the LibreOffice/PPTX-native render of the
+// original deck — that's what the user is actually comparing Studio against.
+// FALLBACK: bridge.png (matplotlib render of the bridge model). Used only when
+// the original isn't available (e.g. PDF onboard, scratch docs).
 async function fetchReferencePng(docId, slideN, dpi = 120) {
+  // First try /original.png — the faithful pptx-as-rendered baseline
+  try {
+    const r = await apiFetch(`/api/docs/${docId}/slides/${slideN}/original.png`)
+    return Buffer.from(await r.arrayBuffer())
+  } catch (e) {
+    if (!e.message.includes("404")) throw e
+  }
+  // Fallback to matplotlib bridge render
   if (!FORCE_REF) {
     try {
       const r = await apiFetch(`/api/docs/${docId}/slides/${slideN}/bridge.png`)
