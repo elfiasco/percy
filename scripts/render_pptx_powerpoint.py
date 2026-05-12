@@ -21,7 +21,10 @@ import win32com.client
 
 
 PNG_FORMAT = 17       # ppSaveAsPNG
-SLIDE_WIDTH_PX = 1600 # arbitrary but consistent; height auto-scales per aspect
+# 1280px matches Studio's native canvas at the fidelity-test viewport (2200×847,
+# 85vh slide height, 16:9 aspect). With exact-match dims, compare.py can skip
+# the LANCZOS resize that was adding interpolation artifacts to RMS.
+SLIDE_WIDTH_PX = 1280
 
 
 def render_deck(pptx_path: Path) -> Path:

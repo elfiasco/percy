@@ -126,13 +126,17 @@
   .ProseMirror .collaboration-cursor__caret[style*="--cursor-color"] {}
 
   /* Bullet markers for Bridge paragraphs with bulletType set.
-     The ::before pseudo-element renders the bullet character or a default bullet. */
-  .tiptap-bridge-editor p[data-bullet-type]:not([data-bullet-type="none"])::before {
+     The ::before pseudo-element renders the bullet character or a default bullet.
+     Applies to BOTH the editor and the idle text render (which uses
+     .tiptap-text-idle), otherwise bullets disappear when not editing. */
+  .tiptap-bridge-editor p[data-bullet-type]:not([data-bullet-type="none"])::before,
+  .tiptap-text-idle p[data-bullet-type]:not([data-bullet-type="none"])::before {
     content: attr(data-bullet-char, "•");
     position: absolute;
     left: 0.15em;
   }
-  .tiptap-bridge-editor p[data-bullet-type="number"]::before {
+  .tiptap-bridge-editor p[data-bullet-type="number"]::before,
+  .tiptap-text-idle p[data-bullet-type="number"]::before {
     content: "•";  /* fallback — proper numbering needs counter-reset */
   }
 

@@ -338,6 +338,11 @@ function LineOrAreaChart({ data, area, stacked }: { data: ChartData; area: boole
           const color = seriesColor(s, idx)
           const key   = s.name || `Series ${idx + 1}`
           if (area) {
+            // STACKED areas need opaque fill (PowerPoint convention): areas
+            // tile on top of each other without blending, so per-series colors
+            // read cleanly. Non-stacked areas overlap, so use a low-alpha fill
+            // to keep underlying series visible — matches Recharts / Google
+            // Sheets defaults.
             return (
               <Area
                 key={key}
@@ -346,7 +351,7 @@ function LineOrAreaChart({ data, area, stacked }: { data: ChartData; area: boole
                 stroke={color}
                 strokeWidth={2}
                 fill={color}
-                fillOpacity={0.15}
+                fillOpacity={stacked ? 0.95 : 0.15}
                 stackId={stacked ? "stack" : undefined}
                 isAnimationActive={true}
                 animationDuration={700}
