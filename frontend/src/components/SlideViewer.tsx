@@ -27,7 +27,7 @@
  * wasn't). SlideViewer lets one engine drive both surfaces.
  */
 
-import { useMemo } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { StudioStore, StudioStoreContext, useStudioStore } from "../lib/studio/store"
 import type {
   StudioElement,
@@ -486,7 +486,9 @@ export default function SlideViewer({
 
 /** Inner shell — inside the Provider so its children can use the hooks.
  *  Renders the slide canvas at the requested pixel size, scales the
- *  inch-based renderers via a single transform on the inner div. */
+ *  inch-based renderers via a single transform, and sets --pt-scale so
+ *  the studio renderers' vh-based font calc (`pt * --pt-scale * 1vh`)
+ *  produces correctly-sized text in our scaled-down canvas. */
 function ViewportShell({
   docId, slideN, W, H, pxWidth, pxHeight, bgColor, className,
 }: {
@@ -496,7 +498,30 @@ function ViewportShell({
   bgColor: string
   className?: string
 }) {
-  const scale = pxWidth / W
+  // CSS interprets `1in` = 96 px. Our scaled container takes a W×H-inch
+  // canvas and renders it at pxWidth × pxHeight pixels:
+  //   transform scale = pxWidth / (W * 96)
+  const scale = pxWidth / (W * 96)
+
+  // Studio's renderers use `font-size: calc(pt * var(--pt-scale) * 1vh)`.
+  // vh is viewport-relative (transform doesn't change it), so we have to
+  // compensate. Derivation:
+  //   target final px per pt = pxHeight / (H * 72)
+  //   pre-transform CSS px needed = target / scale
+  //   for any pxWidth/pxHeight pair that preserves aspect ratio,
+  //   this simplifies to 96/72 = 1.333 CSS px per pt
+  //   --pt-scale = 1.333 / (innerHeight / 100) = 133.33 / innerHeight
+  // Recompute on resize so the splash stays right when the user
+  // changes window size.
+  const [ptScale, setPtScale] = useState<number>(() =>
+    typeof window !== "undefined" ? 133.33 / window.innerHeight : 0.074,
+  )
+  useEffect(() => {
+    const recalc = () => setPtScale(133.33 / window.innerHeight)
+    recalc()
+    window.addEventListener("resize", recalc)
+    return () => window.removeEventListener("resize", recalc)
+  }, [])
 
   return (
     <div
@@ -514,10 +539,11 @@ function ViewportShell({
           top: 0, left: 0,
           width:  `${W}in`,
           height: `${H}in`,
-          // Inch units are the studio canvas's coordinate system. Scale
-          // the whole thing down to fit pxWidth × pxHeight.
           transform: `scale(${scale})`,
           transformOrigin: "top left",
+          // Make the studio renderers' font-size math resolve to the
+          // right pixel size for this slide's display dimensions.
+          ["--pt-scale" as string]: ptScale,
         }}
       >
         <SlideElementsLayer docId={docId} slideN={slideN} />
