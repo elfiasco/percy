@@ -233,11 +233,26 @@ class PercyCloudDemoStack(Stack):
         # ------------------------------------------------------------------
         # ECR image
         # ------------------------------------------------------------------
+        # Staging excludes shared by all three repo-root DockerImageAssets.
+        # SQLite's WAL/SHM siblings come and go during normal operation;
+        # if CDK's staging copy lstats them between readdir and copy they
+        # vanish mid-copy and the build crashes with ENOENT. .dockerignore
+        # alone isn't enough — that runs AFTER asset staging.
+        _staging_excludes = [
+            "percy_app.db", "percy_app.db-wal", "percy_app.db-shm", "percy_app.db-journal",
+            ".percy_agent.db", ".percy_agent.db-wal", ".percy_agent.db-shm", ".percy_agent.db-journal",
+            "*.db-wal", "*.db-shm", "*.db-journal",
+            "uploads", "infra/cdk.out",
+            "outreach/dump_pptx", "outreach/rebuilt", "outreach/downloads",
+            "frontend/node_modules", "frontend/dist", "frontend/tests/out",
+            "all_slides", "out", "lab",
+        ]
         image = ecr_assets.DockerImageAsset(
             self,
             "PercyCloudApiImage",
             directory=str(repo_root),
             file="Dockerfile.cloud",
+            exclude=_staging_excludes,
         )
 
         # ------------------------------------------------------------------
@@ -376,6 +391,7 @@ class PercyCloudDemoStack(Stack):
             "PercyStudioImage",
             directory=str(repo_root),
             file="Dockerfile.studio",
+            exclude=_staging_excludes,
             build_args={
                 # WebSocket relay. App Runner's Envoy returns 403 on every
                 # wss:// upgrade regardless of egress config — verified with
@@ -779,6 +795,7 @@ class PercyCloudDemoStack(Stack):
             "PercyWorkerImage",
             directory=str(repo_root),
             file="Dockerfile.worker",
+            exclude=_staging_excludes,
         )
 
         worker_task = ecs.FargateTaskDefinition(
