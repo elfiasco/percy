@@ -1,5 +1,13 @@
 import { useEffect } from "react"
-import { studioStore, useStudioStore } from "./store"
+import { useStudioStore, useStudioStoreInstance } from "./store"
+
+/** Context-aware payload hooks. Each one reads its slice of state via
+ *  `useStudioStore()` (which goes through StudioStoreContext) and
+ *  triggers a fetch on the SAME store instance via
+ *  `useStudioStoreInstance()`. For SlideViewer the instance is a
+ *  per-viewer local store pre-populated with payloads, so the cache
+ *  check in loadPayload returns the data without firing the fetch
+ *  (which would 404 for splash decks that have no backing doc). */
 
 export function useStudioChartPayload(
   docId: string,
@@ -8,9 +16,10 @@ export function useStudioChartPayload(
   renderKey: number,
 ) {
   const state = useStudioStore()
+  const store = useStudioStoreInstance()
   useEffect(() => {
-    void studioStore.loadChartPayload(docId, slideN, elementId, renderKey > 0)
-  }, [docId, slideN, elementId, renderKey])
+    void store.loadChartPayload(docId, slideN, elementId, renderKey > 0)
+  }, [store, docId, slideN, elementId, renderKey])
   const payload = state.payloads[elementId]
   return {
     data: payload?.chart ?? null,
@@ -26,9 +35,10 @@ export function useStudioTablePayload(
   renderKey: number,
 ) {
   const state = useStudioStore()
+  const store = useStudioStoreInstance()
   useEffect(() => {
-    void studioStore.loadTablePayload(docId, slideN, elementId, renderKey > 0)
-  }, [docId, slideN, elementId, renderKey])
+    void store.loadTablePayload(docId, slideN, elementId, renderKey > 0)
+  }, [store, docId, slideN, elementId, renderKey])
   const payload = state.payloads[elementId]
   return {
     data: payload?.table ?? null,
@@ -44,10 +54,11 @@ export function useStudioTextStylePayload(
   renderKey: number,
 ) {
   const state = useStudioStore()
+  const store = useStudioStoreInstance()
   useEffect(() => {
-    void studioStore.loadTextPayload(docId, slideN, elementId, renderKey > 0)
-    void studioStore.loadStylePayload(docId, slideN, elementId, renderKey > 0)
-  }, [docId, slideN, elementId, renderKey])
+    void store.loadTextPayload(docId, slideN, elementId, renderKey > 0)
+    void store.loadStylePayload(docId, slideN, elementId, renderKey > 0)
+  }, [store, docId, slideN, elementId, renderKey])
   const payload = state.payloads[elementId]
   return {
     text: payload?.text ?? null,
@@ -64,9 +75,10 @@ export function useStudioTextPayload(
   renderKey: number,
 ) {
   const state = useStudioStore()
+  const store = useStudioStoreInstance()
   useEffect(() => {
-    void studioStore.loadTextPayload(docId, slideN, elementId, renderKey > 0)
-  }, [docId, slideN, elementId, renderKey])
+    void store.loadTextPayload(docId, slideN, elementId, renderKey > 0)
+  }, [store, docId, slideN, elementId, renderKey])
   const payload = state.payloads[elementId]
   return {
     text: payload?.text ?? null,

@@ -76,6 +76,16 @@ function BridgeImageRendererImpl({
   const reflectionDistance     = style?.reflection_distance ?? 4
   const reflectionSize         = style?.reflection_size ?? 0.3
 
+  // PPTX `<a:xfrm flipH/flipV>` mirrors picture content around the box center.
+  // Without applying these, layout-template photos that PowerPoint deliberately
+  // mirrors (e.g. LPA family photos) render in the wrong orientation, blowing
+  // up RMS on every slide that re-uses that template.
+  const flipH = !!element.flip_h
+  const flipV = !!element.flip_v
+  const wrapTransform = (flipH || flipV)
+    ? `scale(${flipH ? -1 : 1}, ${flipV ? -1 : 1})`
+    : undefined
+
   // Wrapper
   const wrapStyle: React.CSSProperties = {
     width:    "100%",
@@ -83,6 +93,8 @@ function BridgeImageRendererImpl({
     overflow: "visible",  // shadow/reflection extends beyond bounds
     opacity:  style?.opacity ?? 1,
     position: "relative",
+    transform: wrapTransform,
+    transformOrigin: "center center",
   }
 
   // Crop scale: the image is scaled up so the visible area fills the box
@@ -91,6 +103,12 @@ function BridgeImageRendererImpl({
   const imgStyle: React.CSSProperties = hasCrop
     ? {
         position:     "absolute",
+        // Tailwind preflight injects `img, video { max-width:100%; height:auto }`
+        // globally, which silently clamps inline width:>100% (used for srcRect
+        // crop scaling). Override explicitly so cropped images can extend past
+        // the wrapper bounds and have their left-offset reveal the right band.
+        maxWidth:     "none",
+        maxHeight:    "none",
         width:        `${scaleW * 100}%`,
         height:       `${scaleH * 100}%`,
         left:         `${-cropL * scaleW}%`,
@@ -101,6 +119,8 @@ function BridgeImageRendererImpl({
         filter:       effectsActive ? `url(#${filterId})` : undefined,
       }
     : {
+        maxWidth:     "none",
+        maxHeight:    "none",
         width:        "100%",
         height:       "100%",
         objectFit:    "fill",

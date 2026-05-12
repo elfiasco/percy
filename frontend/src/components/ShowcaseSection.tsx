@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import SlideSvg from "./SlideSvg"
+import SlideViewer from "./SlideViewer"
 
 /**
  * ShowcaseSection — toggle between brand demos on the splash.
@@ -262,7 +262,7 @@ function BrandPanel({
                 className="border border-edge bg-surface/30 overflow-hidden splash-slide-enter"
                 style={{ animationDelay: `${i * 60}ms` }}
               >
-                <SlideSvg
+                <SlideViewer
                   slideData={s as never}
                   width={560}
                   background={bgColor}

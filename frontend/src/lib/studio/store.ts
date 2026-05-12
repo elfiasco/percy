@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react"
+import { createContext, useContext, useSyncExternalStore } from "react"
 import type {
   ChartData,
   ElementStyleData,
@@ -100,7 +100,7 @@ function withDerivedPercentages(
   }
 }
 
-class StudioStore {
+export class StudioStore {
   private state: StudioSessionState = EMPTY_STATE
   private listeners = new Set<Listener>()
   private payloadInflight = new Map<string, Promise<unknown>>()
@@ -335,6 +335,16 @@ class StudioStore {
     this.setPayloadData(elementId, { style })
   }
 
+  /** Pre-populate a payload AND mark its slide so the cache check in
+   *  loadPayload returns the cached value without firing a fetch. Used
+   *  by SlideViewer to mount the studio renderers against pre-fetched
+   *  data (no backing doc to fetch from). */
+  primePayload<T>(docId: string, slideN: number, elementId: string,
+                  kind: StudioPayloadKind, data: T): void {
+    this.setPayloadData(elementId, { [kind]: data } as Partial<Omit<StudioElementPayloadState, "loading" | "errors" | "version">>)
+    this.payloadSlide.set(elementId, `${docId}:${slideN}`)
+  }
+
   async loadChartPayload(docId: string, slideN: number, elementId: string, force = false): Promise<ChartData | null> {
     return this.loadPayload(docId, slideN, elementId, "chart", force, () => fetchChartData(docId, slideN, elementId))
   }
@@ -372,7 +382,17 @@ class StudioStore {
     if (inflight) return inflight as Promise<T>
 
     this.setPayloadLoading(elementId, kind, true, null)
-    const promise = loader()
+    // Slide-load fans out N concurrent fetches; under load the backend can 503
+    // or timeout one of them. Retry once after a short backoff so a single
+    // transient failure doesn't permanently paint "text load failed"
+    // placeholders into the canvas (inflates RMS on screenshot tests).
+    const loadWithRetry = async (): Promise<T> => {
+      try { return await loader() } catch (_e) {
+        await new Promise((r) => setTimeout(r, 250))
+        return await loader()
+      }
+    }
+    const promise = loadWithRetry()
       .then((data) => {
         // Discard result if the user has navigated away from this slide.
         if (this.state.docId !== docId || this.state.slideN !== slideN) return data
@@ -395,8 +415,25 @@ class StudioStore {
 
 export const studioStore = new StudioStore()
 
+/** Context that lets a subtree use a separate StudioStore instance.
+ *  Default = the global singleton (so the editor and every existing
+ *  caller works unchanged). SlideViewer wraps its children in a
+ *  Provider with a fresh instance for view-mode rendering — that
+ *  way the splash can show 7 slides simultaneously, each with its
+ *  own elements + payloads, without colliding with the singleton
+ *  the editor depends on. */
+export const StudioStoreContext = createContext<StudioStore>(studioStore)
+
+/** Hook to grab the StudioStore instance bound by the nearest Provider.
+ *  Use this when you need imperative access (e.g. `store.markDirty()`).
+ *  For state-reading, use `useStudioStore()`. */
+export function useStudioStoreInstance(): StudioStore {
+  return useContext(StudioStoreContext)
+}
+
 export function useStudioStore(): StudioSessionState {
-  return useSyncExternalStore(studioStore.subscribe, studioStore.getSnapshot, studioStore.getSnapshot)
+  const store = useContext(StudioStoreContext)
+  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
 }
 
 export function getStudioElement(id: string): StudioElement | null {

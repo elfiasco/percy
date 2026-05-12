@@ -221,6 +221,26 @@ function formatNumber(v: number | string, fmt: string): string {
   return String(num)
 }
 
+/** Per-bar / per-point data-label formatter.
+ *   1. series-level data_labels.format (PPTX <c:numFmt> on the label)
+ *   2. value-axis number_format
+ *   3. percent flag (100%-stacked variants → ×100)
+ *   4. trim IEEE float noise via toPrecision(6) so 0.6100…0067 → 0.61
+ */
+function formatDataLabel(
+  v: unknown,
+  percent: boolean,
+  seriesFmt: string | null | undefined,
+  axisFmt: string | null | undefined,
+): string {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return String(v ?? "")
+  if (seriesFmt) return formatNumber(n, seriesFmt)
+  if (axisFmt)   return formatNumber(n, axisFmt)
+  if (percent)   return `${(n * 100).toFixed(0)}%`
+  return Number.isInteger(n) ? String(n) : parseFloat(n.toPrecision(6)).toString()
+}
+
 function ColumnOrBarChart({ data, horizontal, stacked, percent, onPointClick, elementId }: {
   data: ChartData; horizontal: boolean; stacked: boolean; percent: boolean
   onPointClick?: (seriesIdx: number, pointIdx: number, evt: { clientX: number; clientY: number }) => void
@@ -303,10 +323,7 @@ function ColumnOrBarChart({ data, horizontal, stacked, percent, onPointClick, el
                     fontSize: s.data_labels.font_size ?? 9,
                     fill: outsideLabelColor(s.data_labels.font_color),
                   }}
-                  formatter={(v: unknown) => {
-                    const n = Number(v)
-                    return percent && Number.isFinite(n) ? `${(n * 100).toFixed(0)}%` : String(v ?? "")
-                  }}
+                  formatter={(v: unknown) => formatDataLabel(v, percent, s.data_labels.format, data.value_axis.number_format)}
                 />
               )}
             </Bar>

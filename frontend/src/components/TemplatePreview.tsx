@@ -1,25 +1,25 @@
-import React from "react"
-
 /**
- * TemplatePreview — client-side SVG renderer for Template layouts.
+ * TemplatePreview — thin shim that turns a template's pre-substitution
+ * layout (the `{kind, alias, body}` entries that templates store) into
+ * the realized-element shape SlideViewer expects.
  *
- * Takes a Template's `layout` array + `sample_inputs` and produces a
- * faithful-enough thumbnail of what the slide will look like. Good for
- * browsing template cards in the editor and on the dashboard — no
- * round-trip to the server, no thumbnail caching.
+ * Public API unchanged: callers (TemplateSetEditor) pass `layout` +
+ * `sampleInputs` + `palette` + `width`. The conversion:
  *
- * Renders:
- *   - shape elements → <rect> with fill_color
- *   - text elements  → <text> with font_name/size/color (using {{var}}
- *                       substitution from sample_inputs)
- *   - chart elements → labeled placeholder rect
- *   - table elements → faint grid
- *   - everything else → outlined rect with kind label
+ *   1. Substitute `{{var}}` references in body fields with values from
+ *      sampleInputs (or empty string when missing). Numeric/list inputs
+ *      pass through as-is when the WHOLE field is a single ref.
+ *   2. Resolve named palette tokens (e.g. `cobalt`, `accent1`) to hex.
+ *   3. Reshape each entry into a ViewerElementJson with the same
+ *      position/text/fill/chart/table fields the showcase API emits.
  *
- * Positions are taken from body.position (left_in/top_in/width_in/height_in)
- * on a 13.333 x 7.5 inch canvas. We scale to whatever size the caller
- * asks for via the `width` prop.
+ * Then SlideViewer renders via the studio renderer registry — same
+ * Tiptap text, same Recharts charts, same TiptapTable tables that
+ * the editor uses. No more parallel SVG renderer to keep in sync.
  */
+
+import { useMemo } from "react"
+import SlideViewer, { type ViewerElementJson, type ViewerSlideData } from "./SlideViewer"
 
 interface LayoutEntry {
   kind?: string
@@ -39,9 +39,9 @@ export interface TemplatePreviewProps {
   /** Final pixel width of the thumbnail. Height auto-scales to 16:9. */
   width?: number
   className?: string
-  /** If provided, used to resolve named palette tokens to hex. */
+  /** Used to resolve named palette tokens (e.g. "cobalt") to hex. */
   palette?: PaletteEntry[]
-  /** Background color override. Defaults to the active theme's "ink". */
+  /** Background color override. Defaults to a warm cream. */
   background?: string
 }
 
@@ -50,31 +50,52 @@ const CANVAS_H = 7.5
 const DEFAULT_BG = "#F9F8F4"
 
 
-// {{var}} → sampleInputs[var] (string only — non-string values fall through)
-function substitute(s: string, inputs: Record<string, unknown>): string {
-  return s.replace(/\{\{(\w+)\}\}/g, (_, name) => {
-    const v = inputs[name]
-    return v == null ? "" : String(v)
-  })
+// ── {{var}} substitution ───────────────────────────────────────────────────
+
+
+const LONE_VAR_RE = /^\s*\{\{\s*([A-Za-z_][\w]*)\s*\}\}\s*$/
+const VAR_RE      = /\{\{\s*([A-Za-z_][\w]*)\s*\}\}/g
+
+/** Substitute references in a value. If the value is a string that's
+ *  entirely a single `{{var}}` reference, returns the input's native
+ *  type (number, list, dict). Otherwise interpolates string. Recurses
+ *  into dicts and lists. */
+function substitute(value: unknown, inputs: Record<string, unknown>): unknown {
+  if (typeof value === "string") {
+    const m = value.match(LONE_VAR_RE)
+    if (m) {
+      const key = m[1]
+      return key in inputs ? inputs[key] : ""
+    }
+    return value.replace(VAR_RE, (_, k) => {
+      const v = inputs[k]
+      return v == null ? "" : String(v)
+    })
+  }
+  if (Array.isArray(value)) return value.map((v) => substitute(v, inputs))
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = substitute(v, inputs)
+    }
+    return out
+  }
+  return value
 }
+
 
 function resolveColor(
   raw: unknown,
-  inputs: Record<string, unknown>,
   palette: PaletteEntry[] = [],
-  fallback = "#000000",
-): string {
-  if (raw == null) return fallback
-  let v = String(raw)
-  if (v.includes("{{")) v = substitute(v, inputs)
-  // Hex?
+  fallback: string | null = null,
+): string | null {
+  if (raw == null || raw === "") return fallback
+  const v = String(raw)
   if (v.startsWith("#")) return v
-  // Named palette lookup
   const hit = palette.find((c) => c.name === v || c.role === v)
   if (hit?.hex) return hit.hex
-  // Percy palette name fallbacks for common tokens used by built-ins
   const named: Record<string, string> = {
-    ink: "#F9F8F4", paper: "#2A2F3A", muted: "#6A6F7A",
+    ink: "#1A1F28", paper: "#F9F8F4", muted: "#6A6F7A",
     cobalt: "#7DA1CC", sage: "#6FA17A", cream: "#F0E6D8",
     ochre: "#C5994A", brick: "#B8634F",
     accent1: "#7DA1CC", accent2: "#6FA17A",
@@ -83,10 +104,128 @@ function resolveColor(
   return named[v.toLowerCase()] ?? fallback
 }
 
-function safeNumber(v: unknown, fallback = 0): number {
-  const n = typeof v === "number" ? v : typeof v === "string" ? parseFloat(v) : NaN
-  return Number.isFinite(n) ? n : fallback
+
+// ── Layout entry → ViewerElementJson ───────────────────────────────────────
+
+
+function entryToElement(
+  entry: LayoutEntry,
+  inputs: Record<string, unknown>,
+  palette: PaletteEntry[],
+): ViewerElementJson | null {
+  const kind = entry.kind || ""
+  const body = (substitute(entry.body || {}, inputs) || {}) as Record<string, unknown>
+
+  // Map layout kind → Bridge element type.
+  const typeMap: Record<string, string> = {
+    shape: "BridgeShape",
+    text: "BridgeText",
+    chart: "BridgeChart",
+    table: "BridgeTable",
+    connector: "BridgeConnector",
+    "image-typed": "BridgeImage",
+    freeform: "BridgeFreeform",
+    "live-group": "BridgeGroup",
+  }
+  const type = typeMap[kind] || "BridgeShape"
+
+  const pos = (body.position ?? {}) as Record<string, unknown>
+  const left_in   = Number(pos.left_in   ?? 0)
+  const top_in    = Number(pos.top_in    ?? 0)
+  const width_in  = Number(pos.width_in  ?? 0)
+  const height_in = Number(pos.height_in ?? 0)
+  if (!Number.isFinite(width_in) || !Number.isFinite(height_in) ||
+      width_in <= 0 || height_in <= 0) return null
+
+  const fillColor = resolveColor(body.fill_color, palette)
+  const fill = fillColor ? { type: "solid", color: fillColor } : undefined
+
+  // Text — either body.text (flat string) or body.text_runs (list of runs).
+  // Both forms exist in induced templates.
+  let text_runs: ViewerElementJson["text_runs"] | undefined
+  const runs = body.text_runs
+  const text = body.text
+  if (Array.isArray(runs) && runs.length > 0) {
+    text_runs = runs.map((r) => {
+      const rr = r as Record<string, unknown>
+      return {
+        text: String(rr.text ?? ""),
+        font_name:   (rr.font_name as string | null) ?? null,
+        font_size:   (rr.font_size as number | null) ?? null,
+        font_bold:   (rr.font_bold as boolean | null) ?? null,
+        font_italic: (rr.font_italic as boolean | null) ?? null,
+        color:       resolveColor(rr.font_color ?? rr.color, palette) ?? null,
+      }
+    }).filter((r) => r.text !== "")
+  } else if (typeof text === "string" && text.trim()) {
+    text_runs = [{ text }]
+  }
+
+  const out: ViewerElementJson = {
+    type,
+    position: { left_in, top_in, width_in, height_in },
+  }
+  if (fill) out.fill = fill
+  if (text_runs && text_runs.length > 0) out.text_runs = text_runs
+  if (body.geometry_preset) out.geometry_preset = String(body.geometry_preset)
+
+  // Chart fields
+  if (type === "BridgeChart") {
+    out.chart_type = (body.chart_type as string | null) ?? null
+    const cats = body.categories
+    if (Array.isArray(cats)) out.chart_categories = cats.map(String)
+    const series = body.series
+    if (Array.isArray(series)) {
+      out.chart_series = series.map((s) => {
+        const ss = s as Record<string, unknown>
+        return {
+          name: String(ss.name ?? ""),
+          values: Array.isArray(ss.values) ? (ss.values as unknown[]).map((v) => Number(v) || 0) : [],
+          color: resolveColor(ss.color, palette),
+        }
+      })
+      out.chart_series_count = series.length
+    }
+    const title = body.title
+    if (typeof title === "string") out.chart_title = title
+    else if (title && typeof title === "object") {
+      const tt = title as Record<string, unknown>
+      if (typeof tt.text === "string") out.chart_title = tt.text
+    }
+  }
+
+  // Table fields
+  if (type === "BridgeTable") {
+    const data = body.data
+    if (Array.isArray(data)) {
+      out.table_data = (data as unknown[]).map((row) =>
+        Array.isArray(row) ? (row as unknown[]).map((c) => String(c ?? "")) : [],
+      )
+      out.table_dim = [
+        out.table_data.length,
+        out.table_data[0]?.length ?? 0,
+      ]
+    }
+    if (typeof body.first_row_header === "boolean") out.first_row_header = body.first_row_header
+    if (typeof body.banded_rows === "boolean") out.banded_rows = body.banded_rows
+  }
+
+  // Line (connectors / borders)
+  const lineColor = resolveColor(body.line_color ?? body.border_color, palette)
+  const lineWidth = body.line_width ?? body.border_width
+  if (lineColor || typeof lineWidth === "number") {
+    out.line = {
+      visible: true,
+      color: lineColor,
+      width: typeof lineWidth === "number" ? lineWidth : null,
+    }
+  }
+
+  return out
 }
+
+
+// ── Public component ──────────────────────────────────────────────────────
 
 
 export default function TemplatePreview({
@@ -97,205 +236,27 @@ export default function TemplatePreview({
   palette = [],
   background = DEFAULT_BG,
 }: TemplatePreviewProps) {
-  const height = Math.round((width * CANVAS_H) / CANVAS_W)
-  // SVG viewBox is in inches; let the browser scale to pixel width.
-  return (
-    <svg
-      viewBox={`0 0 ${CANVAS_W} ${CANVAS_H}`}
-      width={width}
-      height={height}
-      preserveAspectRatio="xMidYMid meet"
-      className={className}
-      style={{ display: "block" }}
-    >
-      <rect x={0} y={0} width={CANVAS_W} height={CANVAS_H} fill={background} />
-      {layout.map((entry, idx) => (
-        <LayoutEl
-          key={idx}
-          entry={entry}
-          sampleInputs={sampleInputs}
-          palette={palette}
-        />
-      ))}
-    </svg>
-  )
-}
-
-function LayoutEl({
-  entry, sampleInputs, palette,
-}: {
-  entry: LayoutEntry
-  sampleInputs: Record<string, unknown>
-  palette: PaletteEntry[]
-}) {
-  const body = (entry.body ?? {}) as Record<string, unknown>
-  const pos = (body.position ?? {}) as Record<string, unknown>
-  const x = safeNumber(pos.left_in)
-  const y = safeNumber(pos.top_in)
-  const w = safeNumber(pos.width_in, 1)
-  const h = safeNumber(pos.height_in, 0.5)
-
-  const kind = entry.kind || "shape"
-
-  // ── shape ──
-  if (kind === "shape") {
-    const fill = resolveColor(body.fill_color, sampleInputs, palette, "#E5E5E5")
-    const text = typeof body.text === "string" ? substitute(body.text, sampleInputs) : ""
-    const textColor = resolveColor(body.text_color, sampleInputs, palette, "#2A2F3A")
-    const fontSize = safeNumber(body.font_size, 12) / 72  // pt → inches (≈ /72)
-    return (
-      <g>
-        <rect x={x} y={y} width={w} height={h} fill={fill} />
-        {text && (
-          <text
-            x={x + w / 2}
-            y={y + h / 2}
-            fontSize={fontSize}
-            fill={textColor}
-            fontFamily="Inter, system-ui, sans-serif"
-            fontWeight={body.font_bold ? 700 : 400}
-            textAnchor="middle"
-            dominantBaseline="middle"
-          >
-            {text.length > 40 ? text.slice(0, 38) + "…" : text}
-          </text>
-        )}
-      </g>
-    )
-  }
-
-  // ── text ──
-  if (kind === "text") {
-    const text = typeof body.text === "string" ? substitute(body.text, sampleInputs) : ""
-    const color = resolveColor(body.text_color, sampleInputs, palette, "#2A2F3A")
-    const fontSize = safeNumber(body.font_size, 12) / 72
-    const align = String(body.text_align || "left")
-    const bold = !!body.font_bold
-    const italic = !!body.font_italic
-    const anchor = align === "center" ? "middle" : align === "right" ? "end" : "start"
-    const tx = align === "center" ? x + w / 2 : align === "right" ? x + w : x
-
-    // Wrap naively — if text is long, break it into ~30-char lines.
-    const lines: string[] = []
-    const remaining = text
-    if (remaining.length <= 60) {
-      lines.push(remaining)
-    } else {
-      const words = remaining.split(" ")
-      let line = ""
-      for (const word of words) {
-        if ((line + " " + word).trim().length > 60) {
-          lines.push(line.trim())
-          line = word
-        } else {
-          line = (line + " " + word).trim()
-        }
-        if (lines.length >= 4) break
-      }
-      if (line && lines.length < 4) lines.push(line.trim())
-      if (lines.length === 4 && remaining.length > lines.join(" ").length) {
-        lines[3] = lines[3].slice(0, 50) + "…"
-      }
+  const slideData = useMemo<ViewerSlideData>(() => {
+    const elements: ViewerElementJson[] = []
+    for (const entry of (layout || [])) {
+      const el = entryToElement(entry, sampleInputs, palette)
+      if (el) elements.push(el)
     }
+    return {
+      slide_n: 1,
+      width_in: CANVAS_W,
+      height_in: CANVAS_H,
+      background_color: background,
+      elements,
+    }
+  }, [layout, sampleInputs, palette, background])
 
-    return (
-      <g>
-        {lines.map((ln, i) => (
-          <text
-            key={i}
-            x={tx}
-            y={y + fontSize * (1.05 + i * 1.15)}
-            fontSize={fontSize}
-            fill={color}
-            fontFamily="Inter, system-ui, sans-serif"
-            fontWeight={bold ? 700 : 400}
-            fontStyle={italic ? "italic" : "normal"}
-            textAnchor={anchor}
-          >
-            {ln}
-          </text>
-        ))}
-      </g>
-    )
-  }
-
-  // ── chart ──
-  if (kind === "chart") {
-    const fill = resolveColor(body.fill_color, sampleInputs, palette, "#F0E6D8")
-    return (
-      <g>
-        <rect x={x} y={y} width={w} height={h} fill={fill} opacity={0.6} />
-        {/* Stylized chart bars to suggest "this is a chart" */}
-        {[0.15, 0.4, 0.65].map((frac, i) => (
-          <rect
-            key={i}
-            x={x + w * 0.15 + i * w * 0.25}
-            y={y + h * (1 - frac * 0.7)}
-            width={w * 0.12}
-            height={h * frac * 0.7}
-            fill="#7DA1CC"
-            opacity={0.6}
-          />
-        ))}
-        <text
-          x={x + w / 2}
-          y={y + h - 0.1}
-          fontSize={0.12}
-          fill="#6A6F7A"
-          fontFamily="Inter, system-ui, sans-serif"
-          textAnchor="middle"
-        >
-          chart
-        </text>
-      </g>
-    )
-  }
-
-  // ── table ──
-  if (kind === "table") {
-    const cols = 4
-    const rows = 4
-    return (
-      <g>
-        <rect x={x} y={y} width={w} height={h} fill="#FFFFFF" stroke="#D5D5D5" strokeWidth={0.02} />
-        <rect x={x} y={y} width={w} height={h / rows} fill="#7DA1CC" />
-        {Array.from({ length: cols - 1 }).map((_, i) => (
-          <line
-            key={`v${i}`}
-            x1={x + (w / cols) * (i + 1)} x2={x + (w / cols) * (i + 1)}
-            y1={y} y2={y + h} stroke="#D5D5D5" strokeWidth={0.015}
-          />
-        ))}
-        {Array.from({ length: rows - 1 }).map((_, i) => (
-          <line
-            key={`h${i}`}
-            x1={x} x2={x + w}
-            y1={y + (h / rows) * (i + 1)} y2={y + (h / rows) * (i + 1)}
-            stroke="#D5D5D5" strokeWidth={0.015}
-          />
-        ))}
-      </g>
-    )
-  }
-
-  // ── connector / image / live-group / fallback ──
-  const label = kind === "image-typed" ? "image" : kind
   return (
-    <g>
-      <rect
-        x={x} y={y} width={w} height={h}
-        fill="none" stroke="#9C9EA7" strokeWidth={0.02} strokeDasharray="0.05 0.05"
-      />
-      <text
-        x={x + w / 2} y={y + h / 2}
-        fontSize={0.18}
-        fill="#9C9EA7"
-        fontFamily="Inter, system-ui, sans-serif"
-        textAnchor="middle"
-        dominantBaseline="middle"
-      >
-        {label}
-      </text>
-    </g>
+    <SlideViewer
+      slideData={slideData}
+      width={width}
+      className={className}
+      background={background}
+    />
   )
 }

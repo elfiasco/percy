@@ -61,6 +61,17 @@ function TiptapTextRendererImpl({
   // Hydrate local editing state from the store-owned payload cache.
   useEffect(() => {
     setError(payload.error)
+    // Transient payload failures (network blip, brief backend stall) shouldn't
+    // leave the element stuck on "! text load failed" — force a re-fetch a
+    // moment later. The store already retries once internally, so this is a
+    // second chance after both attempts fail.
+    if (payload.error) {
+      const t = window.setTimeout(() => {
+        studioStore.loadTextPayload(docId, slideN, element.id, /*force*/ true)
+        studioStore.loadStylePayload(docId, slideN, element.id, /*force*/ true)
+      }, 1200)
+      return () => clearTimeout(t)
+    }
     if (payload.text) setContent(payload.text.kind === "paragraphs" ? payload.text : emptyParagraphs())
     if (payload.style) setStyle(payload.style)
   }, [payload.error, payload.text, payload.style])
@@ -147,7 +158,7 @@ function TiptapTextRendererImpl({
     return () => cancelAnimationFrame(id)
   }, [content, editing, explicitTextZoom, element.width_in, element.height_in])
 
-  if (error)    return <div style={ERR_STYLE}>! text load failed</div>
+  if (error)    return <div style={ERR_STYLE} data-percy-error="text">! text load failed</div>
   if (!content) return <div style={{ width: "100%", height: "100%" }} data-percy-loading="text" />
 
   const isEmpty = !content || (content.kind === "paragraphs" && content.paragraphs.every((p) =>

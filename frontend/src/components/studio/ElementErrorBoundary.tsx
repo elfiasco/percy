@@ -29,7 +29,22 @@ export default class ElementErrorBoundary extends Component<
       error:     err,
       info,
     })
+    // Most element crashes are transient (a race with payload-loading state, a
+    // momentary y-prosemirror desync, etc). Auto-recover once after a short
+    // delay so the user (and the fidelity screenshot harness) doesn't see a
+    // permanent red placeholder for what's actually a one-frame hiccup.
+    if (!this.autoRetried) {
+      this.autoRetried = true
+      this.retryTimer = window.setTimeout(() => this.reset(), 800)
+    }
   }
+
+  componentWillUnmount() {
+    if (this.retryTimer != null) clearTimeout(this.retryTimer)
+  }
+
+  private autoRetried = false
+  private retryTimer: number | null = null
 
   reset = () => this.setState({ hasError: false, message: "" })
 
@@ -37,6 +52,7 @@ export default class ElementErrorBoundary extends Component<
     if (!this.state.hasError) return this.props.children
     return (
       <div
+        data-percy-error="renderer"
         onClick={(e) => { e.stopPropagation(); this.reset() }}
         title={`Renderer crashed: ${this.state.message}\n\nClick to retry.`}
         style={{

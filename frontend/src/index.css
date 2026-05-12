@@ -134,6 +134,11 @@
     content: attr(data-bullet-char, "•");
     position: absolute;
     left: 0.15em;
+    /* Chromium renders U+2022 at the inherited font-size, producing a much
+       larger glyph than PowerPoint's Arial bullet at the same point size.
+       Scale to 70% to match PowerPoint's visual weight. */
+    font-size: 0.7em;
+    line-height: 1;
   }
   .tiptap-bridge-editor p[data-bullet-type="number"]::before,
   .tiptap-text-idle p[data-bullet-type="number"]::before {
