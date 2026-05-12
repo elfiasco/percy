@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback, useRef } from "react"
+import { useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef } from "react"
 import { useEditor, EditorContent, generateHTML } from "@tiptap/react"
 import Collaboration from "@tiptap/extension-collaboration"
 import type { ParagraphsTextContent } from "../../../lib/studioTypes"
@@ -114,6 +114,39 @@ function TiptapTextRendererImpl({
     return () => { frag.unobserveDeep(refresh) }
   }, [editing, element.id])
 
+  // Hooks (autofit refs/state) declared unconditionally up here so they
+  // remain stable across the error/loading early returns below. React Rules
+  // of Hooks: same number, same order, every render.
+  const wrapperRef = useRef<HTMLDivElement | null>(null)
+  const measureRef = useRef<HTMLDivElement | null>(null)
+  const [dynamicZoom, setDynamicZoom] = useState<number | undefined>(undefined)
+  const explicitTextZoom = style?.font_scale != null && style.font_scale < 100000
+    ? style.font_scale / 100000
+    : undefined
+  // Dynamic auto-fit: when content overflows container, scale text down so
+  // it fits — mirrors PowerPoint's normAutofit behavior for text frames
+  // without an explicit fontScale.
+  useEffect(() => {
+    if (explicitTextZoom != null) { setDynamicZoom(undefined); return }
+    if (editing) { setDynamicZoom(undefined); return }
+    if (!content) return
+    const id = requestAnimationFrame(() => {
+      const wrap = wrapperRef.current
+      const measured = measureRef.current
+      if (!wrap || !measured) return
+      const containerH = wrap.clientHeight
+      const contentH   = measured.scrollHeight
+      if (containerH <= 0 || contentH <= 0) return
+      if (contentH <= containerH + 1) {
+        setDynamicZoom((z) => (z !== undefined ? undefined : z))
+        return
+      }
+      const target = Math.round(Math.max(0.5, containerH / contentH) * 1000) / 1000
+      setDynamicZoom((z) => (z === target ? z : target))
+    })
+    return () => cancelAnimationFrame(id)
+  }, [content, editing, explicitTextZoom, element.width_in, element.height_in])
+
   if (error)    return <div style={ERR_STYLE}>! text load failed</div>
   if (!content) return <div style={{ width: "100%", height: "100%" }} data-percy-loading="text" />
 
@@ -145,12 +178,7 @@ function TiptapTextRendererImpl({
   const anchorLc = style?.vertical_anchor?.toLowerCase()
   const justifyContent = anchorLc === "middle" || anchorLc === "ctr" || anchorLc === "center" ? "center" : anchorLc === "bottom" || anchorLc === "b" ? "flex-end" : "flex-start"
 
-  // Apply normAutoFit font_scale (e.g. 92500 = 92.5%) using CSS zoom on the
-  // text content (not the container) so layout is affected without shrinking the
-  // element's visible background/border. This prevents bottom-anchor overflow.
-  const textZoom = style?.font_scale != null && style.font_scale < 100000
-    ? style.font_scale / 100000
-    : undefined
+  const textZoom = explicitTextZoom ?? dynamicZoom
 
   const containerStyle: React.CSSProperties = {
     width:          "100%",
@@ -194,6 +222,7 @@ function TiptapTextRendererImpl({
 
   return (
     <div
+      ref={wrapperRef}
       style={containerStyle}
       className="tiptap-text-idle"
       onClick={() => { setEditing(true) }}
@@ -222,6 +251,7 @@ function TiptapTextRendererImpl({
         </div>
       ) : (
         <div
+          ref={measureRef}
           style={textZoom != null ? { zoom: textZoom } as React.CSSProperties : undefined}
           dangerouslySetInnerHTML={{ __html: html }}
         />
