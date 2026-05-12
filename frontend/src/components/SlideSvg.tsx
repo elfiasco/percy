@@ -46,8 +46,13 @@ interface SlideSvgData {
 }
 
 export interface SlideSvgProps {
-  docId: string
-  slideN: number
+  /** Pre-fetched slide data — when provided, no HTTP request is made.
+   *  Used by the showcase splash which gets all slide JSON inline. */
+  slideData?: SlideSvgData
+  /** Lazy-fetch mode — provide doc + slide id to fetch from the
+   *  /api/docs/.../svg-data endpoint. Useful inside Studio. */
+  docId?: string
+  slideN?: number
   /** Final pixel width; height scales 16:9. */
   width?: number
   className?: string
@@ -57,19 +62,24 @@ export interface SlideSvgProps {
 
 
 export default function SlideSvg({
-  docId, slideN, width = 480, className, background = "#FFFFFF",
+  slideData, docId, slideN, width = 480, className, background = "#FFFFFF",
 }: SlideSvgProps) {
-  const [data, setData] = useState<SlideSvgData | null>(null)
+  const [fetched, setFetched] = useState<SlideSvgData | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  // Lazy-fetch only when no pre-fetched data was passed.
   useEffect(() => {
+    if (slideData) return
+    if (!docId || !slideN) return
     let cancelled = false
     fetch(`/api/docs/${docId}/slides/${slideN}/svg-data`, { credentials: "include" })
       .then((r) => r.ok ? r.json() : Promise.reject(`${r.status}`))
-      .then((d) => { if (!cancelled) setData(d) })
+      .then((d) => { if (!cancelled) setFetched(d) })
       .catch((e) => { if (!cancelled) setError(String(e)) })
     return () => { cancelled = true }
-  }, [docId, slideN])
+  }, [slideData, docId, slideN])
+
+  const data = slideData ?? fetched
 
   if (error) {
     return (

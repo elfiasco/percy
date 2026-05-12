@@ -179,12 +179,42 @@ def run_demo(
         "ok": bool(result.get("ok", True)),
         "elapsed_seconds": round(elapsed, 1),
     }
+
+    # ── Persist the slide JSON so the showcase survives restarts ──
+    # The in-memory _docs cache is lost when the server recycles, but the
+    # demo deck needs to keep working. Walk the doc's slides + serialize
+    # each one's elements to the same shape the svg-data endpoint emits.
+    # Stored in studio_templates.demo_slides_json.
+    persisted_slides: list[dict[str, Any]] = []
+    try:
+        from .template_sets_api import _serialize_element_for_svg
+        doc = _backend_main._docs.get(doc_id, {}).get("doc")
+        if doc:
+            theme = getattr(doc, "theme_colors", None) or {}
+            for slide in (doc.slides or []):
+                if not (slide.elements or []):
+                    continue
+                persisted_slides.append({
+                    "slide_n": getattr(slide, "slide_number", None),
+                    "width_in": getattr(slide, "width", 13.333),
+                    "height_in": getattr(slide, "height", 7.5),
+                    "elements": [
+                        _serialize_element_for_svg(el, theme)
+                        for el in (slide.elements or [])
+                    ],
+                })
+        log.info("run_demo: persisted %d slides to demo_slides_json",
+                 len(persisted_slides))
+    except Exception as exc:
+        log.warning("run_demo: could not persist slides: %s", exc)
+
     auth_db.update_template(
         template_set_id,
         last_demo_doc_id=doc_id,
         last_demo_project_id=project["id"],
         last_demo_at=int(time.time()),
         last_demo_summary=summary,
+        demo_slides_json=persisted_slides,
     )
     log.info("run_demo: done set=%s slides_applied=%d in %.1fs",
              template_set_id, summary["slides_applied"], elapsed)
@@ -196,4 +226,5 @@ def run_demo(
         "set_id": template_set_id,
         "prompt_id": demo.id,
         "summary": summary,
+        "slides_persisted": len(persisted_slides),
     }

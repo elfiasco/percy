@@ -177,21 +177,21 @@ def get_showcase() -> dict[str, Any]:
                 it["template"] = _agent_tpls.get_template(it["template_id"])
         except Exception:
             pass
-        # Demo deck info — the splash uses this to render real generated
-        # slides side-by-side. The demo is a separate artifact (a
-        # studio_project) but we surface its doc_id + slide count via
-        # the convenience columns the runner stamps on the set row.
+        # Demo deck info — the splash renders the slides directly from
+        # this payload, no per-slide HTTP fetches. demo_slides_json
+        # survives server restarts (persisted at generation time).
         demo_block = None
-        demo_doc_id = tpl.get("last_demo_doc_id")
         demo_summary = tpl.get("last_demo_summary") or {}
-        if demo_doc_id:
+        persisted_slides = tpl.get("demo_slides_json") or []
+        if persisted_slides:
             demo_block = {
-                "doc_id": demo_doc_id,
+                "doc_id": tpl.get("last_demo_doc_id"),
                 "project_id": tpl.get("last_demo_project_id"),
                 "generated_at": tpl.get("last_demo_at"),
-                "slides_applied": demo_summary.get("slides_applied", 0),
+                "slides_applied": len(persisted_slides),
                 "demo_id": demo_summary.get("demo_id"),
                 "demo_name": demo_summary.get("demo_name"),
+                "slides": persisted_slides,    # full element JSON per slide
             }
 
         brands.append({
@@ -209,16 +209,32 @@ def get_showcase() -> dict[str, Any]:
             "demo": demo_block,
         })
 
+    # Resolve the actual canned prompt text so the splash can display it on
+    # the left side of each brand panel — the exact brief both agents got.
+    from percy.agent.demo_prompts import get_demo_prompt, DEFAULT_DEMO_ID
+    try:
+        demo = get_demo_prompt(DEFAULT_DEMO_ID)
+        prompt_text = demo.prompt
+        prompt_name = demo.name
+        prompt_slide_count = demo.slide_count
+    except Exception:
+        prompt_text = ""
+        prompt_name = "Showcase brief"
+        prompt_slide_count = 7
+
     weather = _get_weather_cached()
 
     return {
         "brands": brands,
         "weather": weather,
         "served_at": int(time.time()),
+        "prompt_text": prompt_text,
+        "prompt_name": prompt_name,
+        "prompt_slide_count": prompt_slide_count,
         "prompt_summary": (
-            "Same 10-slide quarterly-update prompt for every brand. The agent "
-            "discovers each set's templates and chooses layouts; slide 5 uses "
-            "live weather data the agent fetches via urllib."
+            f"Same {prompt_slide_count}-slide brief for every brand. The "
+            "agent picks templates from each set; same locked content + "
+            "data on both runs."
         ),
     }
 

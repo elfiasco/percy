@@ -631,6 +631,12 @@ _FORWARD_ADDS = [
     ("studio_templates", "last_demo_project_id", "TEXT"),
     ("studio_templates", "last_demo_at",         "INTEGER"),
     ("studio_templates", "last_demo_summary",    "TEXT NOT NULL DEFAULT '{}'"),
+    # Persisted demo slide JSON. After the demo runner generates a deck,
+    # we serialize each slide's elements (same shape as the svg-data
+    # endpoint) and store them here so the showcase splash survives
+    # server restarts without re-running expensive LLM generation. Empty
+    # default '[]' means "no demo has been generated yet."
+    ("studio_templates", "demo_slides_json",     "TEXT NOT NULL DEFAULT '[]'"),
 ]
 
 
@@ -1181,6 +1187,8 @@ def _decode_template(row: dict[str, Any] | None) -> dict[str, Any] | None:
     # Auto-demo bookkeeping (defaults preserve None for "never run").
     try: row["last_demo_summary"] = _json.loads(row.get("last_demo_summary") or "{}")
     except Exception: row["last_demo_summary"] = {}
+    try: row["demo_slides_json"] = _json.loads(row.get("demo_slides_json") or "[]")
+    except Exception: row["demo_slides_json"] = []
     return row
 
 
@@ -1246,7 +1254,7 @@ def list_org_templates(org_id: str, *, viewer_id: str) -> list[dict[str, Any]]:
     return [d for d in (_decode_template(r) for r in rows) if d]
 
 
-_TEMPLATE_JSON_FIELDS = ("brand", "source_project_ids", "palette", "fonts", "style_rules", "style_profile", "last_demo_summary")
+_TEMPLATE_JSON_FIELDS = ("brand", "source_project_ids", "palette", "fonts", "style_rules", "style_profile", "last_demo_summary", "demo_slides_json")
 
 
 def update_template(template_id: str, **fields: Any) -> dict[str, Any] | None:
