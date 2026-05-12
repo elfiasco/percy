@@ -34,7 +34,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from . import auth, auth_db
@@ -367,12 +367,14 @@ _MAX_REF_SIZE = 50 * 1024 * 1024  # 50 MB per file
 
 
 @router.post("/api/template-sets/{set_id}/refs")
-async def upload_ref(request: Request, set_id: str, file: UploadFile = File(...)):
+async def upload_ref(request: Request, set_id: str, bg: BackgroundTasks,
+                       file: UploadFile = File(...)):
     """Upload a reference doc (PPTX / PDF / MD / TXT) to a template set.
 
-    Stored on disk, queued for onboarding. Returns immediately with status
-    'uploaded'; the caller polls `GET .../refs/{id}` or `GET .../refs` to see
-    'onboarding' → 'ready' transitions.
+    Saves to disk, immediately schedules a background Bridge-onboard task.
+    Returns with status 'onboarding' (or 'uploaded' if the type doesn't get
+    auto-onboarded — markdown / txt). Clients poll `GET .../refs/{id}` until
+    they see 'ready' / 'failed'.
     """
     user = auth.require_user(request)
     _require_set_editor(user, set_id)
@@ -399,7 +401,6 @@ async def upload_ref(request: Request, set_id: str, file: UploadFile = File(...)
         uploaded_by=user["id"],
         status="uploaded",
     )
-    # Now we know ref["id"] — write to disk and record the storage key.
     target = _ref_path(set_id, ref["id"], ext)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(raw)
@@ -407,6 +408,13 @@ async def upload_ref(request: Request, set_id: str, file: UploadFile = File(...)
     ref = auth_db.update_template_set_ref(ref["id"], storage_key=storage_key)
     log.info("upload_ref: set=%s ref=%s file=%s (%d bytes)",
              set_id, ref["id"], filename, len(raw))
+
+    # Auto-schedule onboarding for the file types that go through the Bridge
+    # pipeline. Markdown / txt refs are read at mine-time directly.
+    if ext in {".pptx", ".pdf"}:
+        auth_db.update_template_set_ref(ref["id"], status="onboarding")
+        bg.add_task(_run_onboard_in_background, set_id, ref["id"], str(target))
+        ref = auth_db.get_template_set_ref(ref["id"])
     return ref
 
 
@@ -444,86 +452,55 @@ def delete_ref(request: Request, set_id: str, ref_id: str):
     return {"ok": True}
 
 
-# ── Onboarding refs into Bridge docs + auto-brand-extract ───────────────────
+# ── Background onboarding worker ────────────────────────────────────────────
 
 
-@router.post("/api/template-sets/{set_id}/refs/{ref_id}/onboard")
-def onboard_ref(request: Request, set_id: str, ref_id: str):
-    """Run the onboard pipeline on a reference doc → Bridge document.
+def _run_onboard_in_background(set_id: str, ref_id: str, abs_path: str) -> None:
+    """Run the Bridge onboard pipeline + auto-brand-extract in a background
+    thread. Updates the ref row's status field as it progresses so polling
+    clients can show 'onboarding' → 'ready' / 'failed'.
 
-    Synchronous in v1 — most decks onboard in seconds. Long-running large PDFs
-    will block the request; the frontend should show a spinner. We can lift
-    this into a background job if user reports indicate it.
+    Auto-brand-extract: once this ref onboards, if it's not the only ready
+    ref in the set, re-run extract-brand-from-refs so the user gets fresh
+    proposed_palette / proposed_fonts without an explicit click. Errors in
+    the extract step are logged but don't fail the onboard.
     """
-    user = auth.require_user(request)
-    _require_set_editor(user, set_id)
-    ref = auth_db.get_template_set_ref(ref_id)
-    if not ref or ref["set_id"] != set_id:
-        raise HTTPException(404, "reference not found")
-    if ref.get("status") == "ready" and ref.get("doc_id"):
-        return ref
-
-    storage_key = ref.get("storage_key") or ""
-    abs_path = _DATA_DIR.parent / storage_key
-    if not abs_path.exists():
-        auth_db.update_template_set_ref(ref_id, status="failed", error="storage blob missing")
-        raise HTTPException(404, "reference blob not found on disk")
-
-    auth_db.update_template_set_ref(ref_id, status="onboarding", error=None)
     try:
-        # Reuse the same backend onboard entry point projects use; this keeps
-        # rendering + cache layout identical to a regular onboarded deck.
         from . import main as _backend_main
-        result = _backend_main.onboard(_backend_main.OnboardRequest(path=str(abs_path)))
+        result = _backend_main.onboard(_backend_main.OnboardRequest(path=abs_path))
         doc_id = result.get("doc_id") if isinstance(result, dict) else getattr(result, "doc_id", None)
         if not doc_id:
             raise RuntimeError("onboard returned no doc_id")
-
         doc = _backend_main._docs.get(doc_id, {}).get("doc")
         slide_count = len(doc.slides) if doc else 0
         element_count = sum(len(s.elements or []) for s in (doc.slides if doc else []))
 
-        ref = auth_db.update_template_set_ref(
-            ref_id,
-            doc_id=doc_id,
-            status="ready",
-            slide_count=slide_count,
-            element_count=element_count,
+        auth_db.update_template_set_ref(
+            ref_id, doc_id=doc_id, status="ready",
+            slide_count=slide_count, element_count=element_count, error=None,
         )
-        log.info("onboard_ref: set=%s ref=%s doc=%s slides=%d elements=%d",
+        log.info("onboard_ref bg: set=%s ref=%s doc=%s slides=%d elements=%d",
                  set_id, ref_id, doc_id, slide_count, element_count)
-        return ref
-    except HTTPException:
-        raise
+
+        # Auto-extract brand stats. Best-effort — never blocks ref readiness.
+        try:
+            _run_brand_extract(set_id)
+        except Exception as exc:
+            log.warning("auto-brand-extract failed for set %s: %s", set_id, exc)
     except Exception as exc:
-        log.exception("onboard_ref failed")
+        log.exception("onboard_ref bg failed: set=%s ref=%s", set_id, ref_id)
         auth_db.update_template_set_ref(ref_id, status="failed", error=str(exc))
-        raise HTTPException(500, f"onboard failed: {exc}")
 
 
-@router.post("/api/template-sets/{set_id}/extract-brand-from-refs")
-def extract_brand_from_refs(request: Request, set_id: str):
-    """Walk every onboarded reference doc and aggregate palette + fonts.
-
-    Deterministic — no LLM. Reads theme_colors, element fills, and font_name
-    distributions; writes a *proposed* palette / fonts into the set's `brand`
-    JSON column under `proposed_*` keys. The user reviews & confirms via the
-    editor (which writes the curated `palette` / `fonts` columns).
-
-    Wider extraction (chart styles, table densities, typography scales) is
-    captured for transparency but not auto-applied.
-    """
+def _run_brand_extract(set_id: str) -> dict[str, Any] | None:
+    """Shared helper used by both the explicit endpoint and the post-onboard
+    auto-trigger. Returns the new brand dict, or None if no refs are ready
+    yet (in which case the auto-trigger silently no-ops)."""
     import collections
-    user = auth.require_user(request)
-    tpl = _require_set_editor(user, set_id)
-
     refs = auth_db.list_template_set_refs(set_id)
     refs_ready = [r for r in refs if r.get("status") == "ready" and r.get("doc_id")]
     if not refs_ready:
-        raise HTTPException(
-            400,
-            "No onboarded reference docs. Upload PPTX/PDF and call /onboard first.",
-        )
+        return None
 
     from . import main as _backend_main
     color_counter: collections.Counter = collections.Counter()
@@ -535,14 +512,12 @@ def extract_brand_from_refs(request: Request, set_id: str):
     docs_scanned = 0
 
     for ref in refs_ready:
-        doc_id = ref.get("doc_id")
-        d = _backend_main._docs.get(doc_id)
+        d = _backend_main._docs.get(ref.get("doc_id"))
         if not d:
             continue
         doc = d["doc"]
         docs_scanned += 1
         theme = getattr(doc, "theme_colors", None) or {}
-
         for slide in doc.slides:
             for el in slide.elements or []:
                 fill = getattr(el, "fill", None)
@@ -555,8 +530,6 @@ def extract_brand_from_refs(request: Request, set_id: str):
                                 color_counter[hex_val.upper()] += 1
                         except Exception:
                             pass
-                # Text runs may live under several attributes depending on the
-                # element subclass; cover the common ones.
                 paragraphs = (
                     getattr(getattr(el, "text_frame", None), "paragraphs", None)
                     or getattr(el, "paragraphs", None)
@@ -570,7 +543,6 @@ def extract_brand_from_refs(request: Request, set_id: str):
                         if isinstance(fs, (int, float)):
                             if fs > 18: title_sizes.append(float(fs))
                             else:       body_sizes.append(float(fs))
-
                 if getattr(el, "element_type", None) == "BridgeChart":
                     ct = getattr(el, "chart_type", None)
                     if ct: chart_types[ct] += 1
@@ -609,9 +581,65 @@ def extract_brand_from_refs(request: Request, set_id: str):
         "docs_scanned": docs_scanned,
         "extracted_at": int(time.time()),
     }
-
     auth_db.update_template(set_id, brand=brand_summary, last_extracted_at=int(time.time()))
-    return {"ok": True, "brand": brand_summary}
+    return brand_summary
+
+
+# ── Onboarding refs into Bridge docs + auto-brand-extract ───────────────────
+
+
+@router.post("/api/template-sets/{set_id}/refs/{ref_id}/onboard")
+def onboard_ref(request: Request, set_id: str, ref_id: str, bg: BackgroundTasks):
+    """Kick off Bridge onboarding for a reference doc asynchronously.
+
+    Returns immediately with status='onboarding'. The actual work runs in a
+    FastAPI BackgroundTask so large PDFs don't block the request. Clients
+    poll `GET .../refs/{id}` (or list refs) to see 'ready' / 'failed'.
+
+    On success, also auto-triggers extract-brand-from-refs so the user gets
+    fresh proposed palette/fonts without an extra click.
+    """
+    user = auth.require_user(request)
+    _require_set_editor(user, set_id)
+    ref = auth_db.get_template_set_ref(ref_id)
+    if not ref or ref["set_id"] != set_id:
+        raise HTTPException(404, "reference not found")
+    if ref.get("status") == "ready" and ref.get("doc_id"):
+        return ref
+
+    storage_key = ref.get("storage_key") or ""
+    abs_path = _DATA_DIR.parent / storage_key
+    if not abs_path.exists():
+        auth_db.update_template_set_ref(ref_id, status="failed", error="storage blob missing")
+        raise HTTPException(404, "reference blob not found on disk")
+
+    auth_db.update_template_set_ref(ref_id, status="onboarding", error=None)
+    bg.add_task(_run_onboard_in_background, set_id, ref_id, str(abs_path))
+    return auth_db.get_template_set_ref(ref_id)
+
+
+@router.post("/api/template-sets/{set_id}/extract-brand-from-refs")
+def extract_brand_from_refs(request: Request, set_id: str):
+    """Walk every onboarded reference doc and aggregate palette + fonts.
+
+    Deterministic — no LLM. Reads theme_colors, element fills, and font_name
+    distributions; writes a *proposed* palette / fonts into the set's `brand`
+    JSON column under `proposed_*` keys. The user reviews & confirms via the
+    editor (which writes the curated `palette` / `fonts` columns).
+
+    Implementation lives in `_run_brand_extract` and is shared with the
+    auto-trigger that fires after each background onboarding completes.
+    """
+    user = auth.require_user(request)
+    _require_set_editor(user, set_id)
+    brand = _run_brand_extract(set_id)
+    if brand is None:
+        raise HTTPException(
+            400,
+            "No onboarded reference docs. Upload PPTX/PDF first (onboarding "
+            "runs automatically in the background).",
+        )
+    return {"ok": True, "brand": brand}
 
 
 # ── LLM-powered template induction ──────────────────────────────────────────

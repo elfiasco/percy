@@ -11,6 +11,7 @@ import { getPresence, subscribePresence } from "../lib/collab/presenceStore"
 import ThemeToggle from "../theme/ThemeToggle"
 import Logo from "../components/Logo"
 import PageLoader from "../components/PageLoader"
+import TemplateSetBadge from "../components/TemplateSetBadge"
 
 export default function StudioPage() {
   const { user, loading } = useAuth()
@@ -92,6 +93,7 @@ export default function StudioPage() {
         <span className="wordmark text-[10px]">Percy</span>
         <span className="text-edge">/</span>
         <span className="text-[12px] text-paper truncate flex-1 min-w-0">{project?.name ?? doc.name}</span>
+        <TemplateSetBadge projectId={project?.id} />
         <PresenceAvatars localUser={presence.localUser} remoteUsers={presence.remoteUsers} />
         <button
           onClick={() => setPyPanelOpen((v) => !v)}

@@ -4,7 +4,7 @@ import { useAuth } from "../auth/AuthContext"
 import {
   getTemplateSet, updateTemplateSet, deleteTemplateSet,
   listSetItems, removeSetItem,
-  listRefs, uploadRef, deleteRef, onboardRef,
+  listRefs, uploadRef, deleteRef,
   extractBrandFromRefs, confirmBrand,
   mineTemplates, acceptCandidate,
   setAsDefault,
@@ -256,6 +256,7 @@ export default function TemplateSetEditor() {
             onMineComplete={async () => {
               await refreshItems()
             }}
+            onBrandUpdated={refreshSet}
           />
         )}
       </div>
@@ -751,11 +752,13 @@ function RefsTab({
   refs,
   onChange,
   onMineComplete,
+  onBrandUpdated,
 }: {
   setId: string
   refs: TemplateSetRef[]
   onChange: () => Promise<void>
   onMineComplete: () => Promise<void>
+  onBrandUpdated: () => Promise<void>
 }) {
   const toast = useToast()
   const dialog = useDialog()
@@ -765,20 +768,35 @@ function RefsTab({
   const [candidates, setCandidates] = useState<MinedCandidate[]>([])
   const [llmUsed, setLlmUsed] = useState(false)
 
+  // Poll while any refs are mid-onboard. Backend's BackgroundTask updates
+  // status to 'ready' or 'failed' when done; we just need to refresh the
+  // list every couple of seconds until nothing's pending. Also refresh the
+  // parent set so the Brand tab's proposed_palette / proposed_fonts pick up
+  // the auto-extract that fires after each onboard completes.
+  useEffect(() => {
+    const pending = refs.filter((r) => r.status === "onboarding" || r.status === "uploaded")
+    if (pending.length === 0) return
+    const handle = window.setInterval(async () => {
+      await onChange()
+      await onBrandUpdated()
+    }, 2500)
+    return () => window.clearInterval(handle)
+  }, [refs, onChange, onBrandUpdated])
+
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return
     setUploading(true)
     try {
       for (const file of Array.from(files)) {
-        const ref = await uploadRef(setId, file)
-        try {
-          await onboardRef(setId, ref.id)
-        } catch (e) {
-          console.warn("onboard failed for", ref.filename, e)
-        }
+        await uploadRef(setId, file)
+        // Backend now auto-schedules onboarding via BackgroundTasks; no
+        // explicit /onboard call needed. Polling above catches readiness.
       }
       await onChange()
-      toast.show(`Uploaded ${files.length} file${files.length === 1 ? "" : "s"}`, "success")
+      toast.show(
+        `Uploaded ${files.length} file${files.length === 1 ? "" : "s"} — onboarding in background`,
+        "success",
+      )
     } catch (e) {
       toast.show(`Upload failed: ${e instanceof Error ? e.message : String(e)}`, "error")
     } finally {
