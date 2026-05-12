@@ -252,7 +252,18 @@ function TiptapTextRendererImpl({
       ) : (
         <div
           ref={measureRef}
-          style={textZoom != null ? { zoom: textZoom } as React.CSSProperties : undefined}
+          style={textZoom != null ? {
+            // transform: scale doesn't affect scrollHeight/clientHeight, so
+            // the autofit useEffect's measurement isn't fed by its own zoom
+            // output (would oscillate with CSS `zoom`). transformOrigin top
+            // left keeps the content anchored to the same spot relative to
+            // the flex layout.
+            transform: `scale(${textZoom})`,
+            transformOrigin: "top left",
+            // Compensate the width loss from scaling so wrap points stay
+            // the same as PowerPoint would compute at the scaled size.
+            width: `${(100 / textZoom).toFixed(2)}%`,
+          } : undefined}
           dangerouslySetInnerHTML={{ __html: html }}
         />
       )}
