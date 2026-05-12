@@ -108,6 +108,42 @@ export interface SlideViewerProps {
 }
 
 
+// ── Sentinels for non-chart / non-table elements ──────────────────────────
+
+
+const EMPTY_CHART: ChartData = {
+  chart_type: "column_clustered",
+  categories: [],
+  categories_are_numeric: false,
+  series: [],
+  title: { text: null, font_size: null, font_name: null, font_bold: null, font_italic: null, font_color: null },
+  legend: { visible: false, position: null, overlay: false, font_size: null, font_name: null, font_color: null },
+  category_axis: emptyAxisDefault(),
+  value_axis: emptyAxisDefault(),
+  plot_properties: { grouping: null, bar_width_ratio: null, overlap: null, is_horizontal: false, first_slice_ang: null, hole_size: null, vary_colors: null },
+}
+
+const EMPTY_TABLE: TableData = {
+  rows: 0, cols: 0, cells: [],
+  column_widths: [], row_heights: [],
+  properties: { first_row_header: false, first_col_header: false, last_row_total: false, last_col_total: false, banded_rows: false, banded_cols: false },
+  defaults: { font_name: null, font_size: null },
+} as TableData
+
+function emptyAxisDefault() {
+  return {
+    visible: false, axis_type: null, min: null, max: null,
+    major_unit: null, minor_unit: null,
+    gridlines_major: false, gridlines_minor: false,
+    number_format: null, reverse_order: false,
+    title: { text: null, font_size: null, font_name: null, font_bold: null },
+    tick_label_font_size: null, tick_label_font_color: null,
+    tick_label_rotation: null, tick_label_position: null,
+    log_scale: false, display_units: null,
+  } as never
+}
+
+
 // ── Adapters: SVG-shape → studio-renderer-shape ────────────────────────────
 
 
@@ -404,19 +440,29 @@ export default function SlideViewer({
       background_color: bgColor,
     }
     s.hydrateSlide(docId, response)
+    // Prime ALL FOUR payload kinds for EVERY element. The renderers
+    // dispatch a loadX fetch when its kind is `undefined` in the
+    // cached payload — so a text-less shape that's missing a `text`
+    // payload will still fire loadTextPayload (and 401, since the
+    // splash has no real doc). Setting an empty "none" / null
+    // placeholder for unused kinds makes the cache check pass on
+    // every kind and suppresses every network call.
     slideData.elements.forEach((raw, i) => {
       const eid = studioElements[i].id
-      const text = toTextContent(raw)
-      if (text) s.primePayload(docId, slideN, eid, "text", text)
+
+      const text = toTextContent(raw) ?? { kind: "none" as const }
+      s.primePayload(docId, slideN, eid, "text", text)
       s.primePayload(docId, slideN, eid, "style", toStyleData(raw))
-      if (raw.type === "BridgeChart") {
-        const chart = toChartData(raw)
-        if (chart) s.primePayload(docId, slideN, eid, "chart", chart)
-      }
-      if (raw.type === "BridgeTable") {
-        const table = toTableData(raw)
-        if (table) s.primePayload(docId, slideN, eid, "table", table)
-      }
+
+      const chart = raw.type === "BridgeChart" ? toChartData(raw) : null
+      // Even non-chart elements get a sentinel so ChartRenderer's
+      // hook (when accidentally consulted) doesn't fire a fetch.
+      if (chart) s.primePayload(docId, slideN, eid, "chart", chart)
+      else       s.primePayload(docId, slideN, eid, "chart", EMPTY_CHART)
+
+      const table = raw.type === "BridgeTable" ? toTableData(raw) : null
+      if (table) s.primePayload(docId, slideN, eid, "table", table)
+      else       s.primePayload(docId, slideN, eid, "table", EMPTY_TABLE)
     })
     return s
   }, [slideData, docId, slideN, W, H, bgColor])
