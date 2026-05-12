@@ -7,7 +7,15 @@
     <link rel="icon" type="image/svg+xml" href="/percy-mark.svg" />
     <link rel="alternate icon" type="image/png" href="/percy-mark.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Inter is Percy Studio's UI font. The rest cover the fonts most
+         commonly specified by uploaded PPTX/Google Slides decks; loading them
+         eagerly avoids Chromium falling back to a generic serif when the run
+         asks for "Roboto"/"Open Sans"/etc. and the system doesn't have it
+         installed. Visible bug before this: reside title "FIRST STEPS IF
+         PAYMENT..." (font=Roboto) rendered as Times serif in Studio while
+         PowerPoint correctly used Roboto. -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Roboto:wght@300;400;500;700&family=Open+Sans:wght@300;400;600;700&family=Lato:wght@300;400;700;900&family=Montserrat:wght@300;400;600;700&family=Source+Sans+3:wght@300;400;600;700&family=Source+Serif+4:wght@400;600;700&family=Roboto+Mono:wght@400;500&family=Roboto+Condensed:wght@400;700&family=Poppins:wght@300;400;500;700&family=Raleway:wght@400;600;700&family=Oswald:wght@400;500;700&family=Merriweather:wght@400;700&family=Playfair+Display:wght@400;700&family=PT+Sans:wght@400;700&family=Noto+Sans:wght@400;500;700&display=swap" rel="stylesheet" />
   </head>
   <body>
     <div id="root"></div>
