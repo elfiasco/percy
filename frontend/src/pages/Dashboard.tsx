@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react"
 import { Link, Navigate, useNavigate } from "react-router-dom"
 import { useAuth } from "../auth/AuthContext"
 import { listProjects, listFolders, type Project, type Folder, type Org } from "../lib/authApi"
+import { listOrgTemplateSets, type TemplateSet } from "../lib/templateSetsApi"
 import Logo from "../components/Logo"
 import ThemeToggle from "../theme/ThemeToggle"
 import OrgSettings from "./OrgSettings"
@@ -36,6 +37,7 @@ export default function Dashboard() {
   const [recent, setRecent]           = useState<Project[]>([])
   const [allProjects, setAllProjects] = useState<Project[]>([])
   const [folders, setFolders]         = useState<Folder[]>([])
+  const [templateSets, setTemplateSets] = useState<TemplateSet[]>([])
   const [error, setError]             = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [accountOpen,  setAccountOpen]  = useState(false)
@@ -56,13 +58,15 @@ export default function Dashboard() {
   const refresh = useCallback(async () => {
     if (!activeOrgId) return
     try {
-      const [pr, fr] = await Promise.all([
+      const [pr, fr, tsr] = await Promise.all([
         listProjects(activeOrgId),
         listFolders(activeOrgId),
+        listOrgTemplateSets(activeOrgId).catch(() => ({ template_sets: [] as TemplateSet[] })),
       ])
       setAllProjects(pr.projects)
       setRecent(pr.projects.slice(0, 4))   // already sorted by updated_at DESC server-side
       setFolders(fr.folders)
+      setTemplateSets(tsr.template_sets)
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -183,6 +187,20 @@ export default function Dashboard() {
             )}
           </section>
 
+          {/* ── template sets ─────────────────────────────────────────── */}
+          <section>
+            <SectionHeader
+              eyebrow="Brand & templates"
+              title="Template Sets"
+              right={
+                <Link to={`/templates?org=${activeOrgId}`} className="text-[10px] tracking-[0.14em] uppercase text-muted hover:text-paper">
+                  Manage all →
+                </Link>
+              }
+            />
+            <TemplateSetGrid sets={templateSets} orgId={activeOrgId ?? ""} />
+          </section>
+
           {/* ── pipelines · 24h timeline ─────────────────────────────── */}
           <Timeline24h projects={allProjects} />
 
@@ -219,6 +237,72 @@ function Stat({ label, value, hint, small }: { label: string; value: string | nu
         {value}
         {hint && <span className="text-[11px] text-muted ml-2 tracking-normal">{hint}</span>}
       </div>
+    </div>
+  )
+}
+
+function TemplateSetGrid({ sets, orgId }: { sets: TemplateSet[]; orgId: string }) {
+  if (!sets.length) {
+    return (
+      <div className="border border-edge p-6 text-center">
+        <div className="text-[12px] text-muted">No template sets visible.</div>
+      </div>
+    )
+  }
+  // Show up to 3 — Percy Standard first if present, then the most-recently
+  // updated org sets.
+  const builtin = sets.filter((s) => s.is_builtin)
+  const orgSets = sets.filter((s) => !s.is_builtin)
+  const display = [...builtin, ...orgSets].slice(0, 3)
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      {display.map((s) => (
+        <Link
+          key={s.id}
+          to={`/template-sets/${s.id}`}
+          className="border border-edge bg-surface/30 hover:border-accent hover:bg-surface/50 transition-colors p-4 group"
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <div className="text-[13px] text-paper font-medium truncate">{s.name}</div>
+            {s.is_builtin && (
+              <span className="text-[8px] uppercase tracking-wider px-1 py-0.5 border border-edge text-muted shrink-0">
+                BUILT-IN
+              </span>
+            )}
+            {s.is_default && !s.is_builtin && (
+              <span className="text-[8px] uppercase tracking-wider px-1 py-0.5 border border-accent text-accent shrink-0">
+                DEFAULT
+              </span>
+            )}
+          </div>
+          {s.palette && s.palette.length > 0 && (
+            <div className="flex items-center gap-0.5 mb-2">
+              {s.palette.slice(0, 8).map((c, i) => (
+                <div
+                  key={i}
+                  className="w-3.5 h-3.5 border border-edge rounded-sm"
+                  style={{ backgroundColor: c.hex }}
+                  title={c.hex}
+                />
+              ))}
+            </div>
+          )}
+          <div className="text-[10px] text-muted flex items-center gap-3">
+            <span><span className="text-paper font-mono">{s.slide_items_count ?? 0}</span> slides</span>
+            <span><span className="text-paper font-mono">{s.element_items_count ?? 0}</span> elements</span>
+            <span><span className="text-paper font-mono">{s.refs_count ?? 0}</span> refs</span>
+          </div>
+        </Link>
+      ))}
+      {orgSets.length === 0 && (
+        <Link
+          to={`/templates?org=${orgId}`}
+          className="border border-dashed border-edge p-4 text-center hover:border-accent hover:text-accent transition-colors text-[11px] text-muted flex items-center justify-center"
+        >
+          + Create your team's first set
+        </Link>
+      )}
     </div>
   )
 }

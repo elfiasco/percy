@@ -2,46 +2,49 @@ import { useState, useEffect, useCallback } from "react"
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom"
 import { useAuth } from "../auth/AuthContext"
 import {
-  listTemplates, createTemplate, updateTemplate, deleteTemplate,
-  attachProjectToTemplate, detachProjectFromTemplate, extractTemplateBrand,
-  listProjects,
-  type Template, type Project,
-} from "../lib/authApi"
+  listOrgTemplateSets, createTemplateSet, setAsDefault,
+  type TemplateSet,
+} from "../lib/templateSetsApi"
 import Logo from "../components/Logo"
 import ThemeToggle from "../theme/ThemeToggle"
-import { useToast, useDialog } from "../components/Toaster"
+import { useToast } from "../components/Toaster"
 import WorkspaceSearchTrigger from "../components/WorkspaceSearchTrigger"
 import PageLoader from "../components/PageLoader"
 
 /**
- * Templates — a per-org library of brand/style profiles.
+ * TemplatesPage — the Template Sets index.
  *
- * A template is created blank, then "attached" to one or more existing
- * projects. Hitting "Run extraction" walks every attached project's Bridge
- * model and pulls out colors, fonts, chart styles, table conventions — the
- * raw material for the agent to use when creating or restyling decks.
+ * Every workspace member lands here to:
+ *   - See the Percy Standard built-in set + their org's own sets
+ *   - Create a new set
+ *   - Mark a set as the org default
+ *   - Click into the 5-tab editor at /template-sets/:setId for the deep work
  *
- * URL: /templates?org=<id>&t=<template_id>?
+ * The 5-tab editor (Slides / Elements / Brand / Instructions / Refs / Python)
+ * lives at /template-sets/:setId. This page is intentionally a flat,
+ * scannable list — no editor surface inline.
+ *
+ * URL: /templates?org=<id>
  */
 
 export default function TemplatesPage() {
   const { user, loading } = useAuth()
   const [params, setParams] = useSearchParams()
   const navigate = useNavigate()
+  const toast = useToast()
 
   const orgIdFromUrl = params.get("org")
-  const selectedId   = params.get("t")
-
-  const [templates, setTemplates] = useState<Template[] | null>(null)
-  const [error, setError]         = useState<string | null>(null)
-
   const activeOrg = user?.orgs.find((o) => o.id === orgIdFromUrl) ?? user?.orgs[0]
+
+  const [sets, setSets] = useState<TemplateSet[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
 
   const refresh = useCallback(async () => {
     if (!activeOrg) return
     try {
-      const r = await listTemplates(activeOrg.id)
-      setTemplates(r.templates)
+      const r = await listOrgTemplateSets(activeOrg.id)
+      setSets(r.template_sets)
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -50,19 +53,22 @@ export default function TemplatesPage() {
 
   useEffect(() => { refresh() }, [refresh])
 
-  // Sync URL when active org changes
+  // Keep URL in sync with active org
   useEffect(() => {
     if (activeOrg && orgIdFromUrl !== activeOrg.id) {
-      setParams({ org: activeOrg.id, ...(selectedId ? { t: selectedId } : {}) })
+      setParams({ org: activeOrg.id })
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeOrg?.id])
 
   if (loading) return <PageLoader />
   if (!user) return <Navigate to="/login" replace />
-  if (!activeOrg) return <div className="min-h-screen flex items-center justify-center bg-ink text-muted text-sm">No workspace.</div>
+  if (!activeOrg) {
+    return <div className="min-h-screen flex items-center justify-center bg-ink text-muted text-sm">No workspace.</div>
+  }
 
-  const selected = templates?.find((t) => t.id === selectedId) ?? null
+  const builtin = (sets || []).filter((s) => s.is_builtin)
+  const orgSets = (sets || []).filter((s) => !s.is_builtin)
 
   return (
     <div className="min-h-screen flex flex-col bg-ink text-paper">
@@ -79,7 +85,7 @@ export default function TemplatesPage() {
             <span className="wordmark text-[12px]">Percy</span>
           </Link>
           <span className="text-edge">/</span>
-          <span className="text-[12px] text-paper">Templates</span>
+          <span className="text-[12px] text-paper">Template Sets</span>
           <span className="text-muted">·</span>
           <span className="text-[12px] text-muted">{activeOrg.name}</span>
         </div>
@@ -87,471 +93,283 @@ export default function TemplatesPage() {
         <ThemeToggle size="xs" />
       </div>
 
-      <div className="flex-1 flex min-h-0">
-
-        {/* ── list ─────────────────────────────────────────────────── */}
-        <aside className="w-72 shrink-0 border-r border-edge bg-surface/40 flex flex-col">
-          <div className="px-4 pt-5 pb-3 border-b border-edge">
-            <div className="flex items-baseline justify-between mb-2">
-              <span className="text-[10px] tracking-[0.18em] uppercase text-muted">— Templates —</span>
-              <span className="text-[10px] text-muted">{templates?.length ?? "·"}</span>
-            </div>
-            <NewTemplateForm
-              org={activeOrg}
-              onCreated={(t) => {
-                refresh()
-                setParams({ org: activeOrg.id, t: t.id })
-              }}
-            />
+      <div className="flex-1 overflow-y-auto">
+        <div className="max-w-6xl mx-auto p-8">
+          {/* Intro */}
+          <div className="mb-8">
+            <h1 className="text-[28px] font-medium text-paper mb-2">Template Sets</h1>
+            <p className="text-[13px] text-muted leading-relaxed max-w-2xl">
+              A Template Set bundles your team's slide templates, element library,
+              brand palette, fonts, instructions, and reference docs into one package.
+              Percy uses the active set to style every deck the agent creates or edits —
+              and to generate a typed Python module your scripts can import.
+            </p>
           </div>
-          <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
-            {!templates ? (
-              <div className="px-2 py-2 text-[11px] text-muted italic">Loading…</div>
-            ) : templates.length === 0 ? (
-              <div className="px-2 py-3 text-[11px] text-muted leading-relaxed">
-                No templates yet. Create one and attach a deck so Percy can
-                extract its brand patterns.
+
+          {error && (
+            <div className="border border-brick/40 bg-brick/5 text-brick p-3 mb-6 text-[12px]">
+              {error}
+            </div>
+          )}
+
+          {/* Percy Standard — always at the top */}
+          {builtin.length > 0 && (
+            <section className="mb-10">
+              <div className="text-[10px] uppercase tracking-[0.18em] text-muted mb-3">— Built in —</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {builtin.map((s) => (
+                  <SetCard key={s.id} set={s} />
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Org sets */}
+          <section>
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-[10px] uppercase tracking-[0.18em] text-muted">
+                — {activeOrg.name} —
+              </div>
+              <button
+                onClick={() => setCreating(true)}
+                className="text-[10px] uppercase tracking-wider px-3 py-1.5 border border-accent text-accent hover:bg-accent/10 transition-colors"
+              >
+                + New template set
+              </button>
+            </div>
+            {!sets ? (
+              <div className="text-[11px] text-muted italic px-2 py-6">Loading…</div>
+            ) : orgSets.length === 0 ? (
+              <div className="border border-edge bg-surface/30 p-8 text-center">
+                <div className="text-[13px] text-paper mb-1">No team template sets yet.</div>
+                <div className="text-[11px] text-muted max-w-md mx-auto">
+                  Create one to bundle your brand palette, fonts, and slide patterns
+                  for everyone in <strong>{activeOrg.name}</strong>. Upload reference
+                  decks and Percy will mine them for templates automatically.
+                </div>
               </div>
             ) : (
-              templates.map((t) => (
-                <button
-                  key={t.id}
-                  onClick={() => setParams({ org: activeOrg.id, t: t.id })}
-                  className={`w-full text-left px-2 py-1.5 transition-colors ${
-                    t.id === selectedId
-                      ? "bg-paper/10 text-paper"
-                      : "text-paper hover:bg-paper/5"
-                  }`}
-                >
-                  <div className="text-[12px] truncate">{t.name}</div>
-                  <div className="text-[9px] tracking-[0.14em] uppercase text-muted mt-0.5">
-                    {t.scope} · {t.source_project_ids.length} source{t.source_project_ids.length === 1 ? "" : "s"}
-                    {t.last_extracted_at && <> · extracted</>}
-                  </div>
-                  {/* Brand swatches at-a-glance — shows the extracted colors so the
-                      list reads like a palette catalog rather than a list of names. */}
-                  {t.brand?.colors && t.brand.colors.length > 0 && (
-                    <div className="flex gap-0.5 mt-1.5">
-                      {t.brand.colors.slice(0, 6).map((c) => (
-                        <span
-                          key={c.hex}
-                          className="w-3 h-3 border border-edge"
-                          style={{ background: c.hex }}
-                          title={c.hex}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </button>
-              ))
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {orgSets.map((s) => (
+                  <SetCard key={s.id} set={s} onChange={refresh} />
+                ))}
+              </div>
             )}
-          </div>
-        </aside>
-
-        {/* ── detail / brand summary ──────────────────────────────── */}
-        <main className="flex-1 overflow-y-auto">
-          {error && (
-            <div className="m-6 text-[11px] text-bad bg-bad/10 border border-bad/30 px-3 py-2">{error}</div>
-          )}
-          {selected
-            ? <TemplateDetail
-                key={selected.id}
-                template={selected}
-                org={activeOrg}
-                onChange={refresh}
-                onDeleted={() => { setParams({ org: activeOrg.id }); refresh() }}
-              />
-            : <EmptyDetail />}
-        </main>
+          </section>
+        </div>
       </div>
+
+      {/* Create modal */}
+      {creating && activeOrg && (
+        <CreateSetModal
+          orgId={activeOrg.id}
+          onClose={() => setCreating(false)}
+          onCreated={(set) => {
+            setCreating(false)
+            toast.show(`Created "${set.name}"`, "success")
+            navigate(`/template-sets/${set.id}`)
+          }}
+        />
+      )}
     </div>
   )
 }
 
-// ── New template form ────────────────────────────────────────────────────────
+// ── Set card ───────────────────────────────────────────────────────────────
 
-function NewTemplateForm({ org, onCreated }: {
-  org: NonNullable<ReturnType<typeof useAuth>["user"]>["orgs"][number]
-  onCreated: (t: Template) => void
+function SetCard({ set, onChange }: { set: TemplateSet; onChange?: () => void }) {
+  const toast = useToast()
+  const handleSetDefault = async (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    try {
+      await setAsDefault(set.id, null)
+      onChange?.()
+      toast.show("Set as org default", "success")
+    } catch (e) {
+      toast.show(`Failed: ${e instanceof Error ? e.message : String(e)}`, "error")
+    }
+  }
+  return (
+    <Link
+      to={`/template-sets/${set.id}`}
+      className="block border border-edge bg-surface/30 hover:border-accent hover:bg-surface/50 transition-colors p-5 group"
+    >
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <div className="text-[14px] text-paper font-medium truncate">{set.name}</div>
+            {set.is_builtin && (
+              <span className="text-[8px] uppercase tracking-wider px-1.5 py-0.5 border border-edge text-muted">
+                BUILT-IN
+              </span>
+            )}
+            {set.is_default && !set.is_builtin && (
+              <span className="text-[8px] uppercase tracking-wider px-1.5 py-0.5 border border-accent text-accent">
+                DEFAULT
+              </span>
+            )}
+          </div>
+          {set.description && (
+            <div className="text-[11px] text-muted line-clamp-2">{set.description}</div>
+          )}
+        </div>
+      </div>
+
+      {/* Palette preview */}
+      {set.palette && set.palette.length > 0 && (
+        <div className="flex items-center gap-1 mb-3">
+          {set.palette.slice(0, 8).map((c, i) => (
+            <div
+              key={i}
+              className="w-5 h-5 border border-edge rounded-sm"
+              style={{ backgroundColor: c.hex }}
+              title={`${c.name || c.role || ""} · ${c.hex}`}
+            />
+          ))}
+          {set.palette.length > 8 && (
+            <span className="text-[10px] text-muted ml-1">+{set.palette.length - 8}</span>
+          )}
+        </div>
+      )}
+
+      {/* Counts */}
+      <div className="flex items-center gap-4 text-[10px] text-muted">
+        <div>
+          <span className="text-paper font-mono">{set.slide_items_count ?? 0}</span> slides
+        </div>
+        <div>
+          <span className="text-paper font-mono">{set.element_items_count ?? 0}</span> elements
+        </div>
+        <div>
+          <span className="text-paper font-mono">{set.fonts?.length ?? 0}</span> fonts
+        </div>
+        <div>
+          <span className="text-paper font-mono">{set.refs_count ?? 0}</span> refs
+        </div>
+        <div className="flex-1" />
+        {!set.is_builtin && !set.is_default && (
+          <button
+            onClick={handleSetDefault}
+            className="text-[10px] uppercase tracking-wider text-muted hover:text-accent transition-colors"
+          >
+            Set default
+          </button>
+        )}
+      </div>
+    </Link>
+  )
+}
+
+// ── Create modal ───────────────────────────────────────────────────────────
+
+function CreateSetModal({
+  orgId, onClose, onCreated,
+}: {
+  orgId: string
+  onClose: () => void
+  onCreated: (set: TemplateSet) => void
 }) {
   const [name, setName] = useState("")
-  const [scope, setScope] = useState<"user" | "team">(org.kind === "team" ? "team" : "user")
+  const [desc, setDesc] = useState("")
+  const [setAsDef, setSetAsDef] = useState(false)
   const [busy, setBusy] = useState(false)
-  const toast = useToast()
+  const [err, setErr] = useState<string | null>(null)
 
-  const create = async () => {
-    if (!name.trim()) return
+  const submit = async () => {
+    if (!name.trim()) {
+      setErr("Name is required.")
+      return
+    }
     setBusy(true)
+    setErr(null)
     try {
-      const t = await createTemplate(org.id, { name: name.trim(), scope })
-      setName("")
-      onCreated(t)
+      const set = await createTemplateSet({
+        org_id: orgId,
+        name: name.trim(),
+        description: desc.trim() || undefined,
+        scope: "org",
+        is_default: setAsDef,
+      })
+      onCreated(set)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e))
+      setErr(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <div className="space-y-1.5">
-      <input
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => { if (e.key === "Enter") create() }}
-        placeholder="New template name…"
-        disabled={busy}
-        className="w-full text-[12px] bg-ink border border-edge px-2 py-1.5 text-paper focus:outline-none focus:border-paper/40"
-      />
-      {org.kind === "team" && (
-        <select
-          value={scope}
-          onChange={(e) => setScope(e.target.value as "user" | "team")}
-          className="w-full text-[10px] tracking-[0.14em] uppercase bg-ink border border-edge px-2 py-1 text-paper focus:outline-none"
-        >
-          <option value="user">Personal</option>
-          <option value="team">Team — {org.name}</option>
-        </select>
-      )}
-      <button
-        onClick={create}
-        disabled={busy || !name.trim()}
-        className="w-full text-[10px] tracking-[0.16em] uppercase border border-edge text-muted hover:text-paper hover:bg-paper/5 transition-colors py-1.5 disabled:opacity-40"
+    <div
+      onClick={onClose}
+      className="fixed inset-0 bg-ink/80 flex items-center justify-center z-50 backdrop-blur-sm"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-surface border border-edge p-6 w-[420px] max-w-[90vw]"
       >
-        {busy ? "Creating…" : "+ Create template"}
-      </button>
-    </div>
-  )
-}
-
-// ── Empty state ──────────────────────────────────────────────────────────────
-
-function EmptyDetail() {
-  return (
-    <div className="h-full flex items-center justify-center px-12">
-      <div className="max-w-md text-center">
-        <Logo size={48} tone="muted" className="opacity-50 mx-auto mb-4" />
-        <div className="text-[10px] tracking-[0.22em] uppercase text-muted mb-2">— Templates —</div>
-        <h2 className="text-[20px] font-semibold tracking-[-0.01em] text-paper mb-3">
-          Brand profiles your decks can build from.
-        </h2>
-        <p className="text-[13px] text-muted leading-[1.7]">
-          Attach existing decks to a template, run extraction, and Percy collects
-          the colors, fonts, chart conventions, and table styles your team uses.
-          The agent will draw from this when creating or restyling new decks.
-        </p>
-      </div>
-    </div>
-  )
-}
-
-// ── Template detail ──────────────────────────────────────────────────────────
-
-function TemplateDetail({
-  template, org, onChange, onDeleted,
-}: {
-  template: Template
-  org: NonNullable<ReturnType<typeof useAuth>["user"]>["orgs"][number]
-  onChange: () => void
-  onDeleted: () => void
-}) {
-  const [editing, setEditing] = useState(false)
-  const [draftName, setDraftName] = useState(template.name)
-  const [draftDesc, setDraftDesc] = useState(template.description ?? "")
-  const [orgProjects, setOrgProjects] = useState<Project[]>([])
-  const [extracting, setExtracting] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const toast  = useToast()
-  const dialog = useDialog()
-
-  useEffect(() => {
-    listProjects(org.id).then((r) => setOrgProjects(r.projects)).catch(() => {})
-  }, [org.id])
-
-  useEffect(() => {
-    setDraftName(template.name)
-    setDraftDesc(template.description ?? "")
-  }, [template.id])
-
-  const save = async () => {
-    setBusy(true)
-    try {
-      await updateTemplate(template.id, { name: draftName.trim() || template.name, description: draftDesc })
-      setEditing(false)
-      onChange()
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e))
-    } finally { setBusy(false) }
-  }
-
-  const onAttach = async (pid: string) => {
-    setBusy(true)
-    try { await attachProjectToTemplate(template.id, pid); onChange() }
-    catch (e) { toast.error(e instanceof Error ? e.message : String(e)) }
-    finally  { setBusy(false) }
-  }
-  const onDetach = async (pid: string) => {
-    setBusy(true)
-    try { await detachProjectFromTemplate(template.id, pid); onChange() }
-    catch (e) { toast.error(e instanceof Error ? e.message : String(e)) }
-    finally  { setBusy(false) }
-  }
-
-  const runExtract = async () => {
-    setExtracting(true)
-    try {
-      await extractTemplateBrand(template.id)
-      onChange()
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e))
-    } finally {
-      setExtracting(false)
-    }
-  }
-
-  const onDelete = async () => {
-    const ok = await dialog.confirm({
-      title:        `Delete template "${template.name}"?`,
-      body:         "Source projects stay attached but lose this brand profile.",
-      confirmLabel: "Delete template",
-      danger:       true,
-    })
-    if (!ok) return
-    try {
-      await deleteTemplate(template.id)
-      onDeleted()
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e))
-    }
-  }
-
-  const attached = orgProjects.filter((p) => template.source_project_ids.includes(p.id))
-  const notAttached = orgProjects.filter((p) => !template.source_project_ids.includes(p.id) && !!p.doc_source)
-  const brand = template.brand ?? {}
-  const last = template.last_extracted_at
-    ? new Date(template.last_extracted_at * 1000)
-    : null
-
-  return (
-    <div className="max-w-3xl mx-auto px-8 py-10 space-y-10">
-
-      {/* ── header ──────────────────────────────────────────────── */}
-      <section>
-        <div className="flex items-baseline justify-between gap-4 mb-4">
-          <div className="min-w-0 flex-1">
-            <div className="text-[10px] tracking-[0.22em] uppercase text-muted mb-2">
-              — {template.scope === "user" ? "Personal" : "Team"} template —
-            </div>
-            {editing ? (
-              <input
-                value={draftName}
-                onChange={(e) => setDraftName(e.target.value)}
-                className="w-full text-[28px] font-semibold tracking-[-0.01em] text-paper bg-transparent border-b border-edge focus:outline-none focus:border-paper/40 pb-1"
-              />
-            ) : (
-              <h1 className="text-[28px] font-semibold tracking-[-0.01em] text-paper">{template.name}</h1>
-            )}
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {editing ? (
-              <>
-                <button onClick={() => setEditing(false)}
-                  className="text-[10px] tracking-[0.14em] uppercase text-muted hover:text-paper px-3 py-1.5 border border-edge hover:bg-paper/5 transition-colors">Cancel</button>
-                <button onClick={save} disabled={busy}
-                  className="text-[10px] tracking-[0.14em] uppercase bg-paper text-ink hover:bg-paper/90 px-3 py-1.5 transition-colors font-medium">Save</button>
-              </>
-            ) : (
-              <>
-                <button onClick={() => setEditing(true)}
-                  className="text-[10px] tracking-[0.14em] uppercase text-muted hover:text-paper px-3 py-1.5 border border-edge hover:bg-paper/5 transition-colors">Edit</button>
-                <button onClick={onDelete}
-                  className="text-[10px] tracking-[0.14em] uppercase text-muted hover:text-bad px-3 py-1.5 border border-edge hover:bg-bad/5 transition-colors">Delete</button>
-              </>
-            )}
-          </div>
+        <div className="text-[16px] text-paper font-medium mb-1">New template set</div>
+        <div className="text-[11px] text-muted mb-4">
+          You'll be able to upload reference decks and customize the brand once it's created.
         </div>
-        {editing ? (
-          <textarea
-            value={draftDesc}
-            onChange={(e) => setDraftDesc(e.target.value)}
-            placeholder="What is this template for? (optional)"
-            rows={2}
-            className="w-full text-[13px] text-paper bg-ink border border-edge px-3 py-2 focus:outline-none focus:border-paper/40"
-          />
-        ) : (
-          <p className="text-[13px] text-muted leading-[1.7]">
-            {template.description || <span className="italic">No description.</span>}
-          </p>
-        )}
-      </section>
 
-      {/* ── source projects ─────────────────────────────────────── */}
-      <section>
-        <div className="flex items-baseline justify-between mb-3">
-          <div>
-            <div className="text-[10px] tracking-[0.22em] uppercase text-muted mb-1">— Source projects —</div>
-            <div className="text-[14px] text-paper">{attached.length} attached</div>
-          </div>
+        <div className="space-y-3">
+          <label className="block">
+            <div className="text-[10px] uppercase tracking-wider text-muted mb-1">Name</div>
+            <input
+              autoFocus
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Acme Brand v3"
+              className="w-full bg-ink border border-edge px-3 py-2 text-[13px] text-paper focus:border-accent outline-none"
+            />
+          </label>
+          <label className="block">
+            <div className="text-[10px] uppercase tracking-wider text-muted mb-1">Description</div>
+            <textarea
+              value={desc}
+              onChange={(e) => setDesc(e.target.value)}
+              rows={2}
+              placeholder="Primary brand set for external decks"
+              className="w-full bg-ink border border-edge px-3 py-2 text-[12px] text-paper focus:border-accent outline-none resize-none"
+            />
+          </label>
+          <label className="flex items-center gap-2 text-[12px] text-paper">
+            <input
+              type="checkbox"
+              checked={setAsDef}
+              onChange={(e) => setSetAsDef(e.target.checked)}
+            />
+            <span>Set as org default</span>
+          </label>
+        </div>
+
+        {err && (
+          <div className="mt-3 text-[11px] text-brick">{err}</div>
+        )}
+
+        <div className="flex items-center justify-end gap-2 mt-5">
           <button
-            onClick={runExtract}
-            disabled={extracting || attached.length === 0}
-            className="text-[11px] tracking-[0.14em] uppercase bg-paper text-ink hover:bg-paper/90 px-4 py-2 transition-colors font-medium disabled:opacity-40 flex items-center gap-2"
+            onClick={onClose}
+            disabled={busy}
+            className="text-[10px] uppercase tracking-wider px-3 py-1.5 text-muted hover:text-paper transition-colors"
           >
-            {extracting && <span className="inline-block w-2 h-2 border border-ink border-t-transparent rounded-full animate-spin" />}
-            {extracting ? "Extracting…" : "Run extraction"}
+            Cancel
           </button>
-          <Link
-            to={`/template-sets/${template.id}`}
-            className="text-[11px] tracking-[0.14em] uppercase border border-accent text-accent hover:bg-accent/10 px-4 py-2 transition-colors font-medium flex items-center gap-2"
+          <button
+            onClick={submit}
+            disabled={busy || !name.trim()}
+            className={`text-[10px] uppercase tracking-wider px-4 py-2 transition-colors ${
+              busy || !name.trim()
+                ? "border border-edge text-muted cursor-not-allowed"
+                : "bg-accent text-ink hover:bg-accent/80"
+            }`}
           >
-            Open in advanced editor →
-          </Link>
+            {busy ? "Creating..." : "Create"}
+          </button>
         </div>
-        <div className="space-y-1.5">
-          {attached.length === 0 && (
-            <div className="text-[11px] text-muted italic">
-              Attach a deck to extract its brand. Only projects with a source file can be attached.
-            </div>
-          )}
-          {attached.map((p) => (
-            <div key={p.id} className="flex items-center gap-3 border border-edge p-2">
-              {p.doc_id ? (
-                <img
-                  src={`/api/docs/${p.doc_id}/slides/1/bridge.png`}
-                  alt=""
-                  className="w-16 h-9 object-cover bg-base border border-edge shrink-0"
-                  onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden" }}
-                />
-              ) : (
-                <div className="w-16 h-9 bg-base border border-edge shrink-0 flex items-center justify-center text-[9px] text-muted">
-                  no source
-                </div>
-              )}
-              <div className="flex-1 min-w-0">
-                <div className="text-[13px] text-paper truncate">{p.name}</div>
-                <div className="text-[10px] tracking-[0.14em] uppercase text-muted">
-                  {p.doc_source ? "Onboarded" : "No source yet"}
-                </div>
-              </div>
-              <button onClick={() => onDetach(p.id)} disabled={busy}
-                className="text-[10px] tracking-[0.14em] uppercase text-muted hover:text-bad px-2 py-1 shrink-0">
-                Detach
-              </button>
-            </div>
-          ))}
-        </div>
-        {notAttached.length > 0 && (
-          <details className="mt-4">
-            <summary className="text-[10px] tracking-[0.18em] uppercase text-muted cursor-pointer hover:text-paper">
-              + Attach a project ({notAttached.length} available)
-            </summary>
-            <div className="mt-2 space-y-1 max-h-60 overflow-y-auto border border-edge">
-              {notAttached.map((p) => (
-                <button key={p.id} onClick={() => onAttach(p.id)} disabled={busy}
-                  className="w-full text-left flex items-center justify-between px-3 py-2 hover:bg-paper/5 transition-colors">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-muted">▢</span>
-                    <span className="text-[12px] text-paper truncate">{p.name}</span>
-                  </div>
-                  <span className="text-[10px] uppercase tracking-[0.14em] text-muted">+ attach</span>
-                </button>
-              ))}
-            </div>
-          </details>
-        )}
-      </section>
-
-      {/* ── brand profile ───────────────────────────────────────── */}
-      <section>
-        <div className="flex items-baseline justify-between mb-3">
-          <div>
-            <div className="text-[10px] tracking-[0.22em] uppercase text-muted mb-1">— Brand profile —</div>
-            <div className="text-[14px] text-paper">
-              {last
-                ? <>Extracted {last.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</>
-                : <span className="italic text-muted">Not yet extracted.</span>}
-            </div>
-          </div>
-        </div>
-
-        {last ? (
-          <div className="space-y-6">
-            {/* Colors */}
-            {brand.colors && brand.colors.length > 0 && (
-              <div>
-                <div className="text-[10px] tracking-[0.18em] uppercase text-muted mb-2">Colors</div>
-                <div className="flex flex-wrap gap-2">
-                  {brand.colors.map((c) => (
-                    <div key={c.hex} className="flex items-center gap-2 border border-edge px-2 py-1.5">
-                      <span className="w-5 h-5 border border-edge" style={{ background: c.hex }} />
-                      <span className="text-[10px] font-mono text-paper">{c.hex}</span>
-                      <span className="text-[10px] text-muted">×{c.count}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Fonts */}
-            {brand.fonts && brand.fonts.length > 0 && (
-              <div>
-                <div className="text-[10px] tracking-[0.18em] uppercase text-muted mb-2">Fonts</div>
-                <ul className="space-y-1">
-                  {brand.fonts.map((f) => (
-                    <li key={f.name} className="flex items-center justify-between border border-edge px-3 py-1.5">
-                      <span className="text-[13px] text-paper" style={{ fontFamily: f.name }}>{f.name}</span>
-                      <span className="text-[10px] text-muted">×{f.count}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {/* Chart types */}
-            {brand.chart_types && brand.chart_types.length > 0 && (
-              <div>
-                <div className="text-[10px] tracking-[0.18em] uppercase text-muted mb-2">Chart conventions</div>
-                <div className="flex flex-wrap gap-1.5">
-                  {brand.chart_types.map((ct) => (
-                    <span key={ct.type} className="text-[10px] tracking-[0.14em] uppercase border border-edge px-2 py-1 text-paper">
-                      {ct.type.replace(/_/g, " ")} · ×{ct.count}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Tables */}
-            {brand.table_summary && brand.table_summary.count > 0 && (
-              <div>
-                <div className="text-[10px] tracking-[0.18em] uppercase text-muted mb-2">Tables</div>
-                <div className="text-[12px] text-paper">
-                  {brand.table_summary.count} tables ·
-                  {" "}{brand.table_summary.banded_rows_pct}% banded ·
-                  {" "}{brand.table_summary.first_row_header_pct}% header row
-                </div>
-              </div>
-            )}
-
-            {/* Typography */}
-            {brand.typography && (
-              <div>
-                <div className="text-[10px] tracking-[0.18em] uppercase text-muted mb-2">Typography</div>
-                <div className="text-[12px] text-paper">
-                  Avg title {brand.typography.avg_title_size ?? "—"}pt ·
-                  {" "}avg body {brand.typography.avg_body_size ?? "—"}pt
-                </div>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="border border-edge p-6 text-[12px] text-muted leading-[1.7] text-center">
-            Attach one or more decks above, then click <span className="text-paper">Run extraction</span> to
-            collect the colors, fonts, chart styles, and table conventions used across them.
-          </div>
-        )}
-      </section>
-
+      </div>
     </div>
   )
 }
