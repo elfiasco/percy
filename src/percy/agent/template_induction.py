@@ -529,23 +529,42 @@ def _parameterize_geometry(layout: list[dict], inputs_schema: dict[str, dict]) -
 
         # Chart data: categories + series + title → three inputs the
         # agent can override. Defaults are the prototype's data so an
-        # un-overridden chart renders like the source slide.
+        # un-overridden chart renders like the source slide. Styling
+        # (legend, axes, gridlines, hole_size, etc.) stays baked.
         if entry.get("kind") == "chart":
-            for field_name, default in (
-                ("categories", body.get("categories")),
-                ("series",     body.get("series")),
-                ("title",      body.get("title")),
-            ):
-                if field_name not in body or default is None:
-                    continue
-                var_name = f"{alias}_{field_name}"
-                inputs_schema[var_name] = {
-                    "type": "list" if field_name in ("categories", "series") else "string",
-                    "required": False,
-                    "default": default,
-                    "description": f"{alias}: chart {field_name}",
+            if isinstance(body.get("categories"), list):
+                inputs_schema[f"{alias}_categories"] = {
+                    "type": "list", "required": False,
+                    "default": body["categories"],
+                    "description": f"{alias}: chart categories (x-axis labels)",
                 }
-                body[field_name] = "{{" + var_name + "}}"
+                body["categories"] = "{{" + alias + "_categories}}"
+            if isinstance(body.get("series"), list):
+                inputs_schema[f"{alias}_series"] = {
+                    "type": "list", "required": False,
+                    "default": body["series"],
+                    "description": (
+                        f"{alias}: chart series. Each entry: "
+                        "{name: str, values: [num], color?: hex}. "
+                        "Defaults preserve the brand's per-series colors."
+                    ),
+                }
+                body["series"] = "{{" + alias + "_series}}"
+            # Title was historically a string; now it's a dict {text, color, ...}
+            # for richer styling. Parameterize the TEXT only — styling stays.
+            t = body.get("title")
+            if isinstance(t, str) and t.strip():
+                inputs_schema[f"{alias}_title"] = {
+                    "type": "string", "required": False, "default": t,
+                    "description": f"{alias}: chart title text",
+                }
+                body["title"] = "{{" + alias + "_title}}"
+            elif isinstance(t, dict) and isinstance(t.get("text"), str):
+                inputs_schema[f"{alias}_title"] = {
+                    "type": "string", "required": False, "default": t["text"],
+                    "description": f"{alias}: chart title text",
+                }
+                t["text"] = "{{" + alias + "_title}}"
 
         # Table data: rows × cols → one input. Defaults to the prototype's
         # cells. Agent supplies a fresh 2-D list to repurpose the table.

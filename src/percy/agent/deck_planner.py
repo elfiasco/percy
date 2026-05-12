@@ -341,15 +341,19 @@ def apply_blueprint(
     mutates the in-memory document and we don't want races on the slides
     list.
     """
-    from percy.agent import templates as _tpls
+    # New two-phase slide agent: Phase 1 (strategy: template vs custom)
+    # → Phase 2 (Python code) → exec in a curated sandbox. Replaces the
+    # legacy single-call `plan_single_slide` flow which couldn't compose
+    # mid-execution data fetches and tended to ignore chart/table
+    # templates because the inputs schemas were too noisy.
+    from percy.agent import slide_agent as _sa
 
-    # 1) Plan every slide. Parallel by default (each call is independent).
-    plans_by_slot: dict[int, SlidePlan] = {}
+    plans_by_slot: dict[int, _sa.SlidePlan] = {}
     if parallel and len(blueprint.slides) > 1:
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
             future_to_spec = {
                 pool.submit(
-                    plan_single_slide,
+                    _sa.plan_slide,
                     spec=spec,
                     deck_summary=blueprint.deck_summary,
                     brand_constraints=blueprint.brand_constraints,
@@ -361,27 +365,25 @@ def apply_blueprint(
             for fut in concurrent.futures.as_completed(future_to_spec):
                 spec = future_to_spec[fut]
                 try:
-                    plan = fut.result()
+                    sa_plan = fut.result()
                 except Exception as exc:
                     log.exception("apply_blueprint: planning failed for slot %d", spec.slot)
-                    plan = SlidePlan(slot=spec.slot, error=str(exc))
-                if plan:
-                    plans_by_slot[spec.slot] = plan
+                    sa_plan = _sa.SlidePlan(
+                        slot=spec.slot,
+                        strategy=_sa.SlideStrategy(kind="custom", rationale="exception"),
+                        error=str(exc),
+                    )
+                plans_by_slot[spec.slot] = sa_plan
     else:
         for spec in blueprint.slides:
-            plan = plan_single_slide(
+            plans_by_slot[spec.slot] = _sa.plan_slide(
                 spec=spec,
                 deck_summary=blueprint.deck_summary,
                 brand_constraints=blueprint.brand_constraints,
                 available_templates=available_templates,
                 llm_call=llm_call,
             )
-            if plan:
-                plans_by_slot[spec.slot] = plan
 
-    # 2) Apply in slot order. Each slot may have MULTIPLE applications —
-    # stacked element templates building one slide. Apply them in the
-    # order the agent specified so positions / z-order make sense.
     applied: list[dict[str, Any]] = []
     errors: list[str] = []
     for spec in blueprint.slides:
@@ -391,60 +393,57 @@ def apply_blueprint(
             continue
         if plan.error:
             errors.append(f"slot {spec.slot}: {plan.error}")
+            applied.append({
+                "slot": spec.slot, "strategy": plan.strategy.to_dict(),
+                "code": plan.code, "ok": False, "error": plan.error,
+                "elements_total": 0, "critique": None,
+            })
             continue
 
-        slot_elements_total = 0
-        slot_apply_errors: list[str] = []
-        applications_run: list[dict[str, Any]] = []
+        result = _sa.execute_plan(
+            plan, studio=studio, slide_n=spec.slot,
+            all_templates=available_templates,
+        )
 
-        for app in plan.applications:
-            tpl = next((t for t in available_templates if t.get("id") == app.template_id), None)
-            if not tpl:
-                slot_apply_errors.append(f"template {app.template_id!r} not in set")
-                continue
-            try:
-                result = _tpls.apply_template(
-                    tpl, studio=studio, slide_n=spec.slot, inputs=app.inputs,
-                )
-            except Exception as exc:
-                slot_apply_errors.append(f"{app.template_id}: {exc}")
-                continue
-            n_elements = len(result.get("elements") or [])
-            slot_elements_total += n_elements
-            applications_run.append({
-                "template_id": app.template_id,
-                "template_name": app.template_name,
-                "ok": result.get("ok"),
-                "elements_created": n_elements,
-                "apply_errors": result.get("errors") or [],
-            })
-
-        # ── Vision-pass critique (on by default) ──
+        # Vision-pass critique (on by default).
         critique_dict: dict[str, Any] | None = None
         if vision_pass:
             critique_dict = _run_vision_pass(
-                spec=spec, studio=studio, available_templates=available_templates,
+                spec=spec, studio=studio,
+                available_templates=available_templates,
                 plan=plan, llm_call=llm_call,
                 max_retries=vision_max_retries,
             )
 
         applied.append({
             "slot": spec.slot,
-            "applications": applications_run,
-            "elements_total": slot_elements_total,
-            "rationale": plan.rationale,
-            "apply_errors": slot_apply_errors,
+            "strategy": plan.strategy.to_dict(),
+            "code": plan.code,
+            "ok": result.ok,
+            "elements_total": result.elements_created,
+            "error": result.error,
+            "stdout": result.stdout[:500],
             "critique": critique_dict,
         })
-        if slot_apply_errors:
-            errors.extend(f"slot {spec.slot}: {e}" for e in slot_apply_errors)
+        if not result.ok and result.error:
+            errors.append(f"slot {spec.slot}: {result.error[:200]}")
 
-    plans_list = [plans_by_slot[s.slot] for s in blueprint.slides if s.slot in plans_by_slot]
+    plans_list_back = []
+    for s in blueprint.slides:
+        p = plans_by_slot.get(s.slot)
+        if not p: continue
+        # Adapt to the legacy SlidePlan shape callers expect.
+        plans_list_back.append(SlidePlan(
+            slot=p.slot,
+            applications=[],
+            rationale=p.strategy.rationale,
+            error=p.error,
+        ))
     return BlueprintResult(
-        plans=plans_list,
+        plans=plans_list_back,
         applied=applied,
         errors=errors,
-        ok=(len(applied) == len(blueprint.slides)),
+        ok=(len([a for a in applied if a.get("ok")]) == len(blueprint.slides)),
     )
 
 

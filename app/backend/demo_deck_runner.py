@@ -74,10 +74,38 @@ def _run_blueprint(
         doc.slides.append(BridgeSlide(slide_number=n, elements=[],
                                        width=13.333, height=7.5))
 
-    # ── 3. Make the LLM call helper. Force Sonnet 4.6 for the demo. ──
-    raw_llm = _make_llm_call("us.anthropic.claude-sonnet-4-6")
+    # ── 3. Make the LLM call helper. Force Opus 4.5 for the demo —
+    # the per-slide planner does layout reasoning + content extraction
+    # in one shot, and Opus's longer context + sharper structural
+    # decisions land more on-spec template picks than Sonnet 4.6 in
+    # side-by-side runs. Cost is meaningfully higher but the demo is
+    # generated offline + cached, so it's a one-time spend per release.
+    # (Opus 4.7 isn't enabled on the percy-dev Bedrock account yet —
+    # 4.5 is the latest accessible Opus tier.)
+    raw_llm = _make_llm_call("us.anthropic.claude-opus-4-5-20251101-v1:0")
+
     def safe_llm(system: str, user: str) -> str:
-        return raw_llm(system, user)
+        # Opus tier has tight RPM; the two-phase agent issues ~14 calls
+        # for a 7-slide deck in tight bursts and we land on Bedrock's
+        # 429 boundary often. Exponential-backoff retry with jitter
+        # smooths it without changing the demo flow.
+        import time, random
+        backoff = 1.5
+        last_exc: Exception | None = None
+        for attempt in range(5):
+            try:
+                return raw_llm(system, user)
+            except Exception as exc:
+                last_exc = exc
+                msg = str(exc).lower()
+                if "429" not in msg and "too many" not in msg and "throttl" not in msg:
+                    raise
+                sleep_s = backoff * (1 + random.random())
+                log.info("safe_llm: 429 from Bedrock, retrying in %.1fs (attempt %d/5)",
+                         sleep_s, attempt + 1)
+                time.sleep(sleep_s)
+                backoff *= 2
+        raise last_exc or RuntimeError("safe_llm exhausted retries")
 
     # ── 4. Run the blueprint flow ──
     bp_result = deck_planner.apply_blueprint(

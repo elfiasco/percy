@@ -215,26 +215,101 @@ def _element_to_create_body(el) -> tuple[dict, str]:
         return {"text": text, "position": base_pos, "name": name}, "text"
 
     if isinstance(el, BridgeChart):
-        return {
+        # Preserve the full styling captured on the source slide: per-series
+        # colors, legend visibility/position/font, axis visibility + gridline
+        # color, title formatting, plot properties (hole_size for donuts,
+        # bar_width_ratio for columns, vary_colors for pies). The agent only
+        # supplies new categories/series/title at apply time; everything
+        # else stays brand-faithful.
+        def _hex(spec) -> str | None:
+            if spec is None:
+                return None
+            for k in ("rgb", "value", "hex"):
+                v = getattr(spec, k, None)
+                if isinstance(v, str) and v.startswith("#"):
+                    return v
+            return None
+
+        series_out: list[dict[str, Any]] = []
+        for i, s in enumerate(el.series):
+            entry: dict[str, Any] = {
+                "name": s.name or f"Series {i+1}",
+                "values": list(s.values or []),
+            }
+            sc = _hex(s.color)
+            if sc:
+                entry["color"] = sc
+            if s.line and _hex(s.line.color):
+                entry["line"] = {"color": _hex(s.line.color)}
+            if s.data_labels and s.data_labels.show:
+                entry["data_labels"] = {"show": True, "number_format": s.data_labels.number_format}
+            series_out.append(entry)
+
+        leg = el.legend or None
+        legend_intent = None
+        if leg:
+            legend_intent = {
+                "visible": bool(leg.visible),
+                "position": (leg.position or "bottom").lower(),
+            }
+            if leg.font_size: legend_intent["font_size"] = leg.font_size
+
+        title_color = _hex(getattr(el.title, "title_font_color", None))
+        title_intent = None
+        if el.title and (el.title.title or title_color or el.title.title_font_size):
+            title_intent = {"text": el.title.title or ""}
+            if title_color: title_intent["color"] = title_color
+            if el.title.title_font_size: title_intent["font_size"] = el.title.title_font_size
+            if el.title.title_font_bold is not None: title_intent["bold"] = bool(el.title.title_font_bold)
+
+        cat_grid = _hex(getattr(getattr(el, "category_axis", None), "gridlines", None) and el.category_axis.gridlines.gridline_color)
+        val_grid = _hex(getattr(getattr(el, "value_axis", None), "gridlines", None) and el.value_axis.gridlines.gridline_color)
+        cat_axis = {"gridlines": bool(getattr(getattr(el, "category_axis", None), "gridlines", None) and el.category_axis.gridlines.has_major_gridlines)}
+        if cat_grid: cat_axis["gridline_color"] = cat_grid
+        val_axis = {"gridlines": bool(getattr(getattr(el, "value_axis", None), "gridlines", None) and el.value_axis.gridlines.has_major_gridlines)}
+        if val_grid: val_axis["gridline_color"] = val_grid
+
+        body: dict[str, Any] = {
             "chart_type": el.chart_type or "column_clustered",
             "categories": list(el.categories.categories or []),
-            "series": [
-                {"name": s.name or f"Series {i+1}", "values": list(s.values or [])}
-                for i, s in enumerate(el.series)
-            ],
-            "title": el.title.title,
+            "series": series_out,
             "position": base_pos,
             "name": name,
-        }, "chart"
+        }
+        if title_intent: body["title"] = title_intent
+        if legend_intent: body["legend"] = legend_intent
+        if cat_axis: body["category_axis"] = cat_axis
+        if val_axis: body["value_axis"] = val_axis
+        pp = el.plot_properties
+        if pp:
+            if pp.hole_size is not None:        body["hole_size"] = pp.hole_size
+            if pp.bar_width_ratio is not None:  body["bar_width_ratio"] = pp.bar_width_ratio
+            if pp.vary_colors is not None:      body["vary_colors"] = bool(pp.vary_colors)
+        return body, "chart"
 
     if isinstance(el, BridgeTable):
-        return {
+        # Preserve as much table styling as build_table understands:
+        # column widths + row heights (so the prototype's layout proportions
+        # survive), first-row/col headers, banded rows, totals row.
+        col_widths = []
+        row_heights = []
+        try:
+            col_widths = list(getattr(el, "column_widths", []) or [])
+            row_heights = list(getattr(el, "row_heights", []) or [])
+        except Exception:
+            pass
+        body: dict[str, Any] = {
             "data": [list(r) for r in (el.data or [])],
-            "first_row_header": el.table_properties.first_row_header,
-            "banded_rows": el.table_properties.banded_rows,
+            "first_row_header": bool(el.table_properties.first_row_header),
+            "banded_rows":      bool(el.table_properties.banded_rows),
+            "first_col_header": bool(getattr(el.table_properties, "first_col_header", False)),
+            "last_row_total":   bool(getattr(el.table_properties, "last_row_total", False)),
             "position": base_pos,
             "name": name,
-        }, "table"
+        }
+        if col_widths: body["column_widths"] = col_widths
+        if row_heights: body["row_heights"] = row_heights
+        return body, "table"
 
     if isinstance(el, BridgeConnector):
         return {

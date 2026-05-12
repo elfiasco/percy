@@ -9,7 +9,7 @@
     "slides_applied": 7,
     "errors": [],
     "ok": true,
-    "elapsed_seconds": 22.8
+    "elapsed_seconds": 26.5
   },
   "demo_slides_json": [
     {
@@ -266,7 +266,7 @@
           },
           "text_runs": [
             {
-              "text": "Q4 at a glance.",
+              "text": "Q4 at a glance",
               "font_name": "Inter",
               "font_size": 28,
               "font_bold": true,
@@ -671,7 +671,7 @@
           },
           "fill": {
             "type": "solid",
-            "color": "#6FA17A"
+            "color": "#7DA1CC"
           },
           "line": {
             "visible": false,
@@ -740,10 +740,10 @@
         {
           "type": "BridgeChart",
           "position": {
-            "left_in": 0.5,
-            "top_in": 1.0,
-            "width_in": 12.33,
-            "height_in": 5.5
+            "left_in": 1.0,
+            "top_in": 1.8,
+            "width_in": 11.333,
+            "height_in": 4.2
           },
           "chart_type": "column_clustered",
           "chart_categories": [
@@ -793,28 +793,10 @@
         {
           "type": "BridgeShape",
           "position": {
-            "left_in": 0.5,
-            "top_in": 2.2,
-            "width_in": 0.6,
-            "height_in": 0.04
-          },
-          "fill": {
-            "type": "solid",
-            "color": "#7DA1CC"
-          },
-          "line": {
-            "visible": false,
-            "color": null,
-            "width": null
-          }
-        },
-        {
-          "type": "BridgeShape",
-          "position": {
-            "left_in": 0.5,
-            "top_in": 2.4,
-            "width_in": 4.0,
-            "height_in": 0.6
+            "left_in": 0.7,
+            "top_in": 2.0,
+            "width_in": 12.1,
+            "height_in": 0.8
           },
           "fill": {
             "type": "none",
@@ -822,38 +804,9 @@
           },
           "text_runs": [
             {
-              "text": "Aurora migration",
+              "text": "\u2014  Aurora migration finished Nov 12 \u2014 read latency down 38%",
               "font_name": "Inter",
               "font_size": 20,
-              "font_bold": true,
-              "font_italic": null,
-              "color": "#2A2F3A"
-            }
-          ],
-          "text_align": null,
-          "line": {
-            "visible": false,
-            "color": null,
-            "width": null
-          }
-        },
-        {
-          "type": "BridgeShape",
-          "position": {
-            "left_in": 0.5,
-            "top_in": 3.1,
-            "width_in": 4.0,
-            "height_in": 3.6
-          },
-          "fill": {
-            "type": "none",
-            "color": null
-          },
-          "text_runs": [
-            {
-              "text": "Migration finished Nov 12. Read latency down 38% on customer-facing queries. Cost held flat.",
-              "font_name": "Inter",
-              "font_size": 14,
               "font_bold": null,
               "font_italic": null,
               "color": "#2A2F3A"
@@ -869,28 +822,10 @@
         {
           "type": "BridgeShape",
           "position": {
-            "left_in": 4.7,
-            "top_in": 2.2,
-            "width_in": 0.6,
-            "height_in": 0.04
-          },
-          "fill": {
-            "type": "solid",
-            "color": "#7DA1CC"
-          },
-          "line": {
-            "visible": false,
-            "color": null,
-            "width": null
-          }
-        },
-        {
-          "type": "BridgeShape",
-          "position": {
-            "left_in": 4.7,
-            "top_in": 2.4,
-            "width_in": 4.0,
-            "height_in": 0.6
+            "left_in": 0.7,
+            "top_in": 2.9,
+            "width_in": 12.1,
+            "height_in": 0.8
           },
           "fill": {
             "type": "none",
@@ -898,38 +833,9 @@
           },
           "text_runs": [
             {
-              "text": "Self-serve onboarding",
+              "text": "\u2014  Self-serve onboarding launched \u2014 14% of new logos used it",
               "font_name": "Inter",
               "font_size": 20,
-              "font_bold": true,
-              "font_italic": null,
-              "color": "#2A2F3A"
-            }
-          ],
-          "text_align": null,
-          "line": {
-            "visible": false,
-            "color": null,
-            "width": null
-          }
-        },
-        {
-          "type": "BridgeShape",
-          "position": {
-            "left_in": 4.7,
-            "top_in": 3.1,
-            "width_in": 4.0,
-            "height_in": 3.6
-          },
-          "fill": {
-            "type": "none",
-            "color": null
-          },
-          "text_runs": [
-            {
-              "text": "Launched this quarter. 14% of new logos used it \u2014 no sales or CS touch required.",
-              "font_name": "Inter",
-              "font_size": 14,
               "font_bold": null,
               "font_italic": null,
               "color": "#2A2F3A"
@@ -945,28 +851,10 @@
         {
           "type": "BridgeShape",
           "position": {
-            "left_in": 8.9,
-            "top_in": 2.2,
-            "width_in": 0.6,
-            "height_in": 0.04
-          },
-          "fill": {
-            "type": "solid",
-            "color": "#7DA1CC"
-          },
-          "line": {
-            "visible": false,
-            "color": null,
-            "width": null
-          }
-        },
-        {
-          "type": "BridgeShape",
-          "position": {
-            "left_in": 8.9,
-            "top_in": 2.4,
-            "width_in": 4.0,
-            "height_in": 0.6
+            "left_in": 0.7,
+            "top_in": 3.8,
+            "width_in": 12.1,
+            "height_in": 0.8
           },
           "fill": {
             "type": "none",
@@ -974,10 +862,10 @@
           },
           "text_runs": [
             {
-              "text": "Mobile app v2",
+              "text": "\u2014  Mobile app v2 in public beta \u2014 2,100 users, 4.6 stars",
               "font_name": "Inter",
               "font_size": 20,
-              "font_bold": true,
+              "font_bold": null,
               "font_italic": null,
               "color": "#2A2F3A"
             }
@@ -992,10 +880,10 @@
         {
           "type": "BridgeShape",
           "position": {
-            "left_in": 8.9,
-            "top_in": 3.1,
-            "width_in": 4.0,
-            "height_in": 3.6
+            "left_in": 0.7,
+            "top_in": 4.7,
+            "width_in": 12.1,
+            "height_in": 0.8
           },
           "fill": {
             "type": "none",
@@ -1003,9 +891,38 @@
           },
           "text_runs": [
             {
-              "text": "Now in public beta. 2,100 active users, 4.6 stars. Strongest early signal of any mobile release.",
+              "text": "\u2014  ",
               "font_name": "Inter",
-              "font_size": 14,
+              "font_size": 20,
+              "font_bold": null,
+              "font_italic": null,
+              "color": "#2A2F3A"
+            }
+          ],
+          "text_align": null,
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 0.7,
+            "top_in": 5.6,
+            "width_in": 12.1,
+            "height_in": 0.8
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
+          "text_runs": [
+            {
+              "text": "\u2014  ",
+              "font_name": "Inter",
+              "font_size": 20,
               "font_bold": null,
               "font_italic": null,
               "color": "#2A2F3A"
@@ -1039,7 +956,7 @@
           },
           "text_runs": [
             {
-              "text": "LOGO CLOSINGS \u2014 Q4 MISS",
+              "text": "Q4 LOGO PERFORMANCE",
               "font_name": "Inter",
               "font_size": 10,
               "font_bold": true,
@@ -1068,7 +985,7 @@
           },
           "text_runs": [
             {
-              "text": "We closed 47 logos vs. the 51 plan.",
+              "text": "Honest look at the miss.",
               "font_name": "Inter",
               "font_size": 32,
               "font_bold": true,
@@ -1097,7 +1014,7 @@
           },
           "text_runs": [
             {
-              "text": "Mid-funnel held but enterprise pipeline build slowed. Sales engineering capacity expanded in November; effects show up in Q1.",
+              "text": "We closed 47 logos vs the 51 plan. Mid-funnel held but enterprise pipeline build slowed. Sales engineering capacity expanded in November; effects show up in Q1.",
               "font_name": "Inter",
               "font_size": 16,
               "font_bold": null,
@@ -1246,5 +1163,5 @@
     }
   ],
   "snapshot_version": 1,
-  "generated_at": 1778599723
+  "generated_at": 1778604906
 }

@@ -9,7 +9,7 @@
     "slides_applied": 7,
     "errors": [],
     "ok": true,
-    "elapsed_seconds": 35.0
+    "elapsed_seconds": 31.1
   },
   "demo_slides_json": [
     {
@@ -60,7 +60,7 @@
           },
           "text_runs": [
             {
-              "text": "NORTHWIND",
+              "text": "Q4 2025 Northwind Update",
               "font_name": null,
               "font_size": 32,
               "font_bold": null,
@@ -89,7 +89,7 @@
           },
           "text_runs": [
             {
-              "text": "Q4 2025 Northwind Update",
+              "text": "Three commitments shipped, one miss to talk about.",
               "font_name": null,
               "font_size": 32,
               "font_bold": null,
@@ -118,7 +118,7 @@
           },
           "text_runs": [
             {
-              "text": "Three commitments shipped, one miss to talk about.   |   Operations Team   |   December 2025",
+              "text": "OPERATIONS TEAM   I   DECEMBER 2025",
               "font_name": null,
               "font_size": 32,
               "font_bold": null,
@@ -143,68 +143,10 @@
         {
           "type": "BridgeShape",
           "position": {
-            "left_in": 0.696,
-            "top_in": 7.099,
-            "width_in": 2.355,
-            "height_in": 0.236
-          },
-          "fill": {
-            "type": "none",
-            "color": null
-          },
-          "text_runs": [
-            {
-              "text": "\u00a9 2025 Northwind",
-              "font_name": null,
-              "font_size": 32,
-              "font_bold": null,
-              "font_italic": null,
-              "color": "#1E293B"
-            }
-          ],
-          "text_align": null,
-          "line": {
-            "visible": false,
-            "color": null,
-            "width": null
-          }
-        },
-        {
-          "type": "BridgeShape",
-          "position": {
-            "left_in": 1.0,
-            "top_in": 2.2,
-            "width_in": 11.333,
-            "height_in": 3.5
-          },
-          "fill": {
-            "type": "none",
-            "color": null
-          },
-          "text_runs": [
-            {
-              "text": "$2.4M\n\nLargest single quarter in our history  \u00b7  +18% QoQ",
-              "font_name": null,
-              "font_size": 32,
-              "font_bold": null,
-              "font_italic": null,
-              "color": "#1E293B"
-            }
-          ],
-          "text_align": null,
-          "line": {
-            "visible": false,
-            "color": null,
-            "width": null
-          }
-        },
-        {
-          "type": "BridgeShape",
-          "position": {
-            "left_in": 1.0,
-            "top_in": 1.6,
-            "width_in": 11.333,
-            "height_in": 0.792
+            "left_in": 0.5,
+            "top_in": 1.5,
+            "width_in": 12.333,
+            "height_in": 0.6
           },
           "fill": {
             "type": "none",
@@ -214,7 +156,7 @@
             {
               "text": "Q4 ARR ADDED",
               "font_name": null,
-              "font_size": 32,
+              "font_size": 18,
               "font_bold": null,
               "font_italic": null,
               "color": "#1E293B"
@@ -230,15 +172,55 @@
         {
           "type": "BridgeShape",
           "position": {
-            "left_in": 12.624,
-            "top_in": 7.102,
-            "width_in": 0.375,
-            "height_in": 0.236
+            "left_in": 0.5,
+            "top_in": 2.8,
+            "width_in": 12.333,
+            "height_in": 2.0
           },
           "fill": {
             "type": "none",
             "color": null
           },
+          "text_runs": [
+            {
+              "text": "$2.4M",
+              "font_name": null,
+              "font_size": 144,
+              "font_bold": null,
+              "font_italic": null,
+              "color": "#1E293B"
+            }
+          ],
+          "text_align": null,
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 0.5,
+            "top_in": 5.2,
+            "width_in": 12.333,
+            "height_in": 0.8
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
+          "text_runs": [
+            {
+              "text": "Net new ARR added in Q4 \u2014 largest single quarter in our history, up 18% QoQ",
+              "font_name": null,
+              "font_size": 24,
+              "font_bold": null,
+              "font_italic": null,
+              "color": "#1E293B"
+            }
+          ],
+          "text_align": null,
           "line": {
             "visible": false,
             "color": null,
@@ -255,10 +237,28 @@
         {
           "type": "BridgeShape",
           "position": {
-            "left_in": 0.696,
-            "top_in": 7.099,
-            "width_in": 2.355,
-            "height_in": 0.236
+            "left_in": 0.0,
+            "top_in": 0.0,
+            "width_in": 13.333,
+            "height_in": 1.2
+          },
+          "fill": {
+            "type": "solid",
+            "color": "#1A3A5C"
+          },
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 0.5,
+            "top_in": 0.35,
+            "width_in": 12.0,
+            "height_in": 0.5
           },
           "fill": {
             "type": "none",
@@ -266,9 +266,9 @@
           },
           "text_runs": [
             {
-              "text": "\u00a9 2025 Northwind",
+              "text": "Q4 at a glance",
               "font_name": null,
-              "font_size": 32,
+              "font_size": 36,
               "font_bold": null,
               "font_italic": null,
               "color": "#1E293B"
@@ -284,10 +284,28 @@
         {
           "type": "BridgeShape",
           "position": {
-            "left_in": 0.417,
-            "top_in": 1.447,
-            "width_in": 12.5,
-            "height_in": 5.519
+            "left_in": 0.4665000000000008,
+            "top_in": 2.0,
+            "width_in": 3.8,
+            "height_in": 3.5
+          },
+          "fill": {
+            "type": "solid",
+            "color": "#E8F4EA"
+          },
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 0.4665000000000008,
+            "top_in": 2.3,
+            "width_in": 3.8,
+            "height_in": 0.4
           },
           "fill": {
             "type": "none",
@@ -295,9 +313,9 @@
           },
           "text_runs": [
             {
-              "text": "ARR Added: $2.4M  \u25b2 18% QoQ\n\nGross Retention: 98.7%  \u25b2 1.2 pts\n\nLogos Closed: 47  \u25bc 4 vs Q3  (below plan \u2014 we own this)",
+              "text": "ARR Added",
               "font_name": null,
-              "font_size": 32,
+              "font_size": 18,
               "font_bold": null,
               "font_italic": null,
               "color": "#1E293B"
@@ -313,10 +331,10 @@
         {
           "type": "BridgeShape",
           "position": {
-            "left_in": 0.417,
-            "top_in": 0.561,
-            "width_in": 12.5,
-            "height_in": 0.792
+            "left_in": 0.4665000000000008,
+            "top_in": 3.0,
+            "width_in": 3.8,
+            "height_in": 0.8
           },
           "fill": {
             "type": "none",
@@ -324,9 +342,9 @@
           },
           "text_runs": [
             {
-              "text": "Q4 at a glance.",
+              "text": "$2.4M",
               "font_name": null,
-              "font_size": 32,
+              "font_size": 48,
               "font_bold": null,
               "font_italic": null,
               "color": "#1E293B"
@@ -342,15 +360,265 @@
         {
           "type": "BridgeShape",
           "position": {
-            "left_in": 12.624,
-            "top_in": 7.102,
-            "width_in": 0.375,
-            "height_in": 0.236
+            "left_in": 0.4665000000000008,
+            "top_in": 4.2,
+            "width_in": 3.8,
+            "height_in": 0.4
           },
           "fill": {
             "type": "none",
             "color": null
           },
+          "text_runs": [
+            {
+              "text": "\u25b2 18% QoQ",
+              "font_name": null,
+              "font_size": 20,
+              "font_bold": null,
+              "font_italic": null,
+              "color": "#1E293B"
+            }
+          ],
+          "text_align": null,
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 4.766500000000001,
+            "top_in": 2.0,
+            "width_in": 3.8,
+            "height_in": 3.5
+          },
+          "fill": {
+            "type": "solid",
+            "color": "#E8F4EA"
+          },
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 4.766500000000001,
+            "top_in": 2.3,
+            "width_in": 3.8,
+            "height_in": 0.4
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
+          "text_runs": [
+            {
+              "text": "Gross Retention",
+              "font_name": null,
+              "font_size": 18,
+              "font_bold": null,
+              "font_italic": null,
+              "color": "#1E293B"
+            }
+          ],
+          "text_align": null,
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 4.766500000000001,
+            "top_in": 3.0,
+            "width_in": 3.8,
+            "height_in": 0.8
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
+          "text_runs": [
+            {
+              "text": "98.7%",
+              "font_name": null,
+              "font_size": 48,
+              "font_bold": null,
+              "font_italic": null,
+              "color": "#1E293B"
+            }
+          ],
+          "text_align": null,
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 4.766500000000001,
+            "top_in": 4.2,
+            "width_in": 3.8,
+            "height_in": 0.4
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
+          "text_runs": [
+            {
+              "text": "\u25b2 1.2 pts",
+              "font_name": null,
+              "font_size": 20,
+              "font_bold": null,
+              "font_italic": null,
+              "color": "#1E293B"
+            }
+          ],
+          "text_align": null,
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 9.066500000000001,
+            "top_in": 2.0,
+            "width_in": 3.8,
+            "height_in": 3.5
+          },
+          "fill": {
+            "type": "solid",
+            "color": "#FCE8E8"
+          },
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 9.066500000000001,
+            "top_in": 2.3,
+            "width_in": 3.8,
+            "height_in": 0.4
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
+          "text_runs": [
+            {
+              "text": "Logos Closed",
+              "font_name": null,
+              "font_size": 18,
+              "font_bold": null,
+              "font_italic": null,
+              "color": "#1E293B"
+            }
+          ],
+          "text_align": null,
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 9.066500000000001,
+            "top_in": 3.0,
+            "width_in": 3.8,
+            "height_in": 0.8
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
+          "text_runs": [
+            {
+              "text": "47",
+              "font_name": null,
+              "font_size": 48,
+              "font_bold": null,
+              "font_italic": null,
+              "color": "#1E293B"
+            }
+          ],
+          "text_align": null,
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 9.066500000000001,
+            "top_in": 4.2,
+            "width_in": 3.8,
+            "height_in": 0.4
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
+          "text_runs": [
+            {
+              "text": "\u25bc 4 vs Q3 \u2014 that's the miss",
+              "font_name": null,
+              "font_size": 16,
+              "font_bold": null,
+              "font_italic": null,
+              "color": "#1E293B"
+            }
+          ],
+          "text_align": null,
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 0.5,
+            "top_in": 6.8,
+            "width_in": 12.0,
+            "height_in": 0.3
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
+          "text_runs": [
+            {
+              "text": "Q4 2025 Business Update | Northwind",
+              "font_name": null,
+              "font_size": 10,
+              "font_bold": null,
+              "font_italic": null,
+              "color": "#1E293B"
+            }
+          ],
+          "text_align": null,
           "line": {
             "visible": false,
             "color": null,
@@ -373,17 +641,17 @@
             "height_in": 0.236
           },
           "fill": {
-            "type": "none",
-            "color": null
+            "type": "solid",
+            "color": "#888888"
           },
           "text_runs": [
             {
-              "text": "Source: Salesforce snapshot, 2025-12-12",
+              "text": "\u00a9 2019 Snowflake  Inc. All Rights Reserved",
               "font_name": null,
-              "font_size": 32,
+              "font_size": 18,
               "font_bold": null,
               "font_italic": null,
-              "color": "#1E293B"
+              "color": "#FFFFFF"
             }
           ],
           "text_align": null,
@@ -434,6 +702,81 @@
             "type": "none",
             "color": null
           },
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeChart",
+          "position": {
+            "left_in": 0.517,
+            "top_in": 1.564,
+            "width_in": 12.298,
+            "height_in": 5.374
+          },
+          "chart_type": "bar_clustered",
+          "chart_categories": [
+            "Q1",
+            "Q2",
+            "Q3",
+            "Q4"
+          ],
+          "chart_series_count": 1
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 0.517,
+            "top_in": 6.5,
+            "width_in": 10.0,
+            "height_in": 0.4
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
+          "text_runs": [
+            {
+              "text": "Mid-market expansion led the quarter for the second straight period.",
+              "font_name": null,
+              "font_size": 12,
+              "font_bold": null,
+              "font_italic": null,
+              "color": "#1E293B"
+            }
+          ],
+          "text_align": null,
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 0.417,
+            "top_in": 7.1,
+            "width_in": 4.0,
+            "height_in": 0.25
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
+          "text_runs": [
+            {
+              "text": "Source: Salesforce snapshot, 2025-12-12",
+              "font_name": null,
+              "font_size": 9,
+              "font_bold": null,
+              "font_italic": null,
+              "color": "#1E293B"
+            }
+          ],
+          "text_align": null,
           "line": {
             "visible": false,
             "color": null,
@@ -490,7 +833,7 @@
           },
           "text_runs": [
             {
-              "text": "\u2014 Aurora migration completed Nov 12 \u2014 read latency down 38%\n\n\u2014 Self-serve onboarding launched \u2014 14% of new logos used it in Q4\n\n\u2014 Mobile app v2 in public beta \u2014 2,100 users, 4.6-star rating",
+              "text": "\u2022 Aurora migration finished Nov 12 \u2014 read latency down 38%\n\n\u2022 Self-serve onboarding launched \u2014 14% of new logos used it\n\n\u2022 Mobile app v2 in public beta \u2014 2,100 users, 4.6 stars",
               "font_name": null,
               "font_size": 32,
               "font_bold": null,
@@ -519,7 +862,7 @@
           },
           "text_runs": [
             {
-              "text": "WHAT WE SHIPPED IN Q4",
+              "text": "What We Shipped This Quarter",
               "font_name": null,
               "font_size": 32,
               "font_bold": null,
@@ -631,7 +974,7 @@
           },
           "text_runs": [
             {
-              "text": "LOGO ATTAINMENT: HONEST LOOK AT THE MISS",
+              "text": "Honest Look at the Miss",
               "font_name": null,
               "font_size": 32,
               "font_bold": null,
@@ -714,7 +1057,7 @@
           },
           "text_runs": [
             {
-              "text": "Questions? Reach us at ops@northwind.so\n\nOffice Hours \u2014 Thursdays at 11am PT",
+              "text": "Contact: ops@northwind.so\n\nOffice Hours: Thursdays at 11am PT",
               "font_name": null,
               "font_size": 32,
               "font_bold": null,
@@ -780,5 +1123,5 @@
     }
   ],
   "snapshot_version": 1,
-  "generated_at": 1778602996
+  "generated_at": 1778604937
 }
