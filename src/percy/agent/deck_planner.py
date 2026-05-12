@@ -102,20 +102,37 @@ class Blueprint:
 
 
 @dataclass(slots=True)
-class SlidePlan:
-    """Result of planning a single slide. Ready to feed apply_template."""
-    slot: int
+class TemplateApplication:
+    """One template-apply call that contributes to a slide."""
     template_id: str
     template_name: str
-    inputs: dict[str, Any]
+    inputs: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "template_id": self.template_id,
+            "template_name": self.template_name,
+            "inputs": self.inputs,
+        }
+
+
+@dataclass(slots=True)
+class SlidePlan:
+    """Result of planning a single slide. May contain MULTIPLE template
+    applications when the agent composes a slide from element-kind
+    templates (e.g. title + subtitle + presenter line on a cover slot).
+    """
+    slot: int
+    applications: list[TemplateApplication] = field(default_factory=list)
     rationale: str = ""
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "slot": self.slot, "template_id": self.template_id,
-            "template_name": self.template_name, "inputs": self.inputs,
-            "rationale": self.rationale, "error": self.error,
+            "slot": self.slot,
+            "applications": [a.to_dict() for a in self.applications],
+            "rationale": self.rationale,
+            "error": self.error,
         }
 
 
@@ -123,7 +140,7 @@ class SlidePlan:
 
 
 _PER_SLIDE_SYSTEM = """\
-You are choosing ONE template to render ONE slide of a deck.
+You are composing ONE slide of a deck.
 
 You see:
   * The deck's overall summary (context for tone + audience).
@@ -131,37 +148,55 @@ You see:
     the slide should do, with specific copy / data quoted inline.
   * The full list of templates available in the active Template Set.
 
-Your job:
+The set has TWO kinds of templates:
+  * SLIDE templates  — a full-slide layout. One template = many elements
+                       (e.g. a KPI dashboard with title + 3 tiles + delta
+                       indicators baked in).
+  * ELEMENT templates — a single reusable piece (e.g. a slide-title
+                        block, a footer group, one KPI tile). To build
+                        a slide from element templates you STACK
+                        SEVERAL on the same slot.
 
-  1. Pick the SINGLE template_id from the available list that best fits
-     this slide's instruction. Bias toward templates whose tags or
-     description match the instruction's intent (chart template for
-     chart-mentioning instructions, KPI tile for metric-mentioning
-     instructions, big-number for single-metric, etc.).
+Your job: produce a list of `applications`, in order, that together
+render this slide. Each application is one template + its inputs.
 
-  2. Read the instruction and extract:
-       - the literal copy in quotes — use verbatim
-       - the numbers / data — use verbatim
-       - the implied content for any other input the template needs
-     Fill the template's inputs_schema accordingly. If the schema has
-     an input the instruction doesn't address, use the schema's
-     default (or "" if no default).
+  * If a single slide template fits the instruction well, that's ONE
+    application — done.
+  * If only element templates are available (or no slide template
+    matches well), pick MULTIPLE element templates and stack them.
+    For example: a cover slide from element templates =
+      [slide_title application, subtitle application, presenter line
+       application]
+  * Use ELEMENT templates' `left_in` / `top_in` / `width_in` /
+    `height_in` inputs to place them appropriately when stacking.
 
-  3. If the instruction hints at mood ("the miss", "a win", "honest",
-     "celebrate") and the template has an `accent` input, pick a
-     color that matches (sage / brick / ochre / cobalt etc.).
+Filling each template's inputs:
+  * Read the instruction and extract the literal copy in quotes
+    (use verbatim), the numbers (verbatim), and the implied content
+    for any other input the template needs.
+  * If the schema has an input the instruction doesn't address, use
+    the schema's default (or "" if no default).
+  * If the instruction hints at mood ("a win", "the miss", "honest",
+    "celebrate") and a template has an `accent` input, pick a fitting
+    color (sage / brick / ochre / cobalt etc.).
 
 Respond with one JSON object, no prose, no fences:
 
 {
-  "template_id": "<exact id from the available list>",
-  "template_name": "<exact name>",
-  "inputs": { <key>: <value>, ... },
-  "rationale": "<one short sentence — why this template?>"
+  "applications": [
+    {
+      "template_id": "<exact id from the available list>",
+      "template_name": "<exact name>",
+      "inputs": { <key>: <value>, ... }
+    },
+    ... one or more entries ...
+  ],
+  "rationale": "<one short sentence — why this composition?>"
 }
 
-If no template in the set is a good fit, pick the closest text-based
-template and put the instruction's content into its primary text input.
+Don't include templates that don't contribute meaningfully. 1-5
+applications per slide is the typical range. If you stack element
+templates, position them so they don't overlap.
 """
 
 
@@ -198,21 +233,41 @@ def plan_single_slide(
         raw = llm_call(_PER_SLIDE_SYSTEM, json.dumps(user_payload, ensure_ascii=False, default=str)[:18000])
     except Exception as exc:
         log.warning("plan_single_slide[slot=%d]: LLM call failed: %s", spec.slot, exc)
-        return SlidePlan(slot=spec.slot, template_id="", template_name="",
-                         inputs={}, error=str(exc))
+        return SlidePlan(slot=spec.slot, error=str(exc))
 
     parsed = _parse_json(raw)
-    if not parsed or not parsed.get("template_id"):
+    if not parsed:
         log.warning("plan_single_slide[slot=%d]: unparseable response: %r",
                     spec.slot, raw[:300])
-        return SlidePlan(slot=spec.slot, template_id="", template_name="",
-                         inputs={}, error="unparseable LLM response")
+        return SlidePlan(slot=spec.slot, error="unparseable LLM response")
+
+    # Accept the new shape (`applications: [...]`) and the legacy single-
+    # template shape (`template_id` + `inputs`) for back-compat.
+    raw_apps = parsed.get("applications") or []
+    if not raw_apps and parsed.get("template_id"):
+        raw_apps = [{
+            "template_id": parsed["template_id"],
+            "template_name": parsed.get("template_name", ""),
+            "inputs": parsed.get("inputs") or {},
+        }]
+
+    applications: list[TemplateApplication] = []
+    for app in raw_apps:
+        if not isinstance(app, dict): continue
+        tid = str(app.get("template_id") or "")
+        if not tid: continue
+        applications.append(TemplateApplication(
+            template_id=tid,
+            template_name=str(app.get("template_name") or ""),
+            inputs=dict(app.get("inputs") or {}),
+        ))
+
+    if not applications:
+        return SlidePlan(slot=spec.slot, error="LLM returned no applications")
 
     return SlidePlan(
         slot=spec.slot,
-        template_id=str(parsed.get("template_id") or ""),
-        template_name=str(parsed.get("template_name") or ""),
-        inputs=dict(parsed.get("inputs") or {}),
+        applications=applications,
         rationale=str(parsed.get("rationale") or ""),
     )
 
@@ -291,10 +346,9 @@ def apply_blueprint(
             if plan:
                 plans_by_slot[spec.slot] = plan
 
-    # 2) Apply in slot order. Each apply targets a distinct slide_n so
-    # parallel application would be safe, but the studio doc's slides
-    # list isn't thread-friendly to mutate concurrently. Sequential apply
-    # finishes in well under a second per slide once the LLM work is done.
+    # 2) Apply in slot order. Each slot may have MULTIPLE applications —
+    # stacked element templates building one slide. Apply them in the
+    # order the agent specified so positions / z-order make sense.
     applied: list[dict[str, Any]] = []
     errors: list[str] = []
     for spec in blueprint.slides:
@@ -306,28 +360,41 @@ def apply_blueprint(
             errors.append(f"slot {spec.slot}: {plan.error}")
             continue
 
-        # Look up the template by id from the available list.
-        tpl = next((t for t in available_templates if t.get("id") == plan.template_id), None)
-        if not tpl:
-            errors.append(f"slot {spec.slot}: template {plan.template_id!r} not in set")
-            continue
+        slot_elements_total = 0
+        slot_apply_errors: list[str] = []
+        applications_run: list[dict[str, Any]] = []
 
-        try:
-            result = _tpls.apply_template(tpl, studio=studio, slide_n=spec.slot,
-                                            inputs=plan.inputs)
-        except Exception as exc:
-            errors.append(f"slot {spec.slot}: apply failed: {exc}")
-            continue
+        for app in plan.applications:
+            tpl = next((t for t in available_templates if t.get("id") == app.template_id), None)
+            if not tpl:
+                slot_apply_errors.append(f"template {app.template_id!r} not in set")
+                continue
+            try:
+                result = _tpls.apply_template(
+                    tpl, studio=studio, slide_n=spec.slot, inputs=app.inputs,
+                )
+            except Exception as exc:
+                slot_apply_errors.append(f"{app.template_id}: {exc}")
+                continue
+            n_elements = len(result.get("elements") or [])
+            slot_elements_total += n_elements
+            applications_run.append({
+                "template_id": app.template_id,
+                "template_name": app.template_name,
+                "ok": result.get("ok"),
+                "elements_created": n_elements,
+                "apply_errors": result.get("errors") or [],
+            })
 
         applied.append({
             "slot": spec.slot,
-            "template_id": plan.template_id,
-            "template_name": plan.template_name,
-            "ok": result.get("ok"),
+            "applications": applications_run,
+            "elements_total": slot_elements_total,
             "rationale": plan.rationale,
-            "elements_created": len(result.get("elements") or []),
-            "apply_errors": result.get("errors") or [],
+            "apply_errors": slot_apply_errors,
         })
+        if slot_apply_errors:
+            errors.extend(f"slot {spec.slot}: {e}" for e in slot_apply_errors)
 
     plans_list = [plans_by_slot[s.slot] for s in blueprint.slides if s.slot in plans_by_slot]
     return BlueprintResult(

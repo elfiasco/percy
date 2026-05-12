@@ -9,7 +9,7 @@
     "slides_applied": 7,
     "errors": [],
     "ok": true,
-    "elapsed_seconds": 9.8
+    "elapsed_seconds": 10.5
   },
   "demo_slides_json": [
     {
@@ -736,6 +736,23 @@
             "color": null,
             "width": null
           }
+        },
+        {
+          "type": "BridgeChart",
+          "position": {
+            "left_in": 0.5,
+            "top_in": 1.0,
+            "width_in": 12.33,
+            "height_in": 5.5
+          },
+          "chart_type": "column_clustered",
+          "chart_categories": [
+            "Q1",
+            "Q2",
+            "Q3",
+            "Q4"
+          ],
+          "chart_series_count": 1
         }
       ]
     },
@@ -910,7 +927,7 @@
           },
           "text_runs": [
             {
-              "text": "Launched this quarter. 14% of new logos used it on day one.",
+              "text": "Launched this quarter. 14% of new logos used it to get started on their own.",
               "font_name": "Inter",
               "font_size": 14,
               "font_bold": null,
@@ -986,7 +1003,7 @@
           },
           "text_runs": [
             {
-              "text": "Now in public beta \u2014 2,100 users and 4.6 stars.",
+              "text": "Now in public beta \u2014 2,100 users and a 4.6-star rating.",
               "font_name": "Inter",
               "font_size": 14,
               "font_bold": null,
@@ -1014,7 +1031,7 @@
             "left_in": 0.5,
             "top_in": 0.55,
             "width_in": 12.33,
-            "height_in": 0.35
+            "height_in": 0.3
           },
           "fill": {
             "type": "none",
@@ -1027,10 +1044,28 @@
               "font_size": 10,
               "font_bold": true,
               "font_italic": null,
-              "color": "#7DA1CC"
+              "color": "#C5994A"
             }
           ],
           "text_align": "left",
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 0.5,
+            "top_in": 0.55,
+            "width_in": 12.33,
+            "height_in": 0.35
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
           "line": {
             "visible": false,
             "color": null,
@@ -1051,7 +1086,7 @@
           },
           "text_runs": [
             {
-              "text": "47 logos closed vs. 51 plan \u2014 here's why.",
+              "text": "We closed 47 logos vs the 51 plan.",
               "font_name": "Inter",
               "font_size": 32,
               "font_bold": true,
@@ -1080,7 +1115,7 @@
           },
           "text_runs": [
             {
-              "text": "We closed 47 logos vs the 51 plan. Mid-funnel held but enterprise pipeline build slowed. Sales engineering capacity expanded in November; effects show up in Q1.",
+              "text": "Mid-funnel held but enterprise pipeline build slowed. Sales engineering capacity expanded in November; effects show up in Q1.",
               "font_name": "Inter",
               "font_size": 16,
               "font_bold": null,
@@ -1229,5 +1264,5 @@
     }
   ],
   "snapshot_version": 1,
-  "generated_at": 1778599008
+  "generated_at": 1778599226
 }
