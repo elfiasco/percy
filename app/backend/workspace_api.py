@@ -643,9 +643,13 @@ def extract_template_brand(request: Request, template_id: str):
 
         for slide in doc.slides:
             for el in slide.elements:
-                # Solid fills
+                # Any fill carrying a resolvable color (solidFill / PATTERNED /
+                # theme-resolved). Earlier code matched `fill_type == "solid"`
+                # but the Bridge value is the OOXML literal "solidFill" so the
+                # filter yielded 0 colors on real decks. Match by "has a color"
+                # instead of by type label.
                 fill = getattr(el, "fill", None)
-                if fill and getattr(fill, "fill_type", None) == "solid":
+                if fill is not None:
                     fc = getattr(fill, "color", None) or getattr(fill, "fill_color", None)
                     if fc and getattr(fc, "value", None):
                         try:

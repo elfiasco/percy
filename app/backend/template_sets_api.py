@@ -511,6 +511,22 @@ def _run_brand_extract(set_id: str) -> dict[str, Any] | None:
     table_total = table_banded = table_header = 0
     docs_scanned = 0
 
+    # Snowflake-deck reality: 1149 fills are tagged `solidFill` (OOXML), not
+    # `solid`. Older extract code (still alive in workspace_api.extract_template_brand)
+    # had a typo'd `"solid"` filter that yielded 0 colors. Match by "has a
+    # resolvable color value" instead of by type label so we work across deck
+    # styles. PATTERNED + theme-resolved fills also contribute brand colors.
+    def _try_resolve(fc, theme_map) -> str | None:
+        if not fc or not getattr(fc, "value", None):
+            return None
+        try:
+            hex_val = fc.resolve(theme_map)
+            if hex_val and hex_val.startswith("#"):
+                return hex_val.upper()
+        except Exception:
+            return None
+        return None
+
     for ref in refs_ready:
         d = _backend_main._docs.get(ref.get("doc_id"))
         if not d:
@@ -520,16 +536,24 @@ def _run_brand_extract(set_id: str) -> dict[str, Any] | None:
         theme = getattr(doc, "theme_colors", None) or {}
         for slide in doc.slides:
             for el in slide.elements or []:
+                # Fills — any type that carries a color value (solidFill,
+                # PATTERNED, gradFill background, etc.) counts.
                 fill = getattr(el, "fill", None)
-                if fill and getattr(fill, "fill_type", None) == "solid":
+                if fill is not None:
                     fc = getattr(fill, "color", None) or getattr(fill, "fill_color", None)
-                    if fc and getattr(fc, "value", None):
-                        try:
-                            hex_val = fc.resolve(theme)
-                            if hex_val and hex_val.startswith("#"):
-                                color_counter[hex_val.upper()] += 1
-                        except Exception:
-                            pass
+                    hex_val = _try_resolve(fc, theme)
+                    if hex_val:
+                        color_counter[hex_val] += 1
+
+                # Borders / line strokes also carry brand colors (chart axes,
+                # connector lines, shape outlines).
+                line = getattr(el, "line", None)
+                if line is not None:
+                    lc = getattr(line, "color", None)
+                    hex_val = _try_resolve(lc, theme)
+                    if hex_val:
+                        color_counter[hex_val] += 1
+
                 paragraphs = (
                     getattr(getattr(el, "text_frame", None), "paragraphs", None)
                     or getattr(el, "paragraphs", None)
@@ -543,6 +567,14 @@ def _run_brand_extract(set_id: str) -> dict[str, Any] | None:
                         if isinstance(fs, (int, float)):
                             if fs > 18: title_sizes.append(float(fs))
                             else:       body_sizes.append(float(fs))
+                        # Text colors are huge brand signal — Snowflake's
+                        # cyan #29B5E8 appears 25x as font color but only
+                        # 229x as fill. Counting both gives us a complete
+                        # picture without double-attributing in any role.
+                        fc = getattr(run, "font_color", None)
+                        hex_val = _try_resolve(fc, theme)
+                        if hex_val:
+                            color_counter[hex_val] += 1
                 if getattr(el, "element_type", None) == "BridgeChart":
                     ct = getattr(el, "chart_type", None)
                     if ct: chart_types[ct] += 1
