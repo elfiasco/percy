@@ -1,7 +1,7 @@
 {
   "slug": "caterpillar",
   "display_name": "Caterpillar",
-  "description": "Brand mined from Caterpillar's investor document.",
+  "description": "Industrial brand mined from Caterpillar's 2026 investor presentation (agent v2).",
   "source_doc": "caterpillar_20260503_CI-Investor-Presentation-2026.pdf",
   "source_doc_slides": 20,
   "source_doc_elements": 881,
@@ -81,7 +81,7 @@
       "avg_body_size": 14.0
     },
     "docs_scanned": 1,
-    "extracted_at": 1778558976
+    "extracted_at": 1778559973
   },
   "palette": [
     {
@@ -196,7 +196,7 @@
     "primary_font": "BCDFEE+Arial Nova Cond",
     "sample_element_count": 881,
     "sample_doc_count": 1,
-    "extracted_at": 1778558976
+    "extracted_at": 1778559973
   },
   "instructions_md": "",
   "items": [
@@ -204,139 +204,449 @@
       "kind": "element",
       "order_index": 0,
       "provenance": {
-        "fingerprint": "('BridgeText', 'top-left', 'xs', True, 'none', None)",
-        "member_count": 30,
-        "members": [
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 2,
-            "element_id": "12"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 3,
-            "element_id": "359"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 3,
-            "element_id": "360"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 4,
-            "element_id": "14"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 6,
-            "element_id": "32"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 6,
-            "element_id": "33"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 7,
-            "element_id": "24"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 7,
-            "element_id": "25"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 8,
-            "element_id": "16"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 8,
-            "element_id": "17"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 9,
-            "element_id": "21"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 10,
-            "element_id": "20"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 10,
-            "element_id": "21"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 11,
-            "element_id": "7"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 11,
-            "element_id": "8"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 11,
-            "element_id": "9"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 11,
-            "element_id": "15"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 11,
-            "element_id": "16"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 11,
-            "element_id": "17"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 13,
-            "element_id": "14"
-          }
+        "source": "agent_v2",
+        "slide_n": 2,
+        "want_kind": "element",
+        "element_ids": [
+          "8"
         ]
       },
       "template": {
-        "id": "e5640ff0904648f2a9b3ecc01e3786fe",
-        "name": "Element pattern 9",
-        "description": "Seen 30\u00d7 across 1 refs",
+        "id": "376cbaf33afb42cb8dd7c50e96d6b97d",
+        "name": "Page Number Footer",
+        "description": "Numeric page indicator positioned in the bottom right corner of a slide.",
         "category": "Induced:caterpillar",
         "slide_script": null,
         "preview_image": null,
         "is_builtin": false,
-        "created_at": 1778558976.4593306,
-        "updated_at": 1778558976.459331,
+        "created_at": 1778560130.4272165,
+        "updated_at": 1778560130.4272172,
         "tags": [
-          "induced",
-          "text"
+          "footer",
+          "page-number"
         ],
-        "inputs_schema": {},
-        "sample_inputs": {},
+        "inputs_schema": {
+          "page_number": {
+            "type": "string",
+            "required": true,
+            "default": "",
+            "description": "The numeric page number to display"
+          }
+        },
+        "sample_inputs": {
+          "page_number": "2"
+        },
         "layout": [
           {
             "kind": "text",
-            "alias": "text_12",
+            "alias": "page_num_text",
             "body": {
-              "text": "Forward-Looking Statements",
+              "text": "{{page_number}}",
+              "position": {
+                "left_in": 12.9917,
+                "top_in": 7.1005,
+                "width_in": 0.0631,
+                "height_in": 0.1585
+              },
+              "font_name": "BCDEEE+ArialNarrow",
+              "font_size": 9.96,
+              "font_bold": false,
+              "font_italic": false,
+              "text_color": "#000000",
+              "text_align": "center",
+              "name": "PageNumberText"
+            }
+          }
+        ],
+        "connects": {}
+      }
+    },
+    {
+      "kind": "element",
+      "order_index": 0,
+      "provenance": {
+        "source": "agent_v2",
+        "slide_n": 13,
+        "want_kind": "element",
+        "element_ids": [
+          "15"
+        ]
+      },
+      "template": {
+        "id": "42dc02beec074c22a6722d5dd0468e50",
+        "name": "Slide Title",
+        "description": "Main headline text for the slide.",
+        "category": "Induced:caterpillar",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778560130.434541,
+        "updated_at": 1778560130.4345412,
+        "tags": [
+          "title"
+        ],
+        "inputs_schema": {
+          "title_text": {
+            "type": "string",
+            "required": true,
+            "default": "",
+            "description": "Headline text to display"
+          }
+        },
+        "sample_inputs": {
+          "title_text": "Secular Tailwinds Support Multi-Year Growth"
+        },
+        "layout": [
+          {
+            "kind": "text",
+            "alias": "title_text",
+            "body": {
+              "text": "{{title_text}}",
               "position": {
                 "left_in": 0.9167,
                 "top_in": 0.5037,
-                "width_in": 5.0554,
+                "width_in": 7.8126,
                 "height_in": 0.5304
               },
+              "font_name": "BCDGEE+Arial Nova Cond,Bold",
+              "font_size": 32.04,
+              "font_bold": true,
+              "font_italic": false,
+              "text_color": "#000000",
+              "text_align": "left",
+              "name": "Text_15"
+            }
+          }
+        ],
+        "connects": {}
+      }
+    },
+    {
+      "kind": "element",
+      "order_index": 0,
+      "provenance": {
+        "source": "agent_v2",
+        "slide_n": 13,
+        "want_kind": "element",
+        "element_ids": [
+          "14"
+        ]
+      },
+      "template": {
+        "id": "1ccb3b1f08b74db5bfe53c20d684e37a",
+        "name": "Subtitle Text",
+        "description": "A centered subtitle below the main title.",
+        "category": "Induced:caterpillar",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778560130.441755,
+        "updated_at": 1778560130.441755,
+        "tags": [
+          "subtitle"
+        ],
+        "inputs_schema": {
+          "subtitle_text": {
+            "type": "string",
+            "required": true,
+            "default": "",
+            "description": "The subtitle text to display"
+          }
+        },
+        "sample_inputs": {
+          "subtitle_text": "WE ARE WELL POSITIONED TO PARTICIPATE IN THE FASTEST-GROWING CONSTRUCTION SEGMENTS"
+        },
+        "layout": [
+          {
+            "kind": "text",
+            "alias": "subtitle",
+            "body": {
+              "text": "{{subtitle_text}}",
+              "position": {
+                "left_in": 0.9167,
+                "top_in": 1.0812,
+                "width_in": 8.4112,
+                "height_in": 0.2239
+              },
+              "font_name": "BCDEEE+ArialNarrow",
+              "font_size": 14.06,
+              "font_bold": false,
+              "font_italic": false,
+              "text_color": "#7F7F7F",
+              "text_align": "center",
+              "name": "Subtitle"
+            }
+          }
+        ],
+        "connects": {}
+      }
+    },
+    {
+      "kind": "element",
+      "order_index": 0,
+      "provenance": {
+        "source": "agent_v2",
+        "slide_n": 15,
+        "want_kind": "group",
+        "element_ids": [
+          "17",
+          "18"
+        ]
+      },
+      "template": {
+        "id": "a889fbeea63e41e2ae304131ab8db1e8",
+        "name": "Company Title Header",
+        "description": "Reusable header combining company name and optional subtitle.",
+        "category": "Induced:caterpillar",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778560130.4482913,
+        "updated_at": 1778560130.4482913,
+        "tags": [
+          "title",
+          "header"
+        ],
+        "inputs_schema": {
+          "company_name": {
+            "type": "string",
+            "required": true,
+            "default": "",
+            "description": "Main company title"
+          },
+          "subtitle": {
+            "type": "string",
+            "required": false,
+            "default": "",
+            "description": "Optional subtitle text"
+          }
+        },
+        "sample_inputs": {
+          "company_name": "CatRentals",
+          "subtitle": "SM"
+        },
+        "layout": [
+          {
+            "kind": "text",
+            "alias": "title_text",
+            "body": {
+              "text": "{{company_name}}",
+              "position": {
+                "left_in": 0.9167,
+                "top_in": 0.5037,
+                "width_in": 1.9692,
+                "height_in": 0.5304
+              },
+              "font_name": "BCDGEE+Arial Nova Cond,Bold",
+              "font_size": 32.04,
+              "font_bold": true,
+              "font_italic": false,
+              "text_color": "#000000",
+              "text_align": "left",
+              "name": "TitleText"
+            }
+          },
+          {
+            "kind": "text",
+            "alias": "subtitle_text",
+            "body": {
+              "text": "{{subtitle}}",
+              "position": {
+                "left_in": 2.8786,
+                "top_in": 0.6875,
+                "width_in": 0.1294,
+                "height_in": 0.1212
+              },
+              "font_name": "BCDFEE+Arial Nova Cond",
+              "font_size": 7.32,
+              "font_bold": false,
+              "font_italic": false,
+              "text_color": "#000000",
+              "text_align": "left",
+              "name": "SubtitleText"
+            }
+          }
+        ],
+        "connects": {}
+      }
+    },
+    {
+      "kind": "element",
+      "order_index": 0,
+      "provenance": {
+        "source": "agent_v2",
+        "slide_n": 17,
+        "want_kind": "group",
+        "element_ids": [
+          "12",
+          "21"
+        ]
+      },
+      "template": {
+        "id": "28a6155fab374b67ade1bbb1c42283bb",
+        "name": "Construction Industries Header Banner",
+        "description": "Header banner with main title and subtitle for construction industry overview slides.",
+        "category": "Induced:caterpillar",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778560130.4548278,
+        "updated_at": 1778560130.4548278,
+        "tags": [
+          "header",
+          "title",
+          "construction"
+        ],
+        "inputs_schema": {
+          "main_title": {
+            "type": "string",
+            "required": true,
+            "default": "",
+            "description": "Primary headline text"
+          },
+          "subtitle_prefix": {
+            "type": "string",
+            "required": true,
+            "default": "",
+            "description": "Subtitle prefix (e.g., \"CONSTRUCTION INDUSTRIES OVERVIEW\")"
+          },
+          "year": {
+            "type": "string",
+            "required": true,
+            "default": "",
+            "description": "Year to append to subtitle"
+          }
+        },
+        "sample_inputs": {
+          "main_title": "Advanced Technology Leader",
+          "subtitle_prefix": "CONSTRUCTION INDUSTRIES OVERVIEW",
+          "year": "2026"
+        },
+        "layout": [
+          {
+            "kind": "text",
+            "alias": "subtitle",
+            "body": {
+              "text": "{{subtitle_prefix}} {{year}}",
+              "position": {
+                "left_in": 4.9443,
+                "top_in": 7.0934,
+                "width_in": 2.8704,
+                "height_in": 0.1828
+              },
+              "font_name": "BCDFEE+Arial Nova Cond",
+              "font_size": 11.04,
+              "font_bold": false,
+              "font_italic": false,
+              "text_color": "#BFBFBF",
+              "name": "SubtitleText"
+            }
+          },
+          {
+            "kind": "text",
+            "alias": "main_title",
+            "body": {
+              "text": "{{main_title}}",
+              "position": {
+                "left_in": 0.9167,
+                "top_in": 0.502,
+                "width_in": 5.1224,
+                "height_in": 0.5304
+              },
+              "font_name": "BCDGEE+Arial Nova Cond,Bold",
+              "font_size": 32.04,
+              "font_bold": true,
+              "font_italic": false,
+              "text_color": "#000000",
+              "name": "MainTitleText"
+            }
+          }
+        ],
+        "connects": {}
+      }
+    },
+    {
+      "kind": "element",
+      "order_index": 0,
+      "provenance": {
+        "source": "agent_v2",
+        "slide_n": 19,
+        "want_kind": "element",
+        "element_ids": [
+          "13"
+        ]
+      },
+      "template": {
+        "id": "a32f7b0995044d30a2f408732fbabd66",
+        "name": "Construction Industries Overview Title",
+        "description": "Slide title for Construction Industries Overview 2026 slide.",
+        "category": "Induced:caterpillar",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778560130.4630227,
+        "updated_at": 1778560130.4630227,
+        "tags": [
+          "title"
+        ],
+        "inputs_schema": {
+          "main_title": {
+            "type": "string",
+            "required": true,
+            "default": "",
+            "description": "Main title text (e.g., \"CONSTRUCTION INDUSTRIES OVERVIEW\")"
+          },
+          "year": {
+            "type": "string",
+            "required": true,
+            "default": "",
+            "description": "Year to display in highlighted color (e.g., \"2026\")"
+          }
+        },
+        "sample_inputs": {
+          "main_title": "CONSTRUCTION INDUSTRIES OVERVIEW",
+          "year": "2026"
+        },
+        "layout": [
+          {
+            "kind": "text",
+            "alias": "title_textbox",
+            "body": {
+              "text": [
+                {
+                  "runs": [
+                    {
+                      "text": "{{main_title}}",
+                      "font_name": "BCDFEE+Arial Nova Cond",
+                      "font_size": 11.04,
+                      "font_bold": false,
+                      "font_italic": false,
+                      "font_color": "#BFBFBF"
+                    },
+                    {
+                      "text": " {{year}}",
+                      "font_name": "BCDGEE+Arial Nova Cond,Bold",
+                      "font_size": 11.04,
+                      "font_bold": true,
+                      "font_italic": false,
+                      "font_color": "#FFC000"
+                    }
+                  ],
+                  "alignment": "center",
+                  "line_spacing": null
+                }
+              ],
+              "position": {
+                "left_in": 4.9443,
+                "top_in": 7.0934,
+                "width_in": 2.8704,
+                "height_in": 0.1828
+              },
+              "font_name": "BCDFEE+Arial Nova Cond",
+              "font_size": 11.04,
+              "font_bold": false,
+              "font_italic": false,
+              "text_color": "#BFBFBF",
               "name": "Text_12"
             }
           }
@@ -348,140 +658,85 @@
       "kind": "element",
       "order_index": 0,
       "provenance": {
-        "fingerprint": "('BridgeText', 'bot-mid', 'xs', True, 'none', None)",
-        "member_count": 23,
-        "members": [
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 1,
-            "element_id": "25"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 2,
-            "element_id": "6"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 3,
-            "element_id": "356"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 4,
-            "element_id": "10"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 5,
-            "element_id": "24"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 6,
-            "element_id": "29"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 7,
-            "element_id": "21"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 8,
-            "element_id": "13"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 9,
-            "element_id": "17"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 9,
-            "element_id": "22"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 9,
-            "element_id": "23"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 10,
-            "element_id": "17"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 11,
-            "element_id": "4"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 12,
-            "element_id": "24"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 13,
-            "element_id": "11"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 14,
-            "element_id": "10"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 15,
-            "element_id": "13"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 16,
-            "element_id": "12"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 17,
-            "element_id": "12"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 17,
-            "element_id": "20"
-          }
+        "source": "agent_v2",
+        "slide_n": 19,
+        "want_kind": "group",
+        "element_ids": [
+          "19",
+          "20"
         ]
       },
       "template": {
-        "id": "bca1bd9cf7064f4f9b1a9221ee275ef5",
-        "name": "Element pattern 10",
-        "description": "Seen 23\u00d7 across 1 refs",
+        "id": "53c0d35da3314de587a81f1977655252",
+        "name": "KPI Tile",
+        "description": "Large KPI value with accompanying label.",
         "category": "Induced:caterpillar",
         "slide_script": null,
         "preview_image": null,
         "is_builtin": false,
-        "created_at": 1778558976.4659379,
-        "updated_at": 1778558976.465938,
+        "created_at": 1778560130.470253,
+        "updated_at": 1778560130.4702532,
         "tags": [
-          "induced",
-          "text"
+          "kpi",
+          "tile"
         ],
-        "inputs_schema": {},
-        "sample_inputs": {},
+        "inputs_schema": {
+          "value_text": {
+            "type": "string",
+            "required": true,
+            "default": "",
+            "description": "The main KPI numeric or ratio value."
+          },
+          "label_text": {
+            "type": "string",
+            "required": true,
+            "default": "",
+            "description": "Descriptive label for the KPI."
+          }
+        },
+        "sample_inputs": {
+          "value_text": "1.25x",
+          "label_text": "SALES TO USERS GROWTH"
+        },
         "layout": [
           {
             "kind": "text",
-            "alias": "text_24",
+            "alias": "kpi_value",
             "body": {
-              "text": "CONSTRUCTION INDUSTRIES OVERVIEW ",
+              "text": "{{value_text}}",
               "position": {
-                "left_in": 4.9443,
-                "top_in": 7.0934,
-                "width_in": 2.8704,
-                "height_in": 0.1828
+                "left_in": 1.1853,
+                "top_in": 2.568,
+                "width_in": 2.6259,
+                "height_in": 1.1489
               },
-              "name": "Text_24"
+              "font_name": "BCDKEE+Arial-Black",
+              "font_size": 63.0,
+              "font_bold": true,
+              "font_italic": false,
+              "text_color": "#FFC000",
+              "text_align": "center",
+              "name": "KPI Value"
+            }
+          },
+          {
+            "kind": "text",
+            "alias": "kpi_label",
+            "body": {
+              "text": "{{label_text}}",
+              "position": {
+                "left_in": 1.345,
+                "top_in": 3.6996,
+                "width_in": 1.9923,
+                "height_in": 1.2736
+              },
+              "font_name": "BCDNEE+ArialMT",
+              "font_size": 27.96,
+              "font_bold": false,
+              "font_italic": false,
+              "text_color": "#FFFFFF",
+              "text_align": "center",
+              "name": "KPI Label"
             }
           }
         ],
@@ -492,158 +747,56 @@
       "kind": "element",
       "order_index": 0,
       "provenance": {
-        "fingerprint": "('BridgeText', 'mid-left', 'xs', True, 'none', None)",
-        "member_count": 9,
-        "members": [
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 11,
-            "element_id": "10"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 11,
-            "element_id": "11"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 11,
-            "element_id": "12"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 11,
-            "element_id": "18"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 11,
-            "element_id": "19"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 11,
-            "element_id": "20"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 11,
-            "element_id": "21"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 19,
-            "element_id": "19"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 19,
-            "element_id": "20"
-          }
+        "source": "agent_v2",
+        "slide_n": 20,
+        "want_kind": "element",
+        "element_ids": [
+          "11"
         ]
       },
       "template": {
-        "id": "1eeb3e746a4d4a838773cea12e16a093",
-        "name": "Element pattern 11",
-        "description": "Seen 9\u00d7 across 1 refs",
+        "id": "dc412a7a7b6e4a73a9075d776dbe2bc8",
+        "name": "Glossary Title",
+        "description": "Reusable title element for glossary slides.",
         "category": "Induced:caterpillar",
         "slide_script": null,
         "preview_image": null,
         "is_builtin": false,
-        "created_at": 1778558976.4726102,
-        "updated_at": 1778558976.4726105,
+        "created_at": 1778560130.477249,
+        "updated_at": 1778560130.4772494,
         "tags": [
-          "induced",
-          "text"
+          "title",
+          "glossary"
         ],
-        "inputs_schema": {},
-        "sample_inputs": {},
+        "inputs_schema": {
+          "title_text": {
+            "type": "string",
+            "required": true,
+            "default": "Glossary",
+            "description": "Text to display as the glossary title"
+          }
+        },
+        "sample_inputs": {
+          "title_text": "Glossary"
+        },
         "layout": [
           {
             "kind": "text",
-            "alias": "text_10",
+            "alias": "title",
             "body": {
-              "text": "PORTFOLIO ",
+              "text": "{{title_text}}",
               "position": {
-                "left_in": 0.9107,
-                "top_in": 4.5134,
-                "width_in": 1.605,
-                "height_in": 0.7974
+                "left_in": 0.9167,
+                "top_in": 0.5037,
+                "width_in": 1.5424,
+                "height_in": 0.5304
               },
-              "name": "Text_10"
-            }
-          }
-        ],
-        "connects": {}
-      }
-    },
-    {
-      "kind": "element",
-      "order_index": 0,
-      "provenance": {
-        "fingerprint": "('BridgeText', 'bot-left', 'xs', True, 'none', None)",
-        "member_count": 6,
-        "members": [
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 2,
-            "element_id": "11"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 11,
-            "element_id": "13"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 11,
-            "element_id": "14"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 17,
-            "element_id": "16"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 17,
-            "element_id": "17"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 17,
-            "element_id": "19"
-          }
-        ]
-      },
-      "template": {
-        "id": "d91baacb7f624ef2bf76fff6b0454814",
-        "name": "Element pattern 12",
-        "description": "Seen 6\u00d7 across 1 refs",
-        "category": "Induced:caterpillar",
-        "slide_script": null,
-        "preview_image": null,
-        "is_builtin": false,
-        "created_at": 1778558976.4794185,
-        "updated_at": 1778558976.4794185,
-        "tags": [
-          "induced",
-          "text"
-        ],
-        "inputs_schema": {},
-        "sample_inputs": {},
-        "layout": [
-          {
-            "kind": "text",
-            "alias": "text_11",
-            "body": {
-              "text": "A reconciliation of non-GAAP financial information can be found in our press release describing fourth-quarter 2025 financial results which is available on our website at ",
-              "position": {
-                "left_in": 0.8473,
-                "top_in": 6.0377,
-                "width_in": 11.174,
-                "height_in": 0.3787
-              },
+              "font_name": "BCDGEE+Arial Nova Cond,Bold",
+              "font_size": 32.04,
+              "font_bold": true,
+              "font_italic": false,
+              "text_color": "#000000",
+              "text_align": "left",
               "name": "Text_11"
             }
           }
@@ -655,245 +808,91 @@
       "kind": "element",
       "order_index": 0,
       "provenance": {
-        "fingerprint": "('BridgeText', 'top-left', 's', True, 'none', None)",
-        "member_count": 5,
-        "members": [
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 2,
-            "element_id": "9"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 4,
-            "element_id": "13"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 9,
-            "element_id": "20"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 18,
-            "element_id": "10"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 19,
-            "element_id": "21"
-          }
+        "source": "agent_v2",
+        "slide_n": 20,
+        "want_kind": "group",
+        "element_ids": [
+          "3",
+          "5"
         ]
       },
       "template": {
-        "id": "0475da6143ab42938b1336c8384627f2",
-        "name": "Element pattern 13",
-        "description": "Seen 5\u00d7 across 1 refs",
+        "id": "c6d7afd90f3e428cadac3cb136758510",
+        "name": "Section Header with Subtitle and Page Number",
+        "description": "Header group combining a subtitle (with optional year) and the current slide page number.",
         "category": "Induced:caterpillar",
         "slide_script": null,
         "preview_image": null,
         "is_builtin": false,
-        "created_at": 1778558976.4860513,
-        "updated_at": 1778558976.4860513,
+        "created_at": 1778560130.4838843,
+        "updated_at": 1778560130.4838846,
         "tags": [
-          "induced",
-          "text"
+          "header",
+          "subtitle",
+          "page-number"
         ],
-        "inputs_schema": {},
-        "sample_inputs": {},
+        "inputs_schema": {
+          "title": {
+            "type": "string",
+            "required": true,
+            "default": "",
+            "description": "Main subtitle text"
+          },
+          "year": {
+            "type": "string",
+            "required": false,
+            "default": "",
+            "description": "Optional year to append after a space"
+          },
+          "page_number": {
+            "type": "string",
+            "required": true,
+            "default": "",
+            "description": "Slide page number"
+          }
+        },
+        "sample_inputs": {
+          "title": "CONSTRUCTION INDUSTRIES OVERVIEW",
+          "year": "2026",
+          "page_number": "20"
+        },
         "layout": [
           {
             "kind": "text",
-            "alias": "text_9",
+            "alias": "subtitle",
             "body": {
-              "text": "Certain statements in this financial review relate to future events and expectations and are forward-looking statements within the meaning of the Private Securities Litigation ",
+              "text": "{{title}}{{#if year}} {{year}}{{/if}}",
               "position": {
-                "left_in": 0.8473,
-                "top_in": 1.9783,
-                "width_in": 11.6604,
-                "height_in": 0.9191
+                "left_in": 4.9443,
+                "top_in": 7.0934,
+                "width_in": 2.8704,
+                "height_in": 0.1828
               },
-              "name": "Text_9"
+              "font_name": "BCDFEE+Arial Nova Cond",
+              "font_size": 11.04,
+              "font_bold": false,
+              "font_italic": false,
+              "text_color": "#BFBFBF",
+              "name": "SubtitleText"
             }
-          }
-        ],
-        "connects": {}
-      }
-    },
-    {
-      "kind": "element",
-      "order_index": 0,
-      "provenance": {
-        "fingerprint": "('BridgeText', 'mid-left', 's', True, 'none', None)",
-        "member_count": 3,
-        "members": [
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 1,
-            "element_id": "28"
           },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 5,
-            "element_id": "29"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 12,
-            "element_id": "27"
-          }
-        ]
-      },
-      "template": {
-        "id": "744167daa3ae43b0b1d90416f80ade03",
-        "name": "Element pattern 14",
-        "description": "Seen 3\u00d7 across 1 refs",
-        "category": "Induced:caterpillar",
-        "slide_script": null,
-        "preview_image": null,
-        "is_builtin": false,
-        "created_at": 1778558976.4943519,
-        "updated_at": 1778558976.494352,
-        "tags": [
-          "induced",
-          "text"
-        ],
-        "inputs_schema": {},
-        "sample_inputs": {},
-        "layout": [
           {
             "kind": "text",
-            "alias": "text_28",
+            "alias": "page-number",
             "body": {
-              "text": "CONSTRUCTION",
+              "text": "{{page_number}}",
               "position": {
-                "left_in": 0.844,
-                "top_in": 3.799,
-                "width_in": 6.631,
-                "height_in": 1.7857
+                "left_in": 12.9283,
+                "top_in": 7.1005,
+                "width_in": 0.1264,
+                "height_in": 0.1585
               },
-              "name": "Text_28"
-            }
-          }
-        ],
-        "connects": {}
-      }
-    },
-    {
-      "kind": "element",
-      "order_index": 0,
-      "provenance": {
-        "fingerprint": "('BridgeShape', 'bot-left', 'xs', False, 'solid', None)",
-        "member_count": 3,
-        "members": [
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 2,
-            "element_id": "1"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 3,
-            "element_id": "352"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 8,
-            "element_id": "2"
-          }
-        ]
-      },
-      "template": {
-        "id": "bae2818f2cf44dfcb75dbb3fe9c7002a",
-        "name": "Element pattern 15",
-        "description": "Seen 3\u00d7 across 1 refs",
-        "category": "Induced:caterpillar",
-        "slide_script": null,
-        "preview_image": null,
-        "is_builtin": false,
-        "created_at": 1778558976.500869,
-        "updated_at": 1778558976.500869,
-        "tags": [
-          "induced",
-          "shape"
-        ],
-        "inputs_schema": {},
-        "sample_inputs": {},
-        "layout": [
-          {
-            "kind": "shape",
-            "alias": "shape_1",
-            "body": {
-              "geometry_preset": "rect",
-              "position": {
-                "left_in": 0.8472,
-                "top_in": 6.3967,
-                "width_in": 1.9467,
-                "height_in": 0.0083
-              },
-              "name": "Shape_1",
-              "fill_color": "#4371C0"
-            }
-          }
-        ],
-        "connects": {}
-      }
-    },
-    {
-      "kind": "element",
-      "order_index": 0,
-      "provenance": {
-        "fingerprint": "('BridgeConnector', 'mid-mid', 'unknown', False, 'none', None)",
-        "member_count": 3,
-        "members": [
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 3,
-            "element_id": "2"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 19,
-            "element_id": "2"
-          },
-          {
-            "ref_id": "ref_hgUrSqtNUi0CI1MN",
-            "slide_n": 19,
-            "element_id": "3"
-          }
-        ]
-      },
-      "template": {
-        "id": "fa9017b482b340daa56163100240e17f",
-        "name": "Element pattern 16",
-        "description": "Seen 3\u00d7 across 1 refs",
-        "category": "Induced:caterpillar",
-        "slide_script": null,
-        "preview_image": null,
-        "is_builtin": false,
-        "created_at": 1778558976.5072336,
-        "updated_at": 1778558976.5072339,
-        "tags": [
-          "induced",
-          "connector"
-        ],
-        "inputs_schema": {},
-        "sample_inputs": {},
-        "layout": [
-          {
-            "kind": "connector",
-            "alias": "line_2",
-            "body": {
-              "connector_type": "straight",
-              "start": {
-                "x_in": 6.99,
-                "y_in": 4.4029
-              },
-              "end": {
-                "x_in": 11.9444,
-                "y_in": 4.4029
-              },
-              "name": "Line_2"
+              "font_name": "BCDEEE+ArialNarrow",
+              "font_size": 9.96,
+              "font_bold": false,
+              "font_italic": false,
+              "text_color": "#000000",
+              "name": "PageNumberText"
             }
           }
         ],
@@ -902,5 +901,5 @@
     }
   ],
   "snapshot_version": 1,
-  "snapshot_created_at": 1778558976
+  "snapshot_created_at": 1778560130
 }

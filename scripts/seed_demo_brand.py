@@ -66,6 +66,10 @@ def main() -> int:
                     help="Cap on candidates the inducer asks the LLM about")
     p.add_argument("--no-llm", action="store_true",
                     help="Skip LLM polish during induction (faster + free, lower quality names)")
+    p.add_argument("--induction-mode", choices=["cluster", "agent"], default="cluster",
+                    help=("cluster = v1 (deterministic fingerprint + LLM polish). "
+                          "agent = v2 (two-phase agentic: per-slide discovery + per-want authoring with full Bridge JSON). "
+                          "agent mode produces higher-fidelity templates but uses more LLM tokens."))
     args = p.parse_args()
 
     doc_path = Path(args.doc)
@@ -141,31 +145,50 @@ def main() -> int:
     chart_styles = (profile_dict or {}).get("chart_styles") or []
     print(f"   chart styles fingerprinted: {len(chart_styles)} types")
 
-    # ── 4. LLM-powered template induction ──
-    banner("3. Mining template candidates")
-    from percy.agent import template_induction
+    # ── 4. Template induction ──
+    banner(f"3. Mining template candidates  (mode={args.induction_mode})")
     llm_call = None
     if not args.no_llm:
         try:
             from app.backend.agent_chat import _make_llm_call
             llm_call = _make_llm_call()
-            print("   LLM polish: ENABLED")
+            print("   LLM: ENABLED")
         except Exception as exc:
-            print(f"   LLM polish: disabled ({exc})")
+            print(f"   LLM: disabled ({exc})")
 
-    candidates = template_induction.induce_templates(
-        {ref["id"]: doc}, llm_call=llm_call,
-        max_candidates=args.max_candidates,
-    )
+    if args.induction_mode == "agent":
+        if llm_call is None:
+            print("   agent mode requires LLM — falling back to cluster mode")
+            from percy.agent import template_induction
+            candidates = template_induction.induce_templates(
+                {ref["id"]: doc}, llm_call=None,
+                max_candidates=args.max_candidates,
+            )
+        else:
+            from percy.agent import template_induction_v2 as _ind_v2
+            candidates = _ind_v2.induce_templates_agentic(
+                {ref["id"]: doc}, llm_call=llm_call,
+                max_wants_per_doc=args.max_candidates,
+            )
+    else:
+        from percy.agent import template_induction
+        candidates = template_induction.induce_templates(
+            {ref["id"]: doc}, llm_call=llm_call,
+            max_candidates=args.max_candidates,
+        )
     print(f"   {len(candidates)} candidates returned (sorted by confidence)")
-    for i, c in enumerate(candidates[:12]):
+    for i, c in enumerate(candidates[:15]):
         print(f"     #{i+1:2}  [{c['kind']:7}] {c['confidence']:.2f}  {c['name'][:55]}")
 
     # ── 5. Accept top N ──
     banner(f"4. Accepting top {args.accept_count}")
+    if args.induction_mode == "agent":
+        from percy.agent import template_induction_v2 as _accept_mod
+    else:
+        from percy.agent import template_induction as _accept_mod
     accepted = []
     for c in candidates[:args.accept_count]:
-        tid = template_induction.accept_candidate(c, category=f"Induced:{args.slug}")
+        tid = _accept_mod.accept_candidate(c, category=f"Induced:{args.slug}")
         auth_db.add_template_set_item(
             tset["id"], tid, kind=c["kind"],
             added_by=user["id"], provenance=c.get("provenance") or {},

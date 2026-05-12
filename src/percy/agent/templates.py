@@ -234,9 +234,49 @@ def apply_template(
     if errors:
         return {"ok": False, "error": "; ".join(errors)}
 
+    # Pre-process derived inputs. The modular text template (std.el.text)
+    # supports a `runs` input — a list of segments with mixed formatting.
+    # When set, we synthesize a `paragraphs` input matching what
+    # percy.bridge.builders.build_text expects so the layout can simply
+    # reference `{{paragraphs}}`. This keeps the template engine logic-free
+    # while still supporting the runs feature.
+    runs_input = inputs.get("runs")
+    if isinstance(runs_input, list) and runs_input:
+        # Bridge expects: paragraphs=[{runs:[{text, font_bold, font_italic,
+        # font_color, font_size, font_name, ...}]}]
+        # We normalize the agent-friendly short keys (bold, italic, color,
+        # size, font) to the Bridge-canonical font_* names so any caller
+        # can use the shorthand.
+        def _norm(seg: dict) -> dict:
+            normalized = {"text": str(seg.get("text", ""))}
+            if "bold" in seg or "font_bold" in seg:
+                normalized["font_bold"] = bool(seg.get("bold", seg.get("font_bold", False)))
+            if "italic" in seg or "font_italic" in seg:
+                normalized["font_italic"] = bool(seg.get("italic", seg.get("font_italic", False)))
+            if "color" in seg or "font_color" in seg:
+                normalized["font_color"] = seg.get("color", seg.get("font_color"))
+            if "size" in seg or "font_size" in seg:
+                normalized["font_size"] = seg.get("size", seg.get("font_size"))
+            if "font" in seg or "font_name" in seg:
+                normalized["font_name"] = seg.get("font", seg.get("font_name"))
+            return normalized
+        inputs["paragraphs"] = [{"runs": [_norm(seg) for seg in runs_input if isinstance(seg, dict)]}]
+    else:
+        # Make {{paragraphs}} substitute to None so the template body's
+        # paragraphs key is dropped during cleanup.
+        inputs.setdefault("paragraphs", None)
+
     # Substitute inputs into layout (simple {{var}} replacement in strings)
     layout = template.get("layout") or []
     materialized_layout = _substitute(layout, inputs)
+
+    # Strip None-valued body keys so the create_<kind> endpoints see clean
+    # JSON. This is what makes `{{paragraphs}}` disappear when runs is empty.
+    for entry in materialized_layout:
+        body = entry.get("body") or {}
+        for k in list(body.keys()):
+            if body[k] is None:
+                del body[k]
     materialized_connects = _substitute(template.get("connects") or {}, inputs)
     slide_script = _substitute_str(template.get("slide_script"), inputs) if template.get("slide_script") else None
 
@@ -303,8 +343,23 @@ def apply_template(
 # ── Substitution ────────────────────────────────────────────────────────────
 
 
+_LONE_VAR_RE = None  # lazy-compiled below
+
+
 def _substitute(obj: Any, inputs: dict) -> Any:
-    """Recursively walk dict/list and replace {{var}} in strings with inputs[var]."""
+    """Recursively walk dict/list and replace {{var}} references.
+
+    Two substitution modes:
+      * **String interpolation** — a string with embedded {{var}} keeps its
+        string nature; refs replaced inline via _substitute_str.
+      * **Typed pass-through** — when the entire string is a single
+        ``"{{var}}"`` reference (no surrounding text), the input's actual
+        type wins: a list stays a list, a number stays a number, a bool
+        stays a bool. This is critical for fields like ``runs``,
+        ``categories``, ``values``, ``font_size`` where the template body
+        carries a placeholder but the backend create_* endpoint expects
+        a specific typed value.
+    """
     if isinstance(obj, str):
         return _substitute_str(obj, inputs)
     if isinstance(obj, dict):
@@ -314,13 +369,30 @@ def _substitute(obj: Any, inputs: dict) -> Any:
     return obj
 
 
-def _substitute_str(s: str | None, inputs: dict) -> str | None:
+def _substitute_str(s: str | None, inputs: dict) -> Any:
+    """Replace {{var}} references. Returns the input's native type when the
+    string is a single bare reference; otherwise returns the interpolated
+    string."""
     if s is None:
         return None
     import re as _re
-    def repl(m: _re.Match) -> str:
-        key = m.group(1).strip()
-        val = inputs.get(key, m.group(0))
+    global _LONE_VAR_RE
+    if _LONE_VAR_RE is None:
+        _LONE_VAR_RE = _re.compile(r"^\s*\{\{\s*([A-Za-z_][A-Za-z_0-9]*)\s*\}\}\s*$")
+
+    # Typed pass-through: the WHOLE string is "{{var}}" → return native value.
+    m = _LONE_VAR_RE.match(s)
+    if m:
+        key = m.group(1)
+        if key in inputs:
+            return inputs[key]
+        # Fall through to string mode (keeps the placeholder visible).
+
+    def repl(m2: _re.Match) -> str:
+        key = m2.group(1).strip()
+        val = inputs.get(key, m2.group(0))
+        # If we hit this branch we're inside a longer template string — coerce
+        # to str so the surrounding text stays intact.
         return str(val)
     return _re.sub(r"\{\{([^}]+)\}\}", repl, s)
 
