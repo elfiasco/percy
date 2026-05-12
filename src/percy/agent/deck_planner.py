@@ -167,8 +167,13 @@ render this slide. Each application is one template + its inputs.
     For example: a cover slide from element templates =
       [slide_title application, subtitle application, presenter line
        application]
-  * Use ELEMENT templates' `left_in` / `top_in` / `width_in` /
-    `height_in` inputs to place them appropriately when stacking.
+  * Each template exposes `element_aliases` (a list of element names
+    in its layout). For ANY element you can override geometry via
+    inputs named `<alias>_left`, `<alias>_top`, `<alias>_width`,
+    `<alias>_height` (inches), or `<alias>_font_size` (pt). All have
+    defaults from the template's prototype — only override when the
+    content needs more room or to compose multiple templates on one
+    slide without collisions. The canvas is 13.333 × 7.5 inches.
 
 Filling each template's inputs:
   * Read the instruction and extract the literal copy in quotes
@@ -209,16 +214,43 @@ def plan_single_slide(
     llm_call: Callable[[str, str], str],
 ) -> SlidePlan | None:
     """One LLM call: pick + fill a template for one slot."""
-    # Slim each template entry to keep prompt size manageable.
+    # Slim each template entry to keep prompt size manageable. Every
+    # template now exposes per-element geometry inputs (alias_left /
+    # alias_top / alias_width / alias_height / alias_font_size), which
+    # would flood the catalog if dumped in full. Split them out:
+    # the LLM sees content inputs prominently, plus a compact list of
+    # element aliases it can override geometry on if it wants.
     catalog: list[dict[str, Any]] = []
+    _GEO_SUFFIXES = ("_left", "_top", "_width", "_height", "_font_size")
     for t in available_templates:
+        full_schema = t.get("inputs_schema") or {}
+        content_schema: dict[str, Any] = {}
+        aliases: set[str] = set()
+        for key, inp_spec in full_schema.items():
+            for suf in _GEO_SUFFIXES:
+                if key.endswith(suf):
+                    aliases.add(key[: -len(suf)])
+                    break
+            else:
+                content_schema[key] = inp_spec
+        # Trim oversize defaults so the catalog stays compact.
+        for k, v in list(content_schema.items()):
+            if isinstance(v, dict) and isinstance(v.get("default"), str):
+                content_schema[k] = {**v, "default": v["default"][:120]}
         catalog.append({
             "id": t.get("id"),
             "name": t.get("name"),
             "description": (t.get("description") or "")[:200],
             "tags": (t.get("tags") or [])[:6],
-            "inputs_schema": t.get("inputs_schema") or {},
-            "sample_inputs": t.get("sample_inputs") or {},
+            "inputs_schema": content_schema,
+            "sample_inputs": {
+                k: v for k, v in (t.get("sample_inputs") or {}).items()
+                if k in content_schema
+            },
+            # Element aliases the LLM may override with `<alias>_left`,
+            # `<alias>_top`, `<alias>_width`, `<alias>_height`, or
+            # `<alias>_font_size` keys in the inputs dict.
+            "element_aliases": sorted(aliases)[:12],
         })
 
     user_payload = {
@@ -332,8 +364,7 @@ def apply_blueprint(
                     plan = fut.result()
                 except Exception as exc:
                     log.exception("apply_blueprint: planning failed for slot %d", spec.slot)
-                    plan = SlidePlan(slot=spec.slot, template_id="", template_name="",
-                                     inputs={}, error=str(exc))
+                    plan = SlidePlan(slot=spec.slot, error=str(exc))
                 if plan:
                     plans_by_slot[spec.slot] = plan
     else:

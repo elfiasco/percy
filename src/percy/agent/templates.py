@@ -283,6 +283,13 @@ def apply_template(
         for k in list(body.keys()):
             if body[k] is None:
                 del body[k]
+
+    # Auto-shrink text whose copy would visibly overflow its box. Runs
+    # regardless of whether the template parameterized font_size — it's
+    # a safety net for the agent picking templates whose source slide
+    # had short copy and being asked to render long copy. Pure heuristic;
+    # never grows font, only shrinks, and floors at 8pt.
+    _autoshrink_text_overflow(materialized_layout)
     materialized_connects = _substitute(template.get("connects") or {}, inputs)
     slide_script = _substitute_str(template.get("slide_script"), inputs) if template.get("slide_script") else None
 
@@ -344,6 +351,89 @@ def apply_template(
         "connects": connect_results,
         "slide_script_result": slide_script_result,
     }
+
+
+# ── Auto-shrink ─────────────────────────────────────────────────────────────
+
+
+def _autoshrink_text_overflow(layout: list[dict]) -> None:
+    """Clamp font_size on text-bearing elements whose substituted copy
+    would obviously overflow the element's bounding box.
+
+    Why this exists: templates capture box geometry verbatim from the
+    source slide they were induced from. A "subtitle" template with
+    box width 4in and font 24pt is sized to comfortably hold the
+    original ~12 chars. When the agent then fills it with a 50-char
+    subtitle, it visibly runs past the edge. This pass catches that
+    case at apply time.
+
+    Heuristic (intentionally simple, no font metrics):
+      * Proportional fonts average ~0.5 × font_pt per character.
+      * Capacity = (chars-per-line × line-count) where:
+            chars_per_line = floor(width_in × 144 / font_pt)
+            line_count     = floor(height_in × 72 / (font_pt × 1.15))
+      * If actual length is > 1.1× capacity, solve for the largest
+        font_pt that fits (preserve aspect ratio, ignore wrapping at
+        word boundaries — over-counting chars is fine here).
+      * Floor at 8pt so we never make text unreadable, and only apply
+        the shrink if the new size is meaningfully smaller (≥5% drop).
+
+    Operates in place on every element with text_runs.
+    """
+    import math
+    for entry in layout:
+        body = entry.get("body") or {}
+        runs = body.get("text_runs")
+        if not isinstance(runs, list) or not runs:
+            continue
+        pos = body.get("position") or {}
+        try:
+            w = float(pos.get("width_in") or 0)
+            h = float(pos.get("height_in") or 0)
+        except (TypeError, ValueError):
+            continue
+        if w <= 0 or h <= 0:
+            continue
+
+        text = "".join(
+            str(r.get("text", "")) for r in runs
+            if isinstance(r, dict) and r.get("text") is not None
+        )
+        if not text.strip():
+            continue
+
+        first = runs[0] if isinstance(runs[0], dict) else None
+        if not first:
+            continue
+        try:
+            fs = float(first.get("font_size") or 0)
+        except (TypeError, ValueError):
+            continue
+        if fs <= 0:
+            continue
+
+        chars_per_line = max(1, int(w * 144 / fs))
+        lines_avail    = max(1, int(h * 72 / (fs * 1.15)))
+        capacity       = chars_per_line * lines_avail
+        if len(text) <= capacity * 1.1:
+            continue
+
+        # Solve for fs' such that the capacity formula equals len(text):
+        #   (w*144/fs') * (h*72/(fs'*1.15)) = len(text)
+        #   fs'^2 = w * h * 144 * 72 / 1.15 / len(text)
+        target = math.sqrt(w * h * 144 * 72 / 1.15 / max(1, len(text)))
+        new_fs = max(8.0, min(fs, target))
+        if new_fs >= fs * 0.95:
+            continue   # not enough of a shrink to bother
+        scale = new_fs / fs
+        for r in runs:
+            if not isinstance(r, dict):
+                continue
+            rfs = r.get("font_size")
+            if isinstance(rfs, (int, float)) and rfs > 0:
+                r["font_size"] = round(float(rfs) * scale, 1)
+        log.info("autoshrink: %s font %.1f→%.1fpt for %d chars in %.2f×%.2fin",
+                 entry.get("alias") or "?", fs, new_fs, len(text), w, h)
 
 
 # ── Substitution ────────────────────────────────────────────────────────────

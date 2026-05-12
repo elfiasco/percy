@@ -403,6 +403,196 @@ def _build_inputs_schema(inputs_list: list[dict]) -> dict[str, dict]:
     return schema
 
 
+def _parameterize_geometry(layout: list[dict], inputs_schema: dict[str, dict]) -> None:
+    """Replace each element's position + first-run font_size + text content
+    with `{{var}}` references and append matching defaults to inputs_schema.
+
+    This is what lets the agent at apply time:
+      * change the actual text rendered on each element (otherwise the
+        induced template carries the prototype slide's verbatim copy and
+        ignores any inputs the agent provides)
+      * move and resize template elements (so multi-application per slide
+        actually composes instead of stacking everything in the source
+        slide's coordinates)
+      * override font_size when the copy is longer than the prototype's
+
+    Defaults come from the prototype, so a template called with no
+    overrides still renders exactly as it did in the source. Templates
+    without `body.position`, without numeric `font_size`, or without
+    `text_runs` are left alone — there's nothing to parameterize.
+
+    Naming convention — every parameter is `<alias>_<axis>` so the LLM
+    can derive the right input name from the element_aliases list it
+    sees in the planner catalog:
+      * <alias>_left, <alias>_top, <alias>_width, <alias>_height (inches)
+      * <alias>_font_size (pt)
+      * <alias>_text (string — replaces concatenated text of all runs)
+      * <alias>_categories, <alias>_series, <alias>_title (chart only)
+      * <alias>_data (table only — 2-D list of cells)
+      * <alias>_fill_color (hex string — shapes with a solid fill)
+
+    Any input that doesn't follow this convention is removed from
+    inputs_schema. The LLM polish step proposes human-friendly names
+    like "title" or "company_name" but never wires them to anything in
+    the body, so they're ghost inputs that confuse the agent. We trust
+    this structural pass to be the source of truth.
+    """
+    _KNOWN_SUFFIXES = (
+        "_left", "_top", "_width", "_height", "_font_size",
+        "_text", "_categories", "_series", "_title", "_data",
+        "_fill_color",
+    )
+    for i, entry in enumerate(layout):
+        alias = entry.get("alias") or f"el_{i}"
+        entry["alias"] = alias
+        body = entry.get("body") or {}
+
+        # Position → 4 inputs per element.
+        pos = body.get("position")
+        if isinstance(pos, dict):
+            for axis_key, var_suffix, friendly in (
+                ("left_in",   "left",   "Left edge (inches from canvas left)"),
+                ("top_in",    "top",    "Top edge (inches from canvas top)"),
+                ("width_in",  "width",  "Width in inches"),
+                ("height_in", "height", "Height in inches"),
+            ):
+                if axis_key not in pos:
+                    continue
+                cur = pos[axis_key]
+                if not isinstance(cur, (int, float)):
+                    continue   # already a template var or weird shape
+                var_name = f"{alias}_{var_suffix}"
+                inputs_schema[var_name] = {
+                    "type": "number",
+                    "required": False,
+                    "default": round(float(cur), 3),
+                    "description": f"{alias}: {friendly}",
+                }
+                pos[axis_key] = "{{" + var_name + "}}"
+
+        # Text-bearing elements: parameterize content + first-run font_size.
+        # Two shapes occur in the wild:
+        #   * body.text_runs = [{text, font_size, ...}, ...]  (modern)
+        #   * body.text      = "..." (flat string on shape bodies)
+        runs = body.get("text_runs")
+        text_str = body.get("text")
+
+        if isinstance(runs, list) and runs:
+            first = runs[0]
+            if isinstance(first, dict):
+                fs = first.get("font_size")
+                if isinstance(fs, (int, float)) and fs > 0:
+                    var_name = f"{alias}_font_size"
+                    inputs_schema[var_name] = {
+                        "type": "number",
+                        "required": False,
+                        "default": round(float(fs), 1),
+                        "description": f"{alias}: font size (pt)",
+                    }
+                    first["font_size"] = "{{" + var_name + "}}"
+
+                # Concatenate runs' text → one `<alias>_text` input. We
+                # collapse multi-run text into a single overridable string
+                # so the agent fills one field per element. Per-run
+                # styling (bold/italic/color/font) is preserved on each
+                # run; only the first run's text becomes the variable
+                # and any trailing runs get their text cleared so they
+                # don't double-print.
+                concat = "".join(
+                    str(r.get("text", "")) for r in runs
+                    if isinstance(r, dict) and r.get("text") is not None
+                )
+                if concat.strip():
+                    var_name = f"{alias}_text"
+                    inputs_schema[var_name] = {
+                        "type": "string",
+                        "required": False,
+                        "default": concat[:300],
+                        "description": f"{alias}: text content",
+                    }
+                    first["text"] = "{{" + var_name + "}}"
+                    for r in runs[1:]:
+                        if isinstance(r, dict):
+                            r["text"] = ""
+        elif isinstance(text_str, str) and text_str.strip():
+            # Flat-string body.text — the fallback layout serializer
+            # path and the path used by shape bodies. Same idea:
+            # replace with a template var, default to original.
+            var_name = f"{alias}_text"
+            inputs_schema[var_name] = {
+                "type": "string",
+                "required": False,
+                "default": text_str[:300],
+                "description": f"{alias}: text content",
+            }
+            body["text"] = "{{" + var_name + "}}"
+
+        # Chart data: categories + series + title → three inputs the
+        # agent can override. Defaults are the prototype's data so an
+        # un-overridden chart renders like the source slide.
+        if entry.get("kind") == "chart":
+            for field_name, default in (
+                ("categories", body.get("categories")),
+                ("series",     body.get("series")),
+                ("title",      body.get("title")),
+            ):
+                if field_name not in body or default is None:
+                    continue
+                var_name = f"{alias}_{field_name}"
+                inputs_schema[var_name] = {
+                    "type": "list" if field_name in ("categories", "series") else "string",
+                    "required": False,
+                    "default": default,
+                    "description": f"{alias}: chart {field_name}",
+                }
+                body[field_name] = "{{" + var_name + "}}"
+
+        # Table data: rows × cols → one input. Defaults to the prototype's
+        # cells. Agent supplies a fresh 2-D list to repurpose the table.
+        if entry.get("kind") == "table":
+            data = body.get("data")
+            if isinstance(data, list):
+                var_name = f"{alias}_data"
+                inputs_schema[var_name] = {
+                    "type": "list",
+                    "required": False,
+                    "default": data,
+                    "description": f"{alias}: table cells (rows × cols)",
+                }
+                body["data"] = "{{" + var_name + "}}"
+
+        # Fill color: if the shape has a solid fill, expose its hex so
+        # the agent can recolor (most common brand-relevant override).
+        fill = body.get("fill")
+        if isinstance(fill, dict):
+            color = fill.get("color")
+            if isinstance(color, str) and color.startswith("#"):
+                var_name = f"{alias}_fill_color"
+                inputs_schema[var_name] = {
+                    "type": "string",
+                    "required": False,
+                    "default": color,
+                    "description": f"{alias}: fill color (hex, e.g. #29B5E8)",
+                }
+                fill["color"] = "{{" + var_name + "}}"
+
+    # Drop ghost inputs the LLM polish proposed but nothing in the
+    # layout actually references (since the polish doesn't rewrite
+    # bodies). Anything that doesn't end with one of our known
+    # suffixes — and isn't otherwise referenced via `{{name}}` in the
+    # layout — gets removed so the agent has a single coherent set of
+    # working knobs.
+    aliases = {entry.get("alias") for entry in layout if entry.get("alias")}
+    layout_blob = json.dumps(layout, default=str)
+    for key in list(inputs_schema.keys()):
+        is_alias_suffixed = any(
+            key == f"{a}{s}" for a in aliases for s in _KNOWN_SUFFIXES
+        )
+        is_referenced = ("{{" + key + "}}") in layout_blob
+        if not is_alias_suffixed and not is_referenced:
+            inputs_schema.pop(key, None)
+
+
 def _sample_inputs_from_prototype(inputs_schema: dict[str, dict],
                                     prototype: Any) -> dict[str, Any]:
     """Best-effort defaults from the prototype's actual content. The LLM gives
@@ -585,6 +775,19 @@ def induce_templates(
 
     # Drop LLM-rejected candidates.
     candidates = [c for c in candidates if c.confidence > 0.0]
+
+    # Parameterize geometry on every surviving candidate. Runs whether
+    # or not the LLM polish stage ran — this is purely structural and
+    # uses prototype values as defaults, so the parameterized template
+    # renders identically to the un-parameterized one when called with
+    # no overrides.
+    for cand in candidates:
+        try:
+            _parameterize_geometry(cand.layout, cand.inputs_schema)
+        except Exception as exc:
+            log.warning("parameterize_geometry failed for %s: %s — keeping raw layout",
+                        cand.name, exc)
+
     # Sort by confidence desc so the UI shows the strongest first.
     candidates.sort(key=lambda c: -c.confidence)
     return [c.to_dict() for c in candidates]
