@@ -63,18 +63,32 @@ def _ref_path(set_id: str, ref_id: str, ext: str) -> Path:
 
 
 def _require_set_member(user: dict[str, Any], set_id: str) -> dict[str, Any]:
-    """Caller must be a member of the set's org. Returns the decoded set row."""
+    """Caller must be a member of the set's org (or the set is a builtin —
+    those are visible to every authenticated user)."""
     tpl = auth_db.get_template(set_id)
     if not tpl:
         raise HTTPException(404, "Template set not found")
+    if tpl.get("is_builtin"):
+        return tpl
     if not auth_db.get_membership(user["id"], tpl["org_id"]):
         raise HTTPException(403, "Not a member of this template set's org")
     return tpl
 
 
 def _require_set_editor(user: dict[str, Any], set_id: str) -> dict[str, Any]:
-    """Caller must be either the set owner or an org owner/admin."""
+    """Caller must be either the set owner or an org owner/admin.
+
+    Builtin sets (Percy Standard) are read-only for everyone — no exceptions.
+    The API surfaces a clear 403 with a hint to fork the set rather than
+    edit in place.
+    """
     tpl = _require_set_member(user, set_id)
+    if tpl.get("is_builtin"):
+        raise HTTPException(
+            403,
+            "This is a builtin template set and cannot be edited. "
+            "Create a new set from these defaults if you want to customize.",
+        )
     if tpl["owner_id"] == user["id"]:
         return tpl
     m = auth_db.get_membership(user["id"], tpl["org_id"])

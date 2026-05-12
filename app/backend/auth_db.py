@@ -16,8 +16,11 @@ intentionally compatible and shared).
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import secrets
+
+log = logging.getLogger("percy.auth_db")
 import sqlite3
 import threading
 import time
@@ -615,6 +618,10 @@ _FORWARD_ADDS = [
     # produced by src/percy/agent/style_extraction.py. Read by codegen and
     # by future agents that want programmatic access to brand specifics.
     ("studio_templates", "style_profile",   "TEXT NOT NULL DEFAULT '{}'"),
+    # Builtin flag — distinguishes seeded sets (e.g. Percy Standard) from
+    # user-created ones. Builtins are read-only for everyone, visible across
+    # all orgs via list_org_templates' UNION.
+    ("studio_templates", "is_builtin",      "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
@@ -657,6 +664,12 @@ def init_db() -> None:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
             except Exception:
                 pass
+    # Seed the always-on Percy Standard Template Set. Safe to call on every
+    # boot — idempotent on both the set row and the item links.
+    try:
+        seed_percy_standard_template_set()
+    except Exception as exc:
+        log.warning("init_db: seed_percy_standard failed (non-fatal): %s", exc)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -1144,6 +1157,7 @@ def _decode_template(row: dict[str, Any] | None) -> dict[str, Any] | None:
     row["instructions_md"] = row.get("instructions_md") or ""
     row["folder_id"] = row.get("folder_id") or None
     row["is_default"] = bool(row.get("is_default") or 0)
+    row["is_builtin"] = bool(row.get("is_builtin") or 0)
     # Style profile — defaults to empty dict so callers can do
     # `tpl["style_profile"].get("chart_styles", [])` without a None check.
     try: row["style_profile"] = _json.loads(row.get("style_profile") or "{}")
@@ -1196,14 +1210,17 @@ def get_template(template_id: str) -> dict[str, Any] | None:
 
 def list_org_templates(org_id: str, *, viewer_id: str) -> list[dict[str, Any]]:
     """Templates visible to the viewer in the given org. team/org scope visible to all
-    org members; user scope only to its owner."""
+    org members; user scope only to its owner. Builtin sets (is_builtin=1)
+    are returned for every viewer regardless of org_id — they're the
+    "shipped with Percy" libraries (e.g. Percy Standard)."""
     with get_conn() as conn:
         rows = conn.execute(
             """
             SELECT * FROM studio_templates
-            WHERE org_id = ?
-              AND (scope IN ('team', 'org') OR (scope = 'user' AND owner_id = ?))
-            ORDER BY updated_at DESC
+            WHERE (org_id = ? AND
+                   (scope IN ('team', 'org') OR (scope = 'user' AND owner_id = ?)))
+               OR is_builtin = 1
+            ORDER BY is_builtin DESC, updated_at DESC
             """,
             (org_id, viewer_id),
         ).fetchall()
@@ -1539,6 +1556,161 @@ def get_project_by_doc_id(doc_id: str) -> dict[str, Any] | None:
             (doc_id,),
         ).fetchone()
     return row
+
+
+PERCY_STANDARD_SET_ID = "tpl_percy_standard_v1"
+PERCY_STANDARD_OWNER_ID = "__system__"
+PERCY_STANDARD_ORG_ID = "__percy_system__"
+
+
+def seed_percy_standard_template_set() -> dict[str, Any] | None:
+    """Idempotently seed the Percy Standard Template Set.
+
+    Owns no real org — uses the sentinel "__percy_system__" so list queries
+    that filter by org still find it via the is_builtin=1 union branch.
+    Links every Template from src/percy/agent/standard_templates.py (slide
+    AND element kinds, distinguished by id prefix `std.el.`) as set items.
+
+    Safe to call on every boot — the set's row is created with a fixed id;
+    item links use INSERT ... WHERE NOT EXISTS so duplicates can't happen.
+    """
+    # The agent templates SQLite owns the actual Template rows. Seed them
+    # first so their ids exist; then create / refresh the linkage.
+    try:
+        from percy.agent import templates as _agent_tpls
+        _agent_tpls.init_db()
+    except Exception as exc:
+        log.warning("seed_percy_standard: agent templates init failed: %s", exc)
+        return None
+
+    from percy.agent.standard_templates import STANDARD_TEMPLATES
+
+    now = _now()
+    with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT id FROM studio_templates WHERE id = ?",
+            (PERCY_STANDARD_SET_ID,),
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                """
+                INSERT INTO studio_templates (
+                    id, org_id, scope, owner_id, name, description,
+                    brand, source_project_ids,
+                    instructions_md, palette, fonts, style_rules,
+                    folder_id, is_default, is_builtin,
+                    style_profile,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    PERCY_STANDARD_SET_ID, PERCY_STANDARD_ORG_ID, "org",
+                    PERCY_STANDARD_OWNER_ID,
+                    "Percy Standard",
+                    "Percy's exhaustive built-in library: 15 slide layouts + 12 reusable element templates. "
+                    "Warm cream + powder cobalt brand. Available to every workspace.",
+                    "{}", "[]",
+                    _PERCY_STANDARD_INSTRUCTIONS,
+                    _json.dumps(_PERCY_STANDARD_PALETTE),
+                    _json.dumps(_PERCY_STANDARD_FONTS),
+                    _json.dumps(_PERCY_STANDARD_STYLE_RULES),
+                    None, 0, 1,
+                    "{}",
+                    now, now,
+                ),
+            )
+            log.info("seed_percy_standard: created Percy Standard set %s", PERCY_STANDARD_SET_ID)
+        else:
+            # Refresh curated brand fields in case we tweaked them in source.
+            conn.execute(
+                """
+                UPDATE studio_templates SET
+                  instructions_md = ?, palette = ?, fonts = ?, style_rules = ?,
+                  is_builtin = 1, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    _PERCY_STANDARD_INSTRUCTIONS,
+                    _json.dumps(_PERCY_STANDARD_PALETTE),
+                    _json.dumps(_PERCY_STANDARD_FONTS),
+                    _json.dumps(_PERCY_STANDARD_STYLE_RULES),
+                    now, PERCY_STANDARD_SET_ID,
+                ),
+            )
+
+        # Link every standard template (idempotent). The agent-templates layer
+        # seeds the actual Template rows on its own init; ids match the agent
+        # ids exactly so a join works.
+        for idx, tpl in enumerate(STANDARD_TEMPLATES):
+            kind = "element" if tpl.id.startswith("std.el.") else "slide"
+            already = conn.execute(
+                "SELECT 1 FROM studio_template_set_items WHERE set_id = ? AND template_id = ?",
+                (PERCY_STANDARD_SET_ID, tpl.id),
+            ).fetchone()
+            if not already:
+                conn.execute(
+                    "INSERT INTO studio_template_set_items "
+                    "(set_id, template_id, kind, order_index, provenance, added_by, added_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (PERCY_STANDARD_SET_ID, tpl.id, kind, idx,
+                     "{}", PERCY_STANDARD_OWNER_ID, now),
+                )
+    return get_template(PERCY_STANDARD_SET_ID)
+
+
+_PERCY_STANDARD_PALETTE = [
+    {"name": "ink",       "hex": "#F9F8F4", "role": "background"},
+    {"name": "surface",   "hex": "#FEFDFA", "role": "neutral"},
+    {"name": "paper",     "hex": "#2A2F3A", "role": "text"},
+    {"name": "muted",     "hex": "#6A6F7A", "role": "neutral"},
+    {"name": "cobalt",    "hex": "#7DA1CC", "role": "primary"},
+    {"name": "cobalt-lt", "hex": "#A4BEDC", "role": "accent"},
+    {"name": "sage",      "hex": "#6FA17A", "role": "secondary"},
+    {"name": "cream",     "hex": "#F0E6D8", "role": "highlight"},
+    {"name": "ochre",     "hex": "#C5994A", "role": "warning"},
+    {"name": "brick",     "hex": "#B8634F", "role": "danger"},
+]
+
+_PERCY_STANDARD_FONTS = [
+    {"name": "Inter",          "role": "heading", "fallbacks": ["system-ui", "sans-serif"]},
+    {"name": "Inter",          "role": "body",    "fallbacks": ["system-ui", "sans-serif"]},
+    {"name": "JetBrains Mono", "role": "mono",    "fallbacks": ["Fira Code", "monospace"]},
+]
+
+_PERCY_STANDARD_STYLE_RULES = {
+    "max_title_length": 70,
+    "capitalization": "sentence",       # Sentence case in body, Title in eyebrows
+    "palette_tolerance": 0.08,          # Tight — we know our hex values
+    "lock_to_palette": False,
+    "number_format": "{:,.0f}",
+}
+
+_PERCY_STANDARD_INSTRUCTIONS = """\
+# Percy voice
+
+* **Lead with the metric.** Numbers belong above prose. If a slide has a
+  KPI, surface the value before the explanation.
+* **Sentence case** in headings and body. Title Case is reserved for
+  eyebrow / kicker labels in small caps.
+* **Em-dashes** for bullets, not bullets. Two-space gap after the dash.
+* **Cobalt for emphasis**, not decoration. Accent rules signal "this is
+  what matters." Avoid red unless you mean it (it means *bad*).
+* **JetBrains Mono for numbers**, especially KPI values. The slight
+  technical feel is part of the brand.
+* **Cream cards** for content blocks; never pure white on the warm-cream
+  background.
+* **No clip art, no stock photography placeholders.** Use diagrams,
+  screenshots, or text.
+
+## When generating decks
+
+1. Start with `std.title`. Always give it a subtitle and a presenter line.
+2. Use `std.section_header` between thematic blocks (max 4 in a deck).
+3. Prefer `std.big_number` over a chart when the story is a single
+   metric.
+4. Use `std.chart_focus` (one chart + takeaway) over multi-chart slides.
+5. End every deck with `std.closing` — never trail off with a body slide.
+"""
 
 
 def delete_template_set_ref(ref_id: str) -> bool:
