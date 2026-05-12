@@ -1771,9 +1771,14 @@ def seed_demo_brand_sets() -> None:
             log.info("seed_demo_brand_sets: skipping demo %s — set %s not found",
                      demo_path.name, set_id)
             continue
-        if existing.get("demo_slides_json"):
-            log.info("seed_demo_brand_sets: skipping demo %s — set already has %d slides",
-                     demo_path.name, len(existing.get("demo_slides_json") or []))
+        # Re-stamp if the snapshot is newer than what's in the DB. Lets us
+        # ship updated demos via the Docker image without manual surgery.
+        snap_at = int(demo.get("generated_at") or 0)
+        db_at = int(existing.get("last_demo_at") or 0)
+        has_slides = bool(existing.get("demo_slides_json"))
+        if has_slides and snap_at <= db_at:
+            log.info("seed_demo_brand_sets: skipping demo %s — DB snapshot newer (db=%d, file=%d)",
+                     demo_path.name, db_at, snap_at)
             continue
         update_template(
             set_id,

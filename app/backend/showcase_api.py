@@ -214,13 +214,21 @@ def get_showcase() -> dict[str, Any]:
     from percy.agent.demo_prompts import get_demo_prompt, DEFAULT_DEMO_ID
     try:
         demo = get_demo_prompt(DEFAULT_DEMO_ID)
-        prompt_text = demo.prompt
+        # Blueprint-driven demos store the brief as JSON, not a prose
+        # string. Serialize for the splash so the user can read the
+        # actual deck_summary + per-slot instructions.
+        if getattr(demo, "blueprint", None):
+            prompt_text = json.dumps(demo.blueprint, indent=2)
+        else:
+            prompt_text = demo.prompt
         prompt_name = demo.name
         prompt_slide_count = demo.slide_count
+        prompt_kind = "blueprint" if getattr(demo, "blueprint", None) else "prose"
     except Exception:
         prompt_text = ""
         prompt_name = "Showcase brief"
         prompt_slide_count = 7
+        prompt_kind = "prose"
 
     weather = _get_weather_cached()
 
@@ -231,6 +239,7 @@ def get_showcase() -> dict[str, Any]:
         "prompt_text": prompt_text,
         "prompt_name": prompt_name,
         "prompt_slide_count": prompt_slide_count,
+        "prompt_kind": prompt_kind,
         "prompt_summary": (
             f"Same {prompt_slide_count}-slide brief for every brand. The "
             "agent picks templates from each set; same locked content + "
