@@ -237,7 +237,11 @@ function TextRuns({
   const fontFamily = first.font_name || "Inter, system-ui, sans-serif"
 
   const explicitLines = raw.split(/\r?\n/).flatMap((line) => line ? [line] : [""])
-  const CHAR_W_RATIO = bold ? 0.66 : 0.62
+  // Sans-serif proportional fonts at 40pt+ have avg char width
+  // ~0.72×pt; bold ~6% wider. Measured against Inter rendering:
+  // "Q4 2025 Northwind Update" at 52pt needs ≥ 0.71 to wrap at the
+  // right point. Earlier 0.55/0.62 missed real overflow cases.
+  const CHAR_W_RATIO = bold ? 0.78 : 0.72
 
   const wrapAt = (size: number) => {
     const charsPerLine = Math.max(1, Math.floor((w * 72) / (size * CHAR_W_RATIO)))
