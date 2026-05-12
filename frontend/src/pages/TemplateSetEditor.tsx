@@ -8,6 +8,7 @@ import {
   extractBrandFromRefs, confirmBrand,
   mineTemplates, acceptCandidate,
   setAsDefault,
+  getPythonModule, pythonModuleDownloadUrl,
   type TemplateSet, type TemplateSetItem, type TemplateSetRef,
   type MinedCandidate, type PaletteColor, type BrandFont, type StyleRules,
 } from "../lib/templateSetsApi"
@@ -29,7 +30,7 @@ import PageLoader from "../components/PageLoader"
  *   Refs         — uploaded PPTX/PDF examples for mining
  */
 
-type TabKey = "slides" | "elements" | "brand" | "instructions" | "refs"
+type TabKey = "slides" | "elements" | "brand" | "instructions" | "refs" | "python"
 
 export default function TemplateSetEditor() {
   const { setId } = useParams<{ setId: string }>()
@@ -181,6 +182,7 @@ export default function TemplateSetEditor() {
           ["brand", "Brand"],
           ["instructions", "Instructions"],
           ["refs", `Refs (${refs.length})`],
+          ["python", "Python"],
         ] as Array<[TabKey, string]>).map(([key, label]) => (
           <button
             key={key}
@@ -259,6 +261,144 @@ export default function TemplateSetEditor() {
             onBrandUpdated={refreshSet}
           />
         )}
+        {activeTab === "python" && (
+          <PythonTab setId={set.id} setName={set.name} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Python tab ─────────────────────────────────────────────────────────────
+
+function PythonTab({ setId, setName }: { setId: string; setName: string }) {
+  const toast = useToast()
+  const [moduleText, setModuleText] = useState<string | null>(null)
+  const [polish, setPolish] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [itemCount, setItemCount] = useState(0)
+  const [error, setError] = useState<string | null>(null)
+
+  const generate = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const r = await getPythonModule(setId, { polish })
+      setModuleText(r.module_text)
+      setItemCount(r.item_count)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      setModuleText(null)
+    } finally {
+      setLoading(false)
+    }
+  }, [setId, polish])
+
+  useEffect(() => { generate() }, [generate])
+
+  const handleCopy = async () => {
+    if (!moduleText) return
+    try {
+      await navigator.clipboard.writeText(moduleText)
+      toast.show("Module copied to clipboard", "success")
+    } catch (e) {
+      toast.show(`Copy failed: ${e instanceof Error ? e.message : String(e)}`, "error")
+    }
+  }
+
+  return (
+    <div className="p-6 max-w-6xl mx-auto">
+      <div className="mb-4">
+        <div className="text-[12px] text-paper font-medium mb-1">
+          Auto-generated Python builder module
+        </div>
+        <div className="text-[11px] text-muted leading-relaxed max-w-3xl">
+          A typed Python module that contains one builder function per template in
+          this set. Charts use <code className="text-accent">pd.DataFrame</code> as
+          the entry point. Import from your notebook or agent script, call by name,
+          and a real BridgeElement gets created with this set's brand baked in.
+        </div>
+      </div>
+
+      {/* Controls */}
+      <div className="flex items-center justify-between border border-edge bg-surface/30 px-4 py-3 mb-4">
+        <div className="flex items-center gap-4">
+          <label className="text-[11px] flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={polish}
+              onChange={(e) => setPolish(e.target.checked)}
+            />
+            <span>AI-polished docstrings</span>
+            <span className="text-muted">(one LLM call per template — slower, costs ~$0.01)</span>
+          </label>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={generate}
+            disabled={loading}
+            className="text-[10px] uppercase tracking-wider px-3 py-1.5 border border-edge hover:border-accent hover:text-accent transition-colors"
+          >
+            {loading ? "Generating..." : "Regenerate"}
+          </button>
+          <button
+            onClick={handleCopy}
+            disabled={!moduleText}
+            className="text-[10px] uppercase tracking-wider px-3 py-1.5 border border-edge hover:border-accent hover:text-accent transition-colors"
+          >
+            Copy
+          </button>
+          <a
+            href={pythonModuleDownloadUrl(setId, { polish })}
+            download
+            className={`text-[10px] uppercase tracking-wider px-3 py-1.5 border border-accent text-accent hover:bg-accent/10 transition-colors ${
+              !moduleText ? "pointer-events-none opacity-40" : ""
+            }`}
+          >
+            Download .py
+          </a>
+        </div>
+      </div>
+
+      {/* Status row */}
+      {!error && moduleText && (
+        <div className="text-[11px] text-muted mb-2">
+          {itemCount} builder function{itemCount === 1 ? "" : "s"} ·{" "}
+          {moduleText.length.toLocaleString()} chars · {moduleText.split("\n").length} lines
+        </div>
+      )}
+
+      {/* Code preview */}
+      {error ? (
+        <div className="border border-red-400/40 bg-red-400/5 text-red-400 p-4 text-[12px]">
+          {error}
+        </div>
+      ) : !moduleText ? (
+        <div className="border border-edge bg-surface/20 p-8 text-center text-[11px] text-muted">
+          {loading ? "Generating module..." : "Click Regenerate to produce the module."}
+        </div>
+      ) : (
+        <pre
+          className="border border-edge bg-surface/40 p-4 overflow-auto text-[11px] font-mono text-paper leading-relaxed max-h-[60vh]"
+          style={{ tabSize: 2 }}
+        >
+          {moduleText}
+        </pre>
+      )}
+
+      {/* Usage hint */}
+      <div className="mt-6 text-[11px] text-muted leading-relaxed">
+        <div className="text-paper font-medium mb-1">Using the module</div>
+        Save the downloaded file as <code className="text-accent">{setName.toLowerCase().replace(/\s+/g, "_")}_brand.py</code>{" "}
+        next to your script, then:
+        <pre className="mt-2 bg-surface/40 p-3 border border-edge text-[10px] overflow-auto">
+{`from percy.studio_client import Studio
+from ${setName.toLowerCase().replace(/\s+/g, "_")}_brand import title_slide, kpi_tile
+import pandas as pd
+
+studio = Studio(base_url="...", doc_id="...", auth_token="...")
+n = title_slide("Q4 Review", studio=studio, subtitle="December 2025")`}
+        </pre>
       </div>
     </div>
   )

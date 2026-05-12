@@ -303,6 +303,30 @@ export async function mineTemplates(setId: string, opts: {
   })
 }
 
+// ── Style profile + Python codegen ──────────────────────────────────────────
+
+export async function extractStyles(setId: string): Promise<{ ok: boolean; style_profile: Record<string, unknown> }> {
+  return jfetch(`/api/template-sets/${setId}/extract-styles`, { method: "POST" })
+}
+
+export async function getStyleProfile(setId: string): Promise<{ style_profile: Record<string, unknown> }> {
+  return jfetch(`/api/template-sets/${setId}/style-profile`)
+}
+
+export async function getPythonModule(setId: string, opts: { polish?: boolean } = {}): Promise<{
+  module_text: string
+  polished: boolean
+  item_count: number
+}> {
+  const qs = opts.polish ? "?polish=true" : ""
+  return jfetch(`/api/template-sets/${setId}/python-module${qs}`)
+}
+
+export function pythonModuleDownloadUrl(setId: string, opts: { polish?: boolean } = {}): string {
+  const qs = opts.polish ? "?polish=true" : ""
+  return `/api/template-sets/${setId}/python-module/download${qs}`
+}
+
 export async function acceptCandidate(
   setId: string,
   candidate: MinedCandidate,
