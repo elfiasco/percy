@@ -123,10 +123,25 @@ function TiptapTextRendererImpl({
   const insets   = style?.text_insets
   const W = element.width_in  > 0 ? element.width_in  : 1
   const H = element.height_in > 0 ? element.height_in : 1
-  const padLeft  = `${((insets?.left   ?? 0.1 ) / W * 100).toFixed(2)}%`
-  const padRight = `${((insets?.right  ?? 0.1 ) / W * 100).toFixed(2)}%`
-  const padTop   = `${((insets?.top    ?? 0.05) / H * 100).toFixed(2)}%`
-  const padBot   = `${((insets?.bottom ?? 0.05) / H * 100).toFixed(2)}%`
+  // CSS percentage padding is resolved against the containing block's WIDTH —
+  // for top/bottom too. Using top% = top_in/H*100 silently multiplied vertical
+  // padding by (element_width/element_height), pushing text 80+px below the
+  // element top on wide+short text frames (e.g. titles 1077×75). Express the
+  // inset as inches * pt-scale * 72 ≈ inches per vh, scaled by the slide-height-
+  // derived --pt-scale so it matches Studio's font-size unit.
+  const padTopIn   = insets?.top    ?? 0.05
+  const padBotIn   = insets?.bottom ?? 0.05
+  const padLeftIn  = insets?.left   ?? 0.1
+  const padRightIn = insets?.right  ?? 0.1
+  // Horizontal padding scales correctly with width-% since percentage padding
+  // resolves against width — keep that path for left/right.
+  const padLeft  = `${(padLeftIn  / W * 100).toFixed(2)}%`
+  const padRight = `${(padRightIn / W * 100).toFixed(2)}%`
+  // Vertical padding expressed in inches → vh via --pt-scale. Same formula
+  // BridgeTextStyle uses for font-size: `${pts} * var(--pt-scale) * 1vh`.
+  // 1 inch = 72 pt.
+  const padTop = `calc(${(padTopIn * 72).toFixed(2)} * var(--pt-scale, 0.1574) * 1vh)`
+  const padBot = `calc(${(padBotIn * 72).toFixed(2)} * var(--pt-scale, 0.1574) * 1vh)`
   const anchorLc = style?.vertical_anchor?.toLowerCase()
   const justifyContent = anchorLc === "middle" || anchorLc === "ctr" || anchorLc === "center" ? "center" : anchorLc === "bottom" || anchorLc === "b" ? "flex-end" : "flex-start"
 

@@ -456,10 +456,14 @@ function BridgeShapeRendererImpl({
   const textFrameStyle = useMemo((): React.CSSProperties => {
     const s = style
     const insets = s?.text_insets
+    // Horizontal padding can use width-% directly. Vertical padding must be
+    // expressed in inches→vh via --pt-scale because CSS percentage padding
+    // resolves against the containing block's WIDTH for ALL sides, which
+    // would massively over-pad short+wide text frames (e.g. titles 1077×75).
     const padLeft   = insets?.left   != null && element.width_in  > 0 ? `${(insets.left   / element.width_in  * 100).toFixed(2)}%` : "0.18em"
     const padRight  = insets?.right  != null && element.width_in  > 0 ? `${(insets.right  / element.width_in  * 100).toFixed(2)}%` : "0.24em"
-    const padTop    = insets?.top    != null && element.height_in > 0 ? `${(insets.top    / element.height_in * 100).toFixed(2)}%` : "0.18em"
-    const padBottom = insets?.bottom != null && element.height_in > 0 ? `${(insets.bottom / element.height_in * 100).toFixed(2)}%` : "0.18em"
+    const padTop    = insets?.top    != null ? `calc(${(insets.top    * 72).toFixed(2)} * var(--pt-scale, 0.1574) * 1vh)` : "0.18em"
+    const padBottom = insets?.bottom != null ? `calc(${(insets.bottom * 72).toFixed(2)} * var(--pt-scale, 0.1574) * 1vh)` : "0.18em"
     const anchorLc = s?.vertical_anchor?.toLowerCase()
     const justifyContent = anchorLc === "middle" || anchorLc === "ctr" || anchorLc === "center" ? "center" : anchorLc === "bottom" || anchorLc === "b" ? "flex-end" : "flex-start"
     const wordWrap = s?.word_wrap === false ? "nowrap" as const : undefined

@@ -443,6 +443,71 @@ async function screenshotSlides(browser, projId, docId, slideNums, outDir) {
         return el?.outerHTML?.slice(0, 500) || ""
       })
       console.log(`      HTML sample: ${html}`)
+      // For all spans, dump computed color + parent stacking
+      const spanInfo = await page.evaluate(() => {
+        return Array.from(document.querySelectorAll('[data-slide-canvas="true"] [data-element="true"] p span')).slice(0, 8).map((s) => {
+          const cs = getComputedStyle(s)
+          // Walk up parents to find any clipping/hiding
+          const parent = s.closest('[data-element="true"]')
+          const par = parent ? getComputedStyle(parent) : null
+          return {
+            txt: (s.textContent||"").slice(0,30),
+            color: cs.color,
+            fs: cs.fontSize,
+            // parent element style
+            parentZ: par?.zIndex,
+            parentOpacity: par?.opacity,
+            parentVisibility: par?.visibility,
+            parentDisplay: par?.display,
+          }
+        })
+      })
+      for (const sp of spanInfo) {
+        console.log(`      SPAN "${sp.txt}" color=${sp.color} fs=${sp.fs} pZ=${sp.parentZ} pOp=${sp.parentOpacity} pVis=${sp.parentVisibility}`)
+      }
+      // Span actual on-screen rects vs their owning element's rect
+      const spanRects = await page.evaluate(() => {
+        const out = []
+        const els = document.querySelectorAll('[data-slide-canvas="true"] [data-element="true"]')
+        for (const e of els) {
+          const er = e.getBoundingClientRect()
+          for (const s of e.querySelectorAll('p span')) {
+            const r = s.getBoundingClientRect()
+            out.push({
+              txt: (s.textContent || "").slice(0, 30),
+              elementRect: { x: er.x|0, y: er.y|0, w: er.width|0, h: er.height|0 },
+              rect:        { x: r.x|0,  y: r.y|0,  w: r.width|0,  h: r.height|0 },
+            })
+          }
+        }
+        return out.slice(0, 12)
+      })
+      for (const sr of spanRects) {
+        const dy = sr.rect.y - sr.elementRect.y
+        console.log(`      SPANRECT "${sr.txt}" el=${JSON.stringify(sr.elementRect)} span=${JSON.stringify(sr.rect)} dy=${dy}`)
+      }
+      // Detailed computed style for the title element to debug the gap
+      const titleCss = await page.evaluate(() => {
+        const els = document.querySelectorAll('[data-slide-canvas="true"] [data-element="true"]')
+        for (const e of els) {
+          const sp = e.querySelector('p span')
+          if (sp && sp.textContent && sp.textContent.includes("READING")) {
+            const cs = getComputedStyle(e)
+            const inner = e.firstElementChild
+            const innerCs = inner ? getComputedStyle(inner) : null
+            const pEl = sp.closest('p')
+            const pCs = pEl ? getComputedStyle(pEl) : null
+            return {
+              elementBox: { padding: cs.padding, height: cs.height, display: cs.display, flexDir: cs.flexDirection, justify: cs.justifyContent, align: cs.alignItems },
+              innerHTML: e.outerHTML.slice(0, 800),
+              innerBox: innerCs ? { padding: innerCs.padding, height: innerCs.height, transform: innerCs.transform, marginTop: innerCs.marginTop } : null,
+              pBox: pCs ? { padding: pCs.padding, height: pCs.height, fontSize: pCs.fontSize, lineHeight: pCs.lineHeight, marginTop: pCs.marginTop, paddingTop: pCs.paddingTop } : null,
+            }
+          }
+        }
+        return null
+      })
+      if (titleCss) console.log(`      TITLECSS: ${JSON.stringify(titleCss, null, 2)}`)
       // Check the --pt-scale CSS variable
       const ptScale = await page.evaluate(() => {
         const c = document.querySelector('[data-slide-canvas="true"]')
@@ -595,6 +660,14 @@ async function runDeck(browser, pptxPath, docIdOverride, projIdOverride) {
         if (e.type === "BridgeImage") {
           e.image = { src_present: !!(el.image_src || el.src) }
         }
+        // Capture style endpoint for all elements (vertical_anchor visibility)
+        try {
+          const sty = await apiJson(`/api/docs/${docId}/slides/${n}/elements/${el.id}/style`)
+          if (sty) {
+            e.style_vertical_anchor = sty.vertical_anchor
+            e.style_text_insets = sty.text_insets
+          }
+        } catch { /* tolerate */ }
         // BridgeShape: dump fill, preset
         if (e.type === "BridgeShape") {
           try {
