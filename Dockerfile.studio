@@ -61,6 +61,11 @@ COPY app/__init__.py /app/app/__init__.py
 COPY app/backend     /app/app/backend
 COPY app/cloud       /app/app/cloud
 
+# Pre-baked Template Set + demo deck snapshots seeded by init_db on boot.
+# Without this dir copied, seed_demo_brand_sets() finds nothing and the
+# /api/showcase endpoint serves no brands.
+COPY demo_brands     /app/demo_brands
+
 # DB file lives in /tmp on App Runner (instance is ephemeral; in prod we use Postgres)
 ENV PERCY_AUTH_DB=/tmp/percy_app.db
 ARG GIT_SHA="dev"
