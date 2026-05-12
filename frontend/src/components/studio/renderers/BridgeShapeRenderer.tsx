@@ -290,13 +290,17 @@ function ShapeSvg({ id, preset, adj, style, flipH, flipV, elementWidthIn }: Shap
     ? "none"
     : (style?.fill_color ?? "#E2E8F0")
 
-  // Stroke
+  // Stroke. PPTX shapes commonly have <a:ln> outlines whose color comes from
+  // a theme color reference; if resolution didn't produce a hex, fall back to
+  // black so the stroke isn't silently dropped. line_visible !== false AND
+  // (color || width) means "the shape has an outline" per PPTX semantics.
   const lineVisible = style?.line_visible !== false
-  const stroke  = (lineVisible && style?.line_color) ? style.line_color : "none"
-  const strokeW = (lineVisible && style?.line_width != null)
+  const hasLine     = lineVisible && (style?.line_color || style?.line_width != null)
+  const stroke      = hasLine ? (style?.line_color || "#000000") : "none"
+  const strokeW     = hasLine && style?.line_width != null
     ? (style.line_width / 72 * 100 / (elementWidthIn ?? 13.333)).toFixed(3)
-    : "0"
-  const strokeDash = dashArray(style?.line_dash, strokeW)
+    : (hasLine ? "0.5" : "0")
+  const strokeDash  = dashArray(style?.line_dash, strokeW)
 
   const opacity = style?.opacity ?? 1
 

@@ -134,10 +134,14 @@ function BridgeFreeformRendererImpl({ element, docId, slideN, renderKey }: Nativ
     ? data.fill_color
     : "none"
 
-  const stroke = data.line_visible && data.line_color ? data.line_color : "none"
-  const strokeW = data.line_width != null
+  // Stroke: honor line_visible even when line_color is null (theme color refs
+  // sometimes don't resolve to a hex during extraction); fall back to black so
+  // the outline isn't silently dropped.
+  const hasLine = data.line_visible && (data.line_color || data.line_width != null)
+  const stroke  = hasLine ? (data.line_color || "#000000") : "none"
+  const strokeW = hasLine && data.line_width != null
     ? (data.line_width / 72 * 40 / (element.width_in > 0 ? element.width_in : 1)).toFixed(3)
-    : "0"
+    : (hasLine ? "0.5" : "0")
   const strokeDash = dashArray(data.line_dash, strokeW)
 
   const gradDef = isGradient && data.gradient_stops ? (() => {

@@ -39,6 +39,16 @@ interface ElementStyleLite {
   text_insets?:   { left?: number; right?: number; top?: number; bottom?: number } | null
 }
 
+/** Map PPTX line dash style → CSS border-style. */
+function dashToBorderStyle(dash: string | null | undefined): string {
+  if (!dash) return "solid"
+  const d = dash.toLowerCase()
+  if (d === "dash" || d.startsWith("lgdash") || d === "sysdash") return "dashed"
+  if (d === "dot" || d === "sysdot") return "dotted"
+  if (d === "dashdot" || d === "lgdashdot" || d === "sysdashdot") return "dashed"
+  return "solid"
+}
+
 function TiptapTextRendererImpl({
   element, docId, slideN, renderKey, selected,
 }: NativeRendererProps) {
@@ -132,8 +142,13 @@ function TiptapTextRendererImpl({
     height:         "100%",
     boxSizing:      "border-box",
     background:     style?.fill_color || "transparent",
-    border:         style?.line_color
-      ? `${style.line_width ?? 1}px solid ${style.line_color}`
+    // Border: PPTX text frames can have <a:ln> outlines. line_color may be
+    // null when the PPTX uses a theme color that wasn't fully resolved, so
+    // we honor line_visible as the authoritative "has border" signal and
+    // default the color to black. Otherwise show the selection dashed outline
+    // when an empty text frame is selected.
+    border:         (style?.line_visible && (style?.line_color || style?.line_width != null))
+      ? `${(style.line_width ?? 1).toString()}px ${dashToBorderStyle(style.line_dash)} ${style.line_color ?? "#000000"}`
       : selected && isEmpty
         ? "1.5px dashed rgba(99,102,241,0.55)"
         : undefined,
