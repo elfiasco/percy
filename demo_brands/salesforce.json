@@ -1,0 +1,1390 @@
+{
+  "slug": "salesforce",
+  "display_name": "Salesforce",
+  "description": "Cloud CRM brand mined from Salesforce's Q4 FY26 investor deck.",
+  "source_doc": "salesforce_20260502_CRM-Q4-FY26-Quarterly-Investor-Deck.pdf",
+  "source_doc_slides": 26,
+  "source_doc_elements": 1253,
+  "brand": {
+    "proposed_palette": [
+      {
+        "hex": "#0028B0",
+        "count": 20928,
+        "role": "primary",
+        "source": "pixel-sample"
+      },
+      {
+        "hex": "#0028C0",
+        "count": 20838,
+        "role": "accent",
+        "source": "pixel-sample"
+      },
+      {
+        "hex": "#0030C8",
+        "count": 17696,
+        "role": "accent",
+        "source": "pixel-sample"
+      },
+      {
+        "hex": "#00B0F8",
+        "count": 15510,
+        "role": "accent",
+        "source": "pixel-sample"
+      },
+      {
+        "hex": "#002090",
+        "count": 15116,
+        "role": "neutral",
+        "source": "pixel-sample"
+      },
+      {
+        "hex": "#001858",
+        "count": 14484,
+        "role": "neutral",
+        "source": "pixel-sample"
+      },
+      {
+        "hex": "#0028A0",
+        "count": 13468,
+        "role": "neutral",
+        "source": "pixel-sample"
+      },
+      {
+        "hex": "#90D0F8",
+        "count": 13190,
+        "role": "neutral",
+        "source": "pixel-sample"
+      }
+    ],
+    "proposed_fonts": [
+      {
+        "name": "AAOBEC+SalesforceSans-Regular",
+        "count": 551,
+        "role": "heading"
+      },
+      {
+        "name": "AAAQZG+ITCAvantGardePro-Demi",
+        "count": 209,
+        "role": "body"
+      },
+      {
+        "name": "AAAUZU+SalesforceSans-Bold",
+        "count": 130,
+        "role": "alt"
+      },
+      {
+        "name": "AAAUGV+SalesforceSans-Italic",
+        "count": 56,
+        "role": "alt"
+      }
+    ],
+    "chart_types": [],
+    "table_summary": {
+      "count": 1,
+      "banded_rows_pct": 0.0,
+      "first_row_header_pct": 0.0
+    },
+    "typography": {
+      "avg_title_size": 33.5,
+      "avg_body_size": 10.3
+    },
+    "docs_scanned": 1,
+    "extracted_at": 1778558113,
+    "pixel_sampled": true
+  },
+  "palette": [
+    {
+      "hex": "#0028B0",
+      "count": 20928,
+      "role": "primary",
+      "source": "pixel-sample"
+    },
+    {
+      "hex": "#0028C0",
+      "count": 20838,
+      "role": "accent",
+      "source": "pixel-sample"
+    },
+    {
+      "hex": "#0030C8",
+      "count": 17696,
+      "role": "accent",
+      "source": "pixel-sample"
+    },
+    {
+      "hex": "#00B0F8",
+      "count": 15510,
+      "role": "accent",
+      "source": "pixel-sample"
+    },
+    {
+      "hex": "#002090",
+      "count": 15116,
+      "role": "neutral",
+      "source": "pixel-sample"
+    },
+    {
+      "hex": "#001858",
+      "count": 14484,
+      "role": "neutral",
+      "source": "pixel-sample"
+    },
+    {
+      "hex": "#0028A0",
+      "count": 13468,
+      "role": "neutral",
+      "source": "pixel-sample"
+    },
+    {
+      "hex": "#90D0F8",
+      "count": 13190,
+      "role": "neutral",
+      "source": "pixel-sample"
+    }
+  ],
+  "fonts": [
+    {
+      "name": "AAOBEC+SalesforceSans-Regular",
+      "count": 551,
+      "role": "heading"
+    },
+    {
+      "name": "AAAQZG+ITCAvantGardePro-Demi",
+      "count": 209,
+      "role": "body"
+    },
+    {
+      "name": "AAAUZU+SalesforceSans-Bold",
+      "count": 130,
+      "role": "alt"
+    },
+    {
+      "name": "AAAUGV+SalesforceSans-Italic",
+      "count": 56,
+      "role": "alt"
+    }
+  ],
+  "style_rules": {},
+  "style_profile": {
+    "table_style": {
+      "header_font": {
+        "name": "Inter",
+        "size": 11.0,
+        "bold": true,
+        "italic": false
+      },
+      "cell_font": {
+        "name": "Inter",
+        "size": 10.0,
+        "bold": false,
+        "italic": false
+      },
+      "banded_rows": false,
+      "first_row_header": false,
+      "border_horizontal": {
+        "visible": true,
+        "color": "#D5D5D5",
+        "width": 1.0
+      },
+      "border_vertical": {
+        "visible": false
+      },
+      "text_align_first_col": "left",
+      "text_align_other_cols": "right",
+      "typical_columns": 2,
+      "typical_rows": 12,
+      "sample_count": 1
+    },
+    "text_styles": {
+      "title": {
+        "name": "AAAQZG+ITCAvantGardePro-Demi",
+        "size": 36.0,
+        "bold": true,
+        "italic": false
+      },
+      "subtitle": {
+        "name": "AAAQZG+ITCAvantGardePro-Demi",
+        "size": 21.4,
+        "bold": true,
+        "italic": false
+      },
+      "body": {
+        "name": "AAOBEC+SalesforceSans-Regular",
+        "size": 12.0,
+        "bold": false,
+        "italic": false
+      },
+      "caption": {
+        "name": "AAOBEC+SalesforceSans-Regular",
+        "size": 8.0,
+        "bold": false,
+        "italic": false
+      }
+    },
+    "primary_font": "AAOBEC+SalesforceSans-Regular",
+    "sample_element_count": 1253,
+    "sample_doc_count": 1,
+    "extracted_at": 1778558114
+  },
+  "instructions_md": "",
+  "items": [
+    {
+      "kind": "element",
+      "order_index": 0,
+      "provenance": {
+        "fingerprint": "('BridgeText', 'mid-left', 'xs', True, 'none', None)",
+        "member_count": 60,
+        "members": [
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 1,
+            "element_id": "1"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 2,
+            "element_id": "1"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 2,
+            "element_id": "2"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 4,
+            "element_id": "1"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 4,
+            "element_id": "2"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "26"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "27"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "28"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "30"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "31"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "34"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "37"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "40"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "62"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 14,
+            "element_id": "34"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 14,
+            "element_id": "36"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 14,
+            "element_id": "42"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 14,
+            "element_id": "48"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 14,
+            "element_id": "50"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 14,
+            "element_id": "54"
+          }
+        ]
+      },
+      "template": {
+        "id": "bdb732a92f9c4181b67441277c0657ea",
+        "name": "Element pattern 11",
+        "description": "Seen 60\u00d7 across 1 refs",
+        "category": "Induced:salesforce",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778558114.2206767,
+        "updated_at": 1778558114.2206771,
+        "tags": [
+          "induced",
+          "text"
+        ],
+        "inputs_schema": {},
+        "sample_inputs": {},
+        "layout": [
+          {
+            "kind": "text",
+            "alias": "text_1",
+            "body": {
+              "text": "February 25, 2026",
+              "position": {
+                "left_in": 0.6332,
+                "top_in": 4.676,
+                "width_in": 2.9137,
+                "height_in": 0.4273
+              },
+              "name": "Text_1"
+            }
+          }
+        ],
+        "connects": {}
+      }
+    },
+    {
+      "kind": "element",
+      "order_index": 0,
+      "provenance": {
+        "fingerprint": "('BridgeText', 'bot-left', 'xs', True, 'none', None)",
+        "member_count": 50,
+        "members": [
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "38"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "39"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "41"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "42"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "63"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "64"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "65"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 14,
+            "element_id": "66"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 14,
+            "element_id": "68"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 14,
+            "element_id": "72"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 14,
+            "element_id": "74"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 14,
+            "element_id": "76"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 14,
+            "element_id": "85"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "38"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "39"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "41"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "42"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "63"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "64"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "65"
+          }
+        ]
+      },
+      "template": {
+        "id": "7150959951b842fea417c601e26250db",
+        "name": "Element pattern 12",
+        "description": "Seen 50\u00d7 across 1 refs",
+        "category": "Induced:salesforce",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778558114.2287352,
+        "updated_at": 1778558114.2287354,
+        "tags": [
+          "induced",
+          "text"
+        ],
+        "inputs_schema": {},
+        "sample_inputs": {},
+        "layout": [
+          {
+            "kind": "text",
+            "alias": "text_38",
+            "body": {
+              "text": "Service",
+              "position": {
+                "left_in": 2.4381,
+                "top_in": 5.1869,
+                "width_in": 1.0743,
+                "height_in": 0.7833
+              },
+              "name": "Text_38"
+            }
+          }
+        ],
+        "connects": {}
+      }
+    },
+    {
+      "kind": "element",
+      "order_index": 0,
+      "provenance": {
+        "fingerprint": "('BridgeText', 'mid-mid', 'xs', True, 'none', None)",
+        "member_count": 33,
+        "members": [
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "29"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "36"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "43"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "44"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "46"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "47"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "51"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "55"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 14,
+            "element_id": "38"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 14,
+            "element_id": "44"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 17,
+            "element_id": "10"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "29"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "36"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "43"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "44"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "46"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "47"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "51"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 20,
+            "element_id": "38"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 20,
+            "element_id": "40"
+          }
+        ]
+      },
+      "template": {
+        "id": "eb3d9dc4500c4beaa0fbc1e1c3e0de96",
+        "name": "Element pattern 13",
+        "description": "Seen 33\u00d7 across 1 refs",
+        "category": "Induced:salesforce",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778558114.2372606,
+        "updated_at": 1778558114.2372608,
+        "tags": [
+          "induced",
+          "text"
+        ],
+        "inputs_schema": {},
+        "sample_inputs": {},
+        "layout": [
+          {
+            "kind": "text",
+            "alias": "text_29",
+            "body": {
+              "text": "+16% Y/Y, +13% Y/Y CC",
+              "position": {
+                "left_in": 5.9454,
+                "top_in": 3.4505,
+                "width_in": 2.0116,
+                "height_in": 0.2137
+              },
+              "name": "Text_29"
+            }
+          }
+        ],
+        "connects": {}
+      }
+    },
+    {
+      "kind": "element",
+      "order_index": 0,
+      "provenance": {
+        "fingerprint": "('BridgeConnector', 'mid-mid', 'unknown', False, 'none', None)",
+        "member_count": 27,
+        "members": [
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 21,
+            "element_id": "20"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 21,
+            "element_id": "23"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 21,
+            "element_id": "26"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 21,
+            "element_id": "28"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 21,
+            "element_id": "30"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "27"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "28"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "30"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "31"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "32"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "33"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "34"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "35"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "36"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "37"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "42"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "43"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "44"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "46"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "47"
+          }
+        ]
+      },
+      "template": {
+        "id": "1a74ee32cf2748bb84fc7240a85260d3",
+        "name": "Element pattern 14",
+        "description": "Seen 27\u00d7 across 1 refs",
+        "category": "Induced:salesforce",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778558114.2462573,
+        "updated_at": 1778558114.2462573,
+        "tags": [
+          "induced",
+          "connector"
+        ],
+        "inputs_schema": {},
+        "sample_inputs": {},
+        "layout": [
+          {
+            "kind": "connector",
+            "alias": "line_20",
+            "body": {
+              "connector_type": "straight",
+              "start": {
+                "x_in": 8.526,
+                "y_in": 3.0436
+              },
+              "end": {
+                "x_in": 9.5572,
+                "y_in": 3.0436
+              },
+              "name": "Line_20"
+            }
+          }
+        ],
+        "connects": {}
+      }
+    },
+    {
+      "kind": "element",
+      "order_index": 0,
+      "provenance": {
+        "fingerprint": "('BridgeText', 'mid-right', 'xs', True, 'none', None)",
+        "member_count": 26,
+        "members": [
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "21"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "22"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "53"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "57"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 14,
+            "element_id": "52"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 14,
+            "element_id": "58"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "21"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "22"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "53"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "55"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "57"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 20,
+            "element_id": "52"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 21,
+            "element_id": "117"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 21,
+            "element_id": "119"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 21,
+            "element_id": "121"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 21,
+            "element_id": "135"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 23,
+            "element_id": "55"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 23,
+            "element_id": "56"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 23,
+            "element_id": "57"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 23,
+            "element_id": "58"
+          }
+        ]
+      },
+      "template": {
+        "id": "797ca5091f524519b5c97924a8b8b450",
+        "name": "Element pattern 15",
+        "description": "Seen 26\u00d7 across 1 refs",
+        "category": "Induced:salesforce",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778558114.2546558,
+        "updated_at": 1778558114.2546558,
+        "tags": [
+          "induced",
+          "text"
+        ],
+        "inputs_schema": {},
+        "sample_inputs": {},
+        "layout": [
+          {
+            "kind": "text",
+            "alias": "text_21",
+            "body": {
+              "text": "Operating",
+              "position": {
+                "left_in": 8.951,
+                "top_in": 3.7106,
+                "width_in": 0.9567,
+                "height_in": 0.4083
+              },
+              "name": "Text_21"
+            }
+          }
+        ],
+        "connects": {}
+      }
+    },
+    {
+      "kind": "element",
+      "order_index": 0,
+      "provenance": {
+        "fingerprint": "('BridgeConnector', 'top-mid', 'unknown', False, 'none', None)",
+        "member_count": 23,
+        "members": [
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "3"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "4"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "5"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "7"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "8"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "9"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "10"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "11"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "13"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "14"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "15"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "16"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "18"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "19"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "20"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "21"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "23"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "24"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "25"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "26"
+          }
+        ]
+      },
+      "template": {
+        "id": "f15057a6cba5472cb1c406051afd29ca",
+        "name": "Element pattern 16",
+        "description": "Seen 23\u00d7 across 1 refs",
+        "category": "Induced:salesforce",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778558114.2612178,
+        "updated_at": 1778558114.2612178,
+        "tags": [
+          "induced",
+          "connector"
+        ],
+        "inputs_schema": {},
+        "sample_inputs": {},
+        "layout": [
+          {
+            "kind": "connector",
+            "alias": "line_3",
+            "body": {
+              "connector_type": "straight",
+              "start": {
+                "x_in": 4.5833,
+                "y_in": 0.8846
+              },
+              "end": {
+                "x_in": 6.6458,
+                "y_in": 0.8846
+              },
+              "name": "Line_3"
+            }
+          }
+        ],
+        "connects": {}
+      }
+    },
+    {
+      "kind": "element",
+      "order_index": 0,
+      "provenance": {
+        "fingerprint": "('BridgeText', 'top-mid', 'xs', True, 'none', None)",
+        "member_count": 20,
+        "members": [
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "18"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "18"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 19,
+            "element_id": "65"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 19,
+            "element_id": "67"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 19,
+            "element_id": "69"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 19,
+            "element_id": "71"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 19,
+            "element_id": "73"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 19,
+            "element_id": "75"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 21,
+            "element_id": "35"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 21,
+            "element_id": "37"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 21,
+            "element_id": "39"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 21,
+            "element_id": "41"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 21,
+            "element_id": "43"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "68"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "70"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "106"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "124"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "138"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "152"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "174"
+          }
+        ]
+      },
+      "template": {
+        "id": "23dc77f450bc4f209226a6225a3540fc",
+        "name": "Element pattern 17",
+        "description": "Seen 20\u00d7 across 1 refs",
+        "category": "Induced:salesforce",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778558114.2704256,
+        "updated_at": 1778558114.2704256,
+        "tags": [
+          "induced",
+          "text"
+        ],
+        "inputs_schema": {},
+        "sample_inputs": {},
+        "layout": [
+          {
+            "kind": "text",
+            "alias": "text_18",
+            "body": {
+              "text": "GAAP Operating ",
+              "position": {
+                "left_in": 8.6437,
+                "top_in": 2.2764,
+                "width_in": 1.6256,
+                "height_in": 0.1944
+              },
+              "name": "Text_18"
+            }
+          }
+        ],
+        "connects": {}
+      }
+    },
+    {
+      "kind": "element",
+      "order_index": 0,
+      "provenance": {
+        "fingerprint": "('BridgeText', 'top-left', 'xs', True, 'none', None)",
+        "member_count": 20,
+        "members": [
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "24"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 11,
+            "element_id": "32"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 14,
+            "element_id": "33"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 14,
+            "element_id": "83"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "24"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 18,
+            "element_id": "32"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 19,
+            "element_id": "63"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 19,
+            "element_id": "85"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 19,
+            "element_id": "107"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 23,
+            "element_id": "27"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 23,
+            "element_id": "62"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 24,
+            "element_id": "2"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "66"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "74"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "88"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "114"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "128"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "142"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "156"
+          },
+          {
+            "ref_id": "ref_ayg-FeVK4_yulcQi",
+            "slide_n": 25,
+            "element_id": "188"
+          }
+        ]
+      },
+      "template": {
+        "id": "08e1e114e8024413895b5034e628f3b9",
+        "name": "Element pattern 18",
+        "description": "Seen 20\u00d7 across 1 refs",
+        "category": "Induced:salesforce",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778558114.2773113,
+        "updated_at": 1778558114.2773116,
+        "tags": [
+          "induced",
+          "text"
+        ],
+        "inputs_schema": {},
+        "sample_inputs": {},
+        "layout": [
+          {
+            "kind": "text",
+            "alias": "text_24",
+            "body": {
+              "text": "FY26 Financial Results",
+              "position": {
+                "left_in": 0.6301,
+                "top_in": 0.5604,
+                "width_in": 5.19,
+                "height_in": 0.5
+              },
+              "name": "Text_24"
+            }
+          }
+        ],
+        "connects": {}
+      }
+    }
+  ],
+  "snapshot_version": 1,
+  "snapshot_created_at": 1778558114
+}

@@ -2,6 +2,7 @@ import { Link, Navigate } from "react-router-dom"
 import { useAuth } from "../auth/AuthContext"
 import ThemeToggle from "../theme/ThemeToggle"
 import Logo from "../components/Logo"
+import ShowcaseSection from "../components/ShowcaseSection"
 
 export default function Splash() {
   const { user, loading } = useAuth()
@@ -15,7 +16,7 @@ export default function Splash() {
   if (user) return <Navigate to="/home" replace />
 
   return (
-    <div className="min-h-screen flex flex-col bg-ink text-paper relative overflow-hidden">
+    <div className="min-h-screen flex flex-col bg-ink text-paper relative">
 
       {/* ── ambient watermark — massive phi bleeding off the right edge ─── */}
       <div
@@ -105,6 +106,9 @@ export default function Splash() {
           </div>
         </div>
       </div>
+
+      {/* ── showcase: 4 brands, same prompt, wildly different output ──── */}
+      <ShowcaseSection />
 
       {/* ── footer ────────────────────────────────────────────────────── */}
       <div className="h-12 shrink-0 flex items-center justify-between px-8 border-t border-edge text-[10px] tracking-[0.18em] uppercase text-muted relative z-10">

@@ -45,11 +45,16 @@ DEMO_QUARTERLY_UPDATE_V1 = DemoPrompt(
         "A realistic internal all-hands quarterly deck — opener, headline "
         "metric, what worked / what's broken / what's next. Forces the agent "
         "to mix data slides with storytelling slides and rotate accent colors "
-        "by section mood."
+        "by section mood. Slide 5 is the LIVE-DATA slide: the agent has to "
+        "write Python that calls a public weather API and renders the result."
     ),
     slide_count=10,
     # Deliberately written without naming any specific template id. The
-    # planner has to discover which Percy Standard layouts fit each slot.
+    # planner has to discover which available layouts fit each slot. For
+    # slide 5, the agent should switch to the Coder skill (scripted_plan)
+    # and produce real Python — we do NOT bake in a "weather adapter"; the
+    # demonstration is that the agent can call any public HTTP API from
+    # the script it generates.
     prompt="""\
 Build a 10-slide internal quarterly business update deck for a B2B SaaS
 company called Northwind. Audience: company-wide all-hands. Tone:
@@ -60,7 +65,7 @@ from the available templates. Don't repeat the same template back-to-
 back. Vary accent colors by section mood (default cobalt; sage for
 wins; ochre or brick for misses / urgent items).
 
-  1. Cover slide — title "Q3 2025 Northwind Update", subtitle
+  1. Cover slide — title "Q3 Northwind update", subtitle
      "Three quarters of compounding."
   2. Headline metric — the biggest win of the quarter. Pick a single
      dominant number. Use cobalt accent.
@@ -68,8 +73,28 @@ wins; ochre or brick for misses / urgent items).
   4. KPI snapshot — 3 standout metrics with QoQ deltas (one win, one
      hold, one slight miss). Realistic numbers in the $1M-$5M / 80-99%
      / 30-60 range.
-  5. Chart slide — net retention or ARR growth, with a one-sentence
-     takeaway. Add a source citation at the bottom.
+  5. LIVE DATA SLIDE — "Where our customers are today." Write a Python
+     script (slide_script or live-group) that:
+       a. Calls Open-Meteo's free public API to fetch current weather
+          for these 5 cities (no API key required):
+            New York      lat=40.7128 lon=-74.0060
+            San Francisco lat=37.7749 lon=-122.4194
+            London        lat=51.5072 lon=-0.1276
+            Tokyo         lat=35.6762 lon=139.6503
+            Singapore     lat=1.3521  lon=103.8198
+          Use this URL pattern (one HTTP GET per city, urllib.request):
+            https://api.open-meteo.com/v1/forecast?latitude=<LAT>
+              &longitude=<LON>&current=temperature_2m
+              &temperature_unit=fahrenheit
+       b. Parses the JSON, builds a pandas DataFrame with city + temp_f.
+       c. Renders the data as a chart or table on this slide using one of
+          the available chart/table templates from the set, plus a
+          headline that reads e.g. "Live: SIN 88°F · LON 44°F · NYC 50°F
+          (Open-Meteo, fetched <ISO timestamp>)".
+       d. Adds a small source-citation text element underneath.
+     The script lives ON the slide (slide_script field) so it can be
+     re-run whenever the data needs to refresh. Do NOT hardcode the
+     temperatures — they must come from the live API call.
   6. Narrative slide — what we shipped this quarter (3-5 em-dash
      bullets).
   7. Section divider — "What we're fixing." Ochre or brick accent.
@@ -78,11 +103,13 @@ wins; ochre or brick for misses / urgent items).
   9. Section divider — "What's next." Cobalt or sage.
  10. Closing — short thank-you headline + a contact / next-step line.
 
-Use realistic but invented numbers. Where appropriate, add bottom notes
-(methodology caveats) or source citations. Don't add a footer to every
-slide — only where it adds value.
+Use realistic but invented numbers EXCEPT slide 5 which uses live API
+data. Where appropriate, add bottom notes (methodology caveats) or
+source citations. Don't add a footer to every slide — only where it
+adds value.
 
-Output: one slide plan per row with template_id + inputs.
+Output: one slide plan per row. For slide 5, include the full Python
+script in a `slide_script` field on that row.
 """,
 )
 

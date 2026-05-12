@@ -54,6 +54,10 @@ _PUBLIC_PATTERNS = [
     re.compile(r"^/api/auth/"),
     re.compile(r"^/api/health$"),
     re.compile(r"^/api/agent/api-manifest$"),
+    re.compile(r"^/api/showcase$"),       # unauthenticated marketing splash
+    # Slide thumbnails for the showcase decks. The doc_ids are random 8-char
+    # strings so they're not enumerable; only auth'd routes leak doc lists.
+    re.compile(r"^/api/docs/[a-zA-Z0-9]+/slides/\d+/bridge\.png$"),
     re.compile(r"^/openapi\.json$"),
     re.compile(r"^/docs"),
     re.compile(r"^/redoc"),

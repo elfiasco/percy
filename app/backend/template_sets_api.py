@@ -466,6 +466,120 @@ def delete_ref(request: Request, set_id: str, ref_id: str):
     return {"ok": True}
 
 
+# ── Pixel-sampling palette fallback (for PDF-derived sets) ──────────────────
+
+
+def _pixel_sample_palette_across_refs(
+    set_id: str,
+    refs_ready: list[dict[str, Any]],
+    *,
+    top_k: int = 8,
+    max_pngs_per_doc: int = 8,
+) -> list[dict[str, Any]]:
+    """Pixel-sample bridge-rendered PNGs across this set's ready references.
+
+    PDFs onboard with no structured fill data, so the element-walk produces
+    an empty palette. But the rendered pages are real images — we can
+    quantize them with Pillow and surface the dominant colors. That's the
+    same thing a human would do: "the slides look navy, so that's the
+    accent."
+
+    Filters:
+      * skip near-white (>240 RGB) — those are backgrounds, not brand
+      * skip near-black (<25 RGB) — pure text body
+      * skip pixels too close to neutral gray
+    These filters keep us from returning "the page is mostly white" as the
+    primary brand color.
+
+    Returns: [{"hex": "#1A3D7C", "count": int, "role": "accent"}, ...]
+    """
+    import collections
+
+    try:
+        from PIL import Image
+    except Exception as exc:
+        log.warning("pixel_sample: Pillow unavailable: %s", exc)
+        return []
+
+    from . import main as _backend_main
+    from pathlib import Path as _P
+
+    sampled: collections.Counter[tuple[int, int, int]] = collections.Counter()
+    pngs_processed = 0
+    for ref in refs_ready:
+        doc_id = ref.get("doc_id")
+        if not doc_id:
+            continue
+        # Use the document's own bridge_dir if it set one; otherwise fall
+        # back to the canonical cache layout.
+        doc_record = _backend_main._docs.get(doc_id) or {}
+        bridge_dir = doc_record.get("bridge_dir")
+        if not bridge_dir:
+            # Default cache location from main._CACHE_DIR.
+            bridge_dir = _backend_main._CACHE_DIR / doc_id / "bridge"
+        bridge_dir = _P(bridge_dir)
+        if not bridge_dir.exists():
+            continue
+        # Iterate slide PNGs in order; cap so we don't churn on 100-page decks.
+        png_paths = sorted(bridge_dir.glob("*.png"))[:max_pngs_per_doc]
+        for p in png_paths:
+            try:
+                img = Image.open(p).convert("RGB")
+                # Resize for speed — colors are preserved by area, not detail.
+                img.thumbnail((400, 400))
+                # Quantize: 16 colors per page is plenty.
+                quantized = img.quantize(colors=16, method=Image.Quantize.MEDIANCUT)
+                palette = quantized.getpalette()
+                color_counts = quantized.getcolors(maxcolors=64) or []
+                for count, palette_idx in color_counts:
+                    r = palette[palette_idx * 3]
+                    g = palette[palette_idx * 3 + 1]
+                    b = palette[palette_idx * 3 + 2]
+                    lightness = (r + g + b) / 3
+                    saturation = max(r, g, b) - min(r, g, b)
+                    # Skip near-white / off-white backgrounds — PDF page
+                    # backgrounds tend to be cream / pale-grey not pure
+                    # white, and they vastly outweigh real brand pixels.
+                    if lightness > 220:    continue
+                    if lightness < 25:     continue   # near-black body text
+                    if saturation < 35:    continue   # too gray to be brand
+                    # Round to nearest 8 to collapse near-duplicates from
+                    # gradients/anti-aliasing.
+                    r8 = (r // 8) * 8
+                    g8 = (g // 8) * 8
+                    b8 = (b // 8) * 8
+                    sampled[(r8, g8, b8)] += count
+                pngs_processed += 1
+            except Exception as exc:
+                log.debug("pixel_sample: %s failed: %s", p.name, exc)
+
+    if pngs_processed == 0 or not sampled:
+        return []
+
+    log.info("pixel_sample: processed %d PNGs across %d refs, found %d unique colors",
+             pngs_processed, len(refs_ready), len(sampled))
+
+    # Reject the single dominant color if it's wildly more common than the
+    # next one (likely a tinted-background, not a brand accent). Threshold:
+    # > 3x the next-most-frequent color.
+    common = sampled.most_common(top_k + 4)
+    if len(common) >= 2 and common[0][1] > 3 * common[1][1]:
+        log.info("pixel_sample: dropping background-dominant color %s "
+                 "(%dx vs next %dx)",
+                 common[0][0], common[0][1], common[1][1])
+        common = common[1:]
+
+    out: list[dict[str, Any]] = []
+    for i, ((r, g, b), count) in enumerate(common[:top_k]):
+        hex_val = f"#{r:02X}{g:02X}{b:02X}"
+        out.append({
+            "hex": hex_val, "count": int(count),
+            "role": "primary" if i == 0 else "accent" if i < 4 else "neutral",
+            "source": "pixel-sample",
+        })
+    return out
+
+
 # ── Background onboarding worker ────────────────────────────────────────────
 
 
@@ -770,6 +884,25 @@ def _run_brand_extract(set_id: str) -> dict[str, Any] | None:
         "docs_scanned": docs_scanned,
         "extracted_at": int(time.time()),
     }
+    # ── PDF / sparse-element fallback: pixel-sample the rendered bridge
+    # PNGs and adopt their dominant colors. PDFs onboard with zero
+    # structured fills (the content is raster-y), so without this BlackRock
+    # / Caterpillar / etc. would extract no palette at all.
+    if len(proposed_palette) < 4:
+        pixel_palette = _pixel_sample_palette_across_refs(set_id, refs_ready, top_k=8)
+        if pixel_palette:
+            log.info("brand_extract: pixel-sampled %d palette colors for set %s",
+                     len(pixel_palette), set_id)
+            # Merge: keep any element-derived colors first (they're more
+            # trustworthy when present), then top up with pixel-sampled.
+            seen = {p["hex"] for p in proposed_palette}
+            for c in pixel_palette:
+                if c["hex"] not in seen:
+                    proposed_palette.append(c)
+                    seen.add(c["hex"])
+            brand_summary["proposed_palette"] = proposed_palette[:8]
+            brand_summary["pixel_sampled"] = True
+
     auth_db.update_template(set_id, brand=brand_summary, last_extracted_at=int(time.time()))
 
     # Chain into deterministic style-profile extraction so charts + tables +

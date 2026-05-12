@@ -1,0 +1,1791 @@
+{
+  "slug": "snowflake",
+  "display_name": "Snowflake",
+  "description": "Cloud data platform brand mined from Snowflake's 2019 template deck.",
+  "source_doc": "snowflake_20260502_Snowflake_Template_light-2019.pptx",
+  "source_doc_slides": 57,
+  "source_doc_elements": 3184,
+  "brand": {
+    "proposed_palette": [
+      {
+        "hex": "#FFFFFF",
+        "count": 934,
+        "role": "primary"
+      },
+      {
+        "hex": "#29B5E8",
+        "count": 539,
+        "role": "accent"
+      },
+      {
+        "hex": "#262626",
+        "count": 167,
+        "role": "accent"
+      },
+      {
+        "hex": "#7CCCE8",
+        "count": 156,
+        "role": "accent"
+      },
+      {
+        "hex": "#148BC0",
+        "count": 149,
+        "role": "neutral"
+      },
+      {
+        "hex": "#5C5C5C",
+        "count": 138,
+        "role": "neutral"
+      },
+      {
+        "hex": "#929292",
+        "count": 91,
+        "role": "neutral"
+      },
+      {
+        "hex": "#105780",
+        "count": 66,
+        "role": "neutral"
+      }
+    ],
+    "proposed_fonts": [
+      {
+        "name": "Arial",
+        "count": 637,
+        "role": "heading"
+      },
+      {
+        "name": "Arial THIN",
+        "count": 1,
+        "role": "body"
+      },
+      {
+        "name": "Avenir Heavy",
+        "count": 1,
+        "role": "alt"
+      },
+      {
+        "name": "Avenir Medium",
+        "count": 1,
+        "role": "alt"
+      }
+    ],
+    "chart_types": [
+      {
+        "type": "DOUGHNUT",
+        "count": 4
+      },
+      {
+        "type": "COLUMN_CLUSTERED",
+        "count": 1
+      },
+      {
+        "type": "AREA_STACKED",
+        "count": 1
+      },
+      {
+        "type": "PIE",
+        "count": 1
+      },
+      {
+        "type": "LINE",
+        "count": 1
+      }
+    ],
+    "table_summary": {
+      "count": 3,
+      "banded_rows_pct": 100.0,
+      "first_row_header_pct": 100.0
+    },
+    "typography": {
+      "avg_title_size": 33.5,
+      "avg_body_size": 11.3
+    },
+    "docs_scanned": 1,
+    "extracted_at": 1778557684
+  },
+  "palette": [
+    {
+      "hex": "#FFFFFF",
+      "count": 934,
+      "role": "primary"
+    },
+    {
+      "hex": "#29B5E8",
+      "count": 539,
+      "role": "accent"
+    },
+    {
+      "hex": "#262626",
+      "count": 167,
+      "role": "accent"
+    },
+    {
+      "hex": "#7CCCE8",
+      "count": 156,
+      "role": "accent"
+    },
+    {
+      "hex": "#148BC0",
+      "count": 149,
+      "role": "neutral"
+    },
+    {
+      "hex": "#5C5C5C",
+      "count": 138,
+      "role": "neutral"
+    },
+    {
+      "hex": "#929292",
+      "count": 91,
+      "role": "neutral"
+    },
+    {
+      "hex": "#105780",
+      "count": 66,
+      "role": "neutral"
+    }
+  ],
+  "fonts": [
+    {
+      "name": "Arial",
+      "count": 637,
+      "role": "heading"
+    },
+    {
+      "name": "Arial THIN",
+      "count": 1,
+      "role": "body"
+    },
+    {
+      "name": "Avenir Heavy",
+      "count": 1,
+      "role": "alt"
+    },
+    {
+      "name": "Avenir Medium",
+      "count": 1,
+      "role": "alt"
+    }
+  ],
+  "style_rules": {},
+  "style_profile": {
+    "chart_styles": [
+      {
+        "chart_type": "DOUGHNUT",
+        "color_sequence": [
+          "#29B5E8"
+        ],
+        "category_axis": {
+          "visible": false,
+          "gridlines_major": false,
+          "gridlines_minor": false
+        },
+        "value_axis": {
+          "visible": false,
+          "gridlines_major": false,
+          "gridlines_minor": false
+        },
+        "legend": {
+          "visible": true,
+          "position": "right"
+        },
+        "data_labels": {
+          "show": false
+        },
+        "sample_count": 4
+      },
+      {
+        "chart_type": "COLUMN_CLUSTERED",
+        "color_sequence": [
+          "#11577F"
+        ],
+        "category_axis": {
+          "visible": true,
+          "gridlines_major": false,
+          "gridlines_minor": false
+        },
+        "value_axis": {
+          "visible": true,
+          "gridlines_major": false,
+          "gridlines_minor": false
+        },
+        "legend": {
+          "visible": false,
+          "position": "bottom"
+        },
+        "data_labels": {
+          "show": false
+        },
+        "sample_count": 1
+      },
+      {
+        "chart_type": "AREA_STACKED",
+        "color_sequence": [
+          "#148DB9",
+          "#11577F",
+          "#75CDD7"
+        ],
+        "category_axis": {
+          "visible": true,
+          "gridlines_major": false,
+          "gridlines_minor": false
+        },
+        "value_axis": {
+          "visible": true,
+          "gridlines_major": false,
+          "gridlines_minor": false
+        },
+        "legend": {
+          "visible": true,
+          "position": "left"
+        },
+        "data_labels": {
+          "show": false
+        },
+        "sample_count": 1
+      },
+      {
+        "chart_type": "PIE",
+        "color_sequence": [
+          "#29B5E8"
+        ],
+        "category_axis": {
+          "visible": false,
+          "gridlines_major": false,
+          "gridlines_minor": false
+        },
+        "value_axis": {
+          "visible": false,
+          "gridlines_major": false,
+          "gridlines_minor": false
+        },
+        "legend": {
+          "visible": true,
+          "position": "bottom"
+        },
+        "data_labels": {
+          "show": false
+        },
+        "sample_count": 1
+      },
+      {
+        "chart_type": "LINE",
+        "category_axis": {
+          "visible": true,
+          "gridlines_major": false,
+          "gridlines_minor": false
+        },
+        "value_axis": {
+          "visible": true,
+          "gridlines_major": false,
+          "gridlines_minor": false
+        },
+        "legend": {
+          "visible": true,
+          "position": "left"
+        },
+        "data_labels": {
+          "show": false
+        },
+        "sample_count": 1
+      }
+    ],
+    "table_style": {
+      "header_fill": "#11577F",
+      "header_font": {
+        "name": "Inter",
+        "size": 11.0,
+        "bold": true,
+        "italic": false
+      },
+      "cell_font": {
+        "name": "Inter",
+        "size": 10.0,
+        "bold": false,
+        "italic": false
+      },
+      "banded_rows": true,
+      "band_fills": [
+        "#105780",
+        "#105780"
+      ],
+      "first_row_header": true,
+      "border_horizontal": {
+        "visible": true,
+        "color": "#D5D5D5",
+        "width": 1.0
+      },
+      "border_vertical": {
+        "visible": false
+      },
+      "text_align_first_col": "left",
+      "text_align_other_cols": "right",
+      "typical_columns": 5,
+      "typical_rows": 8,
+      "sample_count": 3
+    },
+    "text_styles": {
+      "title": {
+        "name": "Arial",
+        "size": 36.0,
+        "bold": true,
+        "italic": false,
+        "color": "#262626"
+      },
+      "subtitle": {
+        "name": "Arial",
+        "size": 20.0,
+        "bold": false,
+        "italic": false,
+        "color": "#FFFFFF"
+      },
+      "body": {
+        "name": "Arial",
+        "size": 13.0,
+        "bold": false,
+        "italic": false,
+        "color": "#5C5C5C"
+      },
+      "caption": {
+        "name": "Arial",
+        "size": 8.0,
+        "bold": false,
+        "italic": false,
+        "color": "#929292"
+      }
+    },
+    "palette_ordered": [
+      "#FFFFFF",
+      "#29B5E8",
+      "#262626",
+      "#7CCCE8",
+      "#148BC0",
+      "#5C5C5C",
+      "#929292",
+      "#105780",
+      "#BFBFBF",
+      "#75CDD7",
+      "#D45B90",
+      "#FF9F36",
+      "#7254A3",
+      "#11577F",
+      "#27B1E3",
+      "#148DB9"
+    ],
+    "primary_font": "Arial",
+    "sample_element_count": 3184,
+    "sample_doc_count": 1,
+    "extracted_at": 1778557684
+  },
+  "instructions_md": "",
+  "items": [
+    {
+      "kind": "element",
+      "order_index": 0,
+      "provenance": {
+        "fingerprint": "('BridgeShape', 'bot-left', 'xs', True, 'none', None)",
+        "member_count": 61,
+        "members": [
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 1,
+            "element_id": "11"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 2,
+            "element_id": "7"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 2,
+            "element_id": "35"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 3,
+            "element_id": "7"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 4,
+            "element_id": "7"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 5,
+            "element_id": "7"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 6,
+            "element_id": "9"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 7,
+            "element_id": "18"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 8,
+            "element_id": "7"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 9,
+            "element_id": "7"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 10,
+            "element_id": "7"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 11,
+            "element_id": "7"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 12,
+            "element_id": "7"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 13,
+            "element_id": "7"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 14,
+            "element_id": "7"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 15,
+            "element_id": "7"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 16,
+            "element_id": "7"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 17,
+            "element_id": "7"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 18,
+            "element_id": "19"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 19,
+            "element_id": "21"
+          }
+        ]
+      },
+      "template": {
+        "id": "69b444dd99eb4cba9decaf8c18b9192e",
+        "name": "Copyright Footer",
+        "description": "A simple footer with \u00a9 symbol, year, and company name.",
+        "category": "Induced:snowflake",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778557762.5128896,
+        "updated_at": 1778557762.51289,
+        "tags": [
+          "copyright",
+          "induced",
+          "legal",
+          "shape",
+          "footer"
+        ],
+        "inputs_schema": {
+          "year": {
+            "type": "string",
+            "required": true,
+            "default": "2024",
+            "description": "Year to display"
+          },
+          "company_name": {
+            "type": "string",
+            "required": true,
+            "default": "Your Company Inc.",
+            "description": "Company name"
+          }
+        },
+        "sample_inputs": {
+          "year": "2024",
+          "company_name": "Your Company Inc."
+        },
+        "layout": [
+          {
+            "kind": "shape",
+            "alias": "rectangle_10",
+            "body": {
+              "geometry_preset": "rect",
+              "position": {
+                "left_in": 0.6956,
+                "top_in": 7.099,
+                "width_in": 2.3547,
+                "height_in": 0.2356
+              },
+              "name": "Rectangle 10",
+              "text_box": true,
+              "text": "\u00a9 2019 Snowflake "
+            }
+          }
+        ],
+        "connects": {}
+      }
+    },
+    {
+      "kind": "element",
+      "order_index": 0,
+      "provenance": {
+        "fingerprint": "('BridgeText', 'top-left', 's', True, 'none', None)",
+        "member_count": 42,
+        "members": [
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 3,
+            "element_id": "5"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 3,
+            "element_id": "8"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 4,
+            "element_id": "5"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 4,
+            "element_id": "8"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 5,
+            "element_id": "4"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 6,
+            "element_id": "5"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 7,
+            "element_id": "12"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 10,
+            "element_id": "2"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 11,
+            "element_id": "3"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 12,
+            "element_id": "3"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 13,
+            "element_id": "6"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 14,
+            "element_id": "3"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 15,
+            "element_id": "4"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 16,
+            "element_id": "4"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 17,
+            "element_id": "5"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 26,
+            "element_id": "124"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 27,
+            "element_id": "12"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 28,
+            "element_id": "12"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 29,
+            "element_id": "12"
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 31,
+            "element_id": "2"
+          }
+        ]
+      },
+      "template": {
+        "id": "31546818ade14f34b91ef39c81119756",
+        "name": "Generic Text Slide",
+        "description": "A flexible slide with a single large text placeholder for titles or content.",
+        "category": "Induced:snowflake",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778557762.5194201,
+        "updated_at": 1778557762.5194204,
+        "tags": [
+          "placeholder",
+          "generic",
+          "induced",
+          "text"
+        ],
+        "inputs_schema": {
+          "title": {
+            "type": "string",
+            "required": true,
+            "default": "Example title",
+            "description": "Main heading"
+          },
+          "body_text": {
+            "type": "string",
+            "required": false,
+            "default": "Insert your content here",
+            "description": "Primary text content"
+          }
+        },
+        "sample_inputs": {
+          "title": "THIS IS A MULTI-USE SLIDE",
+          "body_text": "Insert your content here"
+        },
+        "layout": [
+          {
+            "kind": "text",
+            "alias": "text_placeholder_4",
+            "body": {
+              "text": "THIS IS A MULTI-USE SLIDE",
+              "position": {
+                "left_in": 0.4042,
+                "top_in": 0.5608,
+                "width_in": 12.525,
+                "height_in": 0.7917
+              },
+              "name": "Text Placeholder 4"
+            }
+          }
+        ],
+        "connects": {}
+      }
+    },
+    {
+      "kind": "slide",
+      "order_index": 0,
+      "provenance": {
+        "fingerprint": "((('BridgeImage', 'bot-left', 'xs', False, 'none', None), 1), (('BridgeShape', 'bot-left', 'xs', True, 'none', None), 1), (('BridgeText', 'bot-right', 'xs', False, 'none', None), 1), (('BridgeText', 'top-left', 's', True, 'none', None), 2))",
+        "member_count": 2,
+        "members": [
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 3
+          },
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 4
+          }
+        ]
+      },
+      "template": {
+        "id": "8a0451fdcf2945f8a4639bb8d2aed815",
+        "name": "Generic Content Slide",
+        "description": "A flexible slide with a headline and two body text placeholders, plus optional copyright and slide number.",
+        "category": "Induced:snowflake",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778557762.5263307,
+        "updated_at": 1778557762.5263312,
+        "tags": [
+          "generic",
+          "copyright",
+          "induced",
+          "slide-number",
+          "placeholder",
+          "text"
+        ],
+        "inputs_schema": {
+          "title": {
+            "type": "string",
+            "required": true,
+            "default": "Your Title Here",
+            "description": "Main heading of the slide"
+          },
+          "body_text_1": {
+            "type": "string",
+            "required": false,
+            "default": "First body paragraph",
+            "description": "Primary content text"
+          },
+          "body_text_2": {
+            "type": "string",
+            "required": false,
+            "default": "Second body paragraph",
+            "description": "Secondary content text"
+          },
+          "copyright": {
+            "type": "string",
+            "required": false,
+            "default": "\u00a9 2024 Your Company. All Rights Reserved.",
+            "description": "Footer copyright notice"
+          }
+        },
+        "sample_inputs": {
+          "title": "\u00a9 2019 Snowflake  Inc. All Rights Reserved",
+          "body_text_1": "First body paragraph",
+          "body_text_2": "Second body paragraph",
+          "copyright": "\u00a9 2024 Your Company. All Rights Reserved."
+        },
+        "layout": [
+          {
+            "kind": "shape",
+            "alias": "rectangle_6",
+            "body": {
+              "geometry_preset": "rect",
+              "position": {
+                "left_in": 0.6956,
+                "top_in": 7.099,
+                "width_in": 2.3547,
+                "height_in": 0.2356
+              },
+              "name": "Rectangle 6",
+              "text_box": true,
+              "text": "\u00a9 2019 Snowflake "
+            }
+          },
+          {
+            "kind": "text",
+            "alias": "text_placeholder_4",
+            "body": {
+              "text": "THIS IS A MULTI-USE SLIDE",
+              "position": {
+                "left_in": 0.4042,
+                "top_in": 0.5608,
+                "width_in": 12.525,
+                "height_in": 0.7917
+              },
+              "name": "Text Placeholder 4"
+            }
+          },
+          {
+            "kind": "text",
+            "alias": "text_placeholder_7",
+            "body": {
+              "text": "You can add text boxes and other content anywhere on the slide without guides",
+              "position": {
+                "left_in": 0.4167,
+                "top_in": 1.3753,
+                "width_in": 12.5,
+                "height_in": 0.4302
+              },
+              "name": "Text Placeholder 7"
+            }
+          },
+          {
+            "kind": "text",
+            "alias": "slide_number_placeholder_5",
+            "body": {
+              "text": "",
+              "position": {
+                "left_in": 12.6245,
+                "top_in": 7.1021,
+                "width_in": 0.375,
+                "height_in": 0.2356
+              },
+              "name": "Slide Number Placeholder 5"
+            }
+          }
+        ],
+        "connects": {}
+      }
+    },
+    {
+      "kind": "slide",
+      "order_index": 0,
+      "provenance": {
+        "fingerprint": "((('BridgeFreeform', 'top-left', 'm', False, 'solidFill', None), 1), (('BridgeFreeform', 'top-mid', 'm', False, 'solidFill', None), 1), (('BridgeFreeform', 'top-right', 's', False, 'solidFill', None), 1), (('BridgeImage', 'bot-left', 'xs', False, 'none', None), 1), (('BridgeShape', 'bot-left', 'xs', True, 'none', None), 1), (('BridgeTable', 'top-left', 'lg', False, 'none', None), 1), (('BridgeText', 'bot-right', 'xs', False, 'none', None), 1), (('BridgeText', 'top-left', 's', True, 'none', None), 1))",
+        "member_count": 1,
+        "members": [
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 6
+          }
+        ]
+      },
+      "template": {
+        "id": "84785fb344054198901e4458456f00f9",
+        "name": "Agenda Table Slide",
+        "description": "A slide with a heading and a table listing agenda items, including a footer copyright and slide number.",
+        "category": "Induced:snowflake",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778557762.532764,
+        "updated_at": 1778557762.5327642,
+        "tags": [
+          "table",
+          "induced",
+          "slide-number",
+          "agenda",
+          "footer"
+        ],
+        "inputs_schema": {
+          "title": {
+            "type": "string",
+            "required": true,
+            "default": "This is an agenda",
+            "description": "Main heading of the agenda"
+          },
+          "agenda_items": {
+            "type": "array",
+            "required": true,
+            "default": [
+              [
+                "Agenda item one",
+                "",
+                "Description"
+              ],
+              [
+                "Agenda item two",
+                "",
+                "Description"
+              ]
+            ],
+            "description": "List of rows for the agenda table, each row containing [Item Name, Placeholder, Description]"
+          }
+        },
+        "sample_inputs": {
+          "title": "\u00a9 2019 Snowflake  Inc. All Rights Reserved",
+          "agenda_items": [
+            [
+              "Agenda item one",
+              "",
+              "Description"
+            ],
+            [
+              "Agenda item two",
+              "",
+              "Description"
+            ]
+          ]
+        },
+        "layout": [
+          {
+            "kind": "shape",
+            "alias": "rectangle_8",
+            "body": {
+              "geometry_preset": "rect",
+              "position": {
+                "left_in": 0.6956,
+                "top_in": 7.099,
+                "width_in": 2.3547,
+                "height_in": 0.2356
+              },
+              "name": "Rectangle 8",
+              "text_box": true,
+              "text": "\u00a9 2019 Snowflake "
+            }
+          },
+          {
+            "kind": "text",
+            "alias": "text_placeholder_4",
+            "body": {
+              "text": "This is an agenda",
+              "position": {
+                "left_in": 0.4042,
+                "top_in": 0.5683,
+                "width_in": 12.525,
+                "height_in": 0.7917
+              },
+              "name": "Text Placeholder 4"
+            }
+          },
+          {
+            "kind": "text",
+            "alias": "slide_number_placeholder_3",
+            "body": {
+              "text": "",
+              "position": {
+                "left_in": 12.6245,
+                "top_in": 7.1021,
+                "width_in": 0.375,
+                "height_in": 0.2356
+              },
+              "name": "Slide Number Placeholder 3"
+            }
+          },
+          {
+            "kind": "table",
+            "alias": "table_5",
+            "body": {
+              "data": [
+                [
+                  "Agenda item one",
+                  "",
+                  "Description"
+                ],
+                [
+                  "Agenda item two",
+                  "",
+                  "Description"
+                ],
+                [
+                  "Agenda item three",
+                  "",
+                  "Description"
+                ],
+                [
+                  "Agenda item four",
+                  "",
+                  "Description"
+                ],
+                [
+                  "Agenda item five",
+                  "",
+                  "Description"
+                ],
+                [
+                  "Agenda item six",
+                  "",
+                  "Description"
+                ],
+                [
+                  "Agenda item seven",
+                  "",
+                  "Description"
+                ],
+                [
+                  "Agenda item eight",
+                  "",
+                  "Description"
+                ]
+              ],
+              "first_row_header": true,
+              "banded_rows": true,
+              "position": {
+                "left_in": 0.434,
+                "top_in": 1.7766,
+                "width_in": 12.4653,
+                "height_in": 4.5255
+              },
+              "name": "Table 5"
+            }
+          }
+        ],
+        "connects": {}
+      }
+    },
+    {
+      "kind": "slide",
+      "order_index": 0,
+      "provenance": {
+        "fingerprint": "((('BridgeChart', 'top-left', 'lg', True, 'none', 'COLUMN_CLUSTERED'), 1), (('BridgeImage', 'bot-left', 'xs', False, 'none', None), 1), (('BridgeShape', 'bot-left', 'xs', True, 'none', None), 1), (('BridgeText', 'bot-right', 'xs', False, 'none', None), 1), (('BridgeText', 'top-left', 's', True, 'none', None), 1))",
+        "member_count": 1,
+        "members": [
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 11
+          }
+        ]
+      },
+      "template": {
+        "id": "a86d7e1a9eea44949d7322b22605861b",
+        "name": "Bar Chart Slide",
+        "description": "A single-slide template featuring a clustered column bar chart with a main title and optional subtitle, plus slide number and copyright placeholders.",
+        "category": "Induced:snowflake",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778557762.61323,
+        "updated_at": 1778557762.61323,
+        "tags": [
+          "chart",
+          "data visualization",
+          "induced",
+          "bar",
+          "single slide",
+          "column"
+        ],
+        "inputs_schema": {
+          "title": {
+            "type": "string",
+            "required": true,
+            "default": "Chart Title",
+            "description": "Main heading of the slide"
+          },
+          "subtitle": {
+            "type": "string",
+            "required": false,
+            "default": "",
+            "description": "Optional subtitle displayed below the title"
+          },
+          "chart_title": {
+            "type": "string",
+            "required": true,
+            "default": "Bar Chart",
+            "description": "Title displayed above the chart"
+          },
+          "series_name": {
+            "type": "string",
+            "required": true,
+            "default": "Category 1",
+            "description": "Name of the data series in the chart"
+          },
+          "data_values": {
+            "type": "array<number>",
+            "required": true,
+            "default": [
+              65,
+              70,
+              73,
+              77,
+              85,
+              87,
+              94
+            ],
+            "description": "Numeric values for each category in the chart"
+          },
+          "categories": {
+            "type": "array<string>",
+            "required": true,
+            "default": [
+              "Q1 FY2015",
+              "Q2 FY2015",
+              "Q3 FY2015",
+              "Q4 FY2015",
+              "Q1 FY2016",
+              "Q2 FY2016",
+              "Q3 FY2016"
+            ],
+            "description": "Category labels on the X-axis"
+          },
+          "copyright_text": {
+            "type": "string",
+            "required": false,
+            "default": "\u00a9 2024 Your Company. All Rights Reserved.",
+            "description": "Text displayed in the copyright area"
+          }
+        },
+        "sample_inputs": {
+          "title": "\u00a9 2019 Snowflake  Inc. All Rights Reserved",
+          "subtitle": "\u00a9 2019 Snowflake  Inc. All Rights Reserved",
+          "chart_title": "\u00a9 2019 Snowflake  Inc. All Rights Reserved",
+          "series_name": "Category 1",
+          "data_values": [
+            65,
+            70,
+            73,
+            77,
+            85,
+            87,
+            94
+          ],
+          "categories": [
+            "Q1 FY2015",
+            "Q2 FY2015",
+            "Q3 FY2015",
+            "Q4 FY2015",
+            "Q1 FY2016",
+            "Q2 FY2016",
+            "Q3 FY2016"
+          ],
+          "copyright_text": "\u00a9 2024 Your Company. All Rights Reserved."
+        },
+        "layout": [
+          {
+            "kind": "shape",
+            "alias": "rectangle_6",
+            "body": {
+              "geometry_preset": "rect",
+              "position": {
+                "left_in": 0.6956,
+                "top_in": 7.099,
+                "width_in": 2.3547,
+                "height_in": 0.2356
+              },
+              "name": "Rectangle 6",
+              "text_box": true,
+              "text": "\u00a9 2019 Snowflake "
+            }
+          },
+          {
+            "kind": "text",
+            "alias": "text_placeholder_2",
+            "body": {
+              "text": "Bar Chart",
+              "position": {
+                "left_in": 0.4167,
+                "top_in": 0.5608,
+                "width_in": 12.5,
+                "height_in": 0.7917
+              },
+              "name": "Text Placeholder 2"
+            }
+          },
+          {
+            "kind": "text",
+            "alias": "slide_number_placeholder_5",
+            "body": {
+              "text": "",
+              "position": {
+                "left_in": 12.6245,
+                "top_in": 7.1021,
+                "width_in": 0.375,
+                "height_in": 0.2356
+              },
+              "name": "Slide Number Placeholder 5"
+            }
+          },
+          {
+            "kind": "chart",
+            "alias": "color1",
+            "body": {
+              "chart_type": "COLUMN_CLUSTERED",
+              "categories": [
+                "Q1 FY2015",
+                "Q2 FY2015",
+                "Q3 FY2015",
+                "Q4 FY2015",
+                "Q1 FY2016",
+                "Q2 FY2016",
+                "Q3 FY2016"
+              ],
+              "series": [
+                {
+                  "name": "Category 1",
+                  "values": [
+                    65.0,
+                    70.0,
+                    73.0,
+                    77.0,
+                    85.0,
+                    87.0,
+                    94.0
+                  ]
+                }
+              ],
+              "title": "Chart title",
+              "position": {
+                "left_in": 0.5175,
+                "top_in": 1.5642,
+                "width_in": 12.2984,
+                "height_in": 5.3739
+              },
+              "name": "_color1"
+            }
+          }
+        ],
+        "connects": {}
+      }
+    },
+    {
+      "kind": "slide",
+      "order_index": 0,
+      "provenance": {
+        "fingerprint": "((('BridgeChart', 'top-left', 'm', False, 'none', 'DOUGHNUT'), 2), (('BridgeChart', 'top-mid', 'm', False, 'none', 'PIE'), 1), (('BridgeImage', 'bot-left', 'xs', False, 'none', None), 1), (('BridgeShape', 'bot-left', 'xs', True, 'none', None), 1), (('BridgeText', 'bot-right', 'xs', False, 'none', None), 1), (('BridgeText', 'top-left', 's', True, 'none', None), 1))",
+        "member_count": 1,
+        "members": [
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 13
+          }
+        ]
+      },
+      "template": {
+        "id": "fa8dc93a71064771a45f518c8b1aa3ba",
+        "name": "Pie & Donut Chart Comparison",
+        "description": "A slide featuring a title with two side\u2011by\u2011side pie/donut charts for comparative data display.",
+        "category": "Induced:snowflake",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778557762.6209042,
+        "updated_at": 1778557762.6209042,
+        "tags": [
+          "chart",
+          "data visualization",
+          "comparison",
+          "induced",
+          "pie",
+          "donut"
+        ],
+        "inputs_schema": {
+          "title": {
+            "type": "string",
+            "required": true,
+            "default": "Pie and Donut Charts",
+            "description": "Main heading of the slide"
+          },
+          "chart1_categories": {
+            "type": "array<string>",
+            "required": false,
+            "default": [
+              "Q1",
+              "Q2",
+              "Q3",
+              "Q4"
+            ],
+            "description": "Categories for the left chart"
+          },
+          "chart1_series_name": {
+            "type": "string",
+            "required": false,
+            "default": "Sales",
+            "description": "Series name for the left chart"
+          },
+          "chart1_series_values": {
+            "type": "array<number>",
+            "required": false,
+            "default": [
+              8.2,
+              3.2,
+              1.4,
+              1.2
+            ],
+            "description": "Values for the left chart series"
+          },
+          "chart2_categories": {
+            "type": "array<string>",
+            "required": false,
+            "default": [
+              "Q1",
+              "Q2",
+              "Q3",
+              "Q4"
+            ],
+            "description": "Categories for the right chart"
+          },
+          "chart2_series_name": {
+            "type": "string",
+            "required": false,
+            "default": "Sales",
+            "description": "Series name for the right chart"
+          },
+          "chart2_series_values": {
+            "type": "array<number>",
+            "required": false,
+            "default": [
+              8.2,
+              3.2,
+              1.4,
+              1.2
+            ],
+            "description": "Values for the right chart series"
+          }
+        },
+        "sample_inputs": {
+          "title": "\u00a9 2019 Snowflake  Inc. All Rights Reserved",
+          "chart1_categories": [
+            "Q1",
+            "Q2",
+            "Q3",
+            "Q4"
+          ],
+          "chart1_series_name": "Sales",
+          "chart1_series_values": [
+            8.2,
+            3.2,
+            1.4,
+            1.2
+          ],
+          "chart2_categories": [
+            "Q1",
+            "Q2",
+            "Q3",
+            "Q4"
+          ],
+          "chart2_series_name": "Sales",
+          "chart2_series_values": [
+            8.2,
+            3.2,
+            1.4,
+            1.2
+          ]
+        },
+        "layout": [
+          {
+            "kind": "shape",
+            "alias": "rectangle_6",
+            "body": {
+              "geometry_preset": "rect",
+              "position": {
+                "left_in": 0.6956,
+                "top_in": 7.099,
+                "width_in": 2.3547,
+                "height_in": 0.2356
+              },
+              "name": "Rectangle 6",
+              "text_box": true,
+              "text": "\u00a9 2019 Snowflake "
+            }
+          },
+          {
+            "kind": "text",
+            "alias": "text_placeholder_5",
+            "body": {
+              "text": "Pie and Donut Charts",
+              "position": {
+                "left_in": 0.4167,
+                "top_in": 0.5608,
+                "width_in": 12.5,
+                "height_in": 0.7917
+              },
+              "name": "Text Placeholder 5"
+            }
+          },
+          {
+            "kind": "text",
+            "alias": "slide_number_placeholder_5",
+            "body": {
+              "text": "",
+              "position": {
+                "left_in": 12.6245,
+                "top_in": 7.1021,
+                "width_in": 0.375,
+                "height_in": 0.2356
+              },
+              "name": "Slide Number Placeholder 5"
+            }
+          },
+          {
+            "kind": "chart",
+            "alias": "color1",
+            "body": {
+              "chart_type": "DOUGHNUT",
+              "categories": [],
+              "series": [],
+              "title": null,
+              "position": {
+                "left_in": 0.4479,
+                "top_in": 2.0537,
+                "width_in": 7.3118,
+                "height_in": 5.2589
+              },
+              "name": "_color1"
+            }
+          },
+          {
+            "kind": "chart",
+            "alias": "chart_1",
+            "body": {
+              "chart_type": "DOUGHNUT",
+              "categories": [
+                "1st Qtr",
+                "2nd Qtr",
+                "3rd Qtr",
+                "4th Qtr"
+              ],
+              "series": [
+                {
+                  "name": "Sales",
+                  "values": [
+                    8.200000000000001,
+                    3.2,
+                    1.4,
+                    1.2
+                  ]
+                }
+              ],
+              "title": "",
+              "position": {
+                "left_in": 1.5989,
+                "top_in": 1.6652,
+                "width_in": 4.4986,
+                "height_in": 4.7437
+              },
+              "name": "Chart 1"
+            }
+          },
+          {
+            "kind": "chart",
+            "alias": "chart_9",
+            "body": {
+              "chart_type": "PIE",
+              "categories": [
+                "1st Qtr",
+                "2nd Qtr",
+                "3rd Qtr",
+                "4th Qtr"
+              ],
+              "series": [
+                {
+                  "name": "Sales",
+                  "values": [
+                    8.200000000000001,
+                    3.2,
+                    1.4,
+                    1.2
+                  ]
+                }
+              ],
+              "title": "",
+              "position": {
+                "left_in": 6.8708,
+                "top_in": 1.6652,
+                "width_in": 4.4986,
+                "height_in": 4.7437
+              },
+              "name": "Chart 9"
+            }
+          }
+        ],
+        "connects": {}
+      }
+    },
+    {
+      "kind": "slide",
+      "order_index": 0,
+      "provenance": {
+        "fingerprint": "((('BridgeConnector', 'bot-mid', 'unknown', False, 'none', None), 2), (('BridgeConnector', 'mid-left', 'unknown', False, 'none', None), 2), (('BridgeConnector', 'mid-right', 'unknown', False, 'none', None), 2), (('BridgeConnector', 'top-mid', 'unknown', False, 'none', None), 2), (('BridgeImage', 'bot-left', 'xs', False, 'none', None), 1), (('BridgeShape', 'bot-left', 'xs', True, 'none', None), 1), (('BridgeText', 'mid-left', 's', True, 'none', None), 1), (('BridgeText', 'top-left', 'm', True, 'none', None), 1))",
+        "member_count": 1,
+        "members": [
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 18
+          }
+        ]
+      },
+      "template": {
+        "id": "90a641813c3c4a7f8be5e9ef35d0f32d",
+        "name": "Quote with Author",
+        "description": "A slide featuring a centered quotation, the author's name below it, and a small copyright notice at the bottom.",
+        "category": "Induced:snowflake",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778557762.6278303,
+        "updated_at": 1778557762.6278303,
+        "tags": [
+          "quote",
+          "author",
+          "copyright",
+          "induced",
+          "text"
+        ],
+        "inputs_schema": {
+          "quote_text": {
+            "type": "string",
+            "required": true,
+            "default": "\"Your quote here\"",
+            "description": "The main quotation to display"
+          },
+          "author_name": {
+            "type": "string",
+            "required": true,
+            "default": "Author Name",
+            "description": "Name of the person who said the quote"
+          },
+          "copyright_text": {
+            "type": "string",
+            "required": false,
+            "default": "\u00a9 2024 Company All Rights Reserved",
+            "description": "Copyright notice displayed in small text at bottom"
+          }
+        },
+        "sample_inputs": {
+          "quote_text": "\"Your quote here\"",
+          "author_name": "Author Name",
+          "copyright_text": "\u00a9 2024 Company All Rights Reserved"
+        },
+        "layout": [
+          {
+            "kind": "connector",
+            "alias": "straight_connector_25",
+            "body": {
+              "connector_type": "straight",
+              "start": {
+                "x_in": 6.6667,
+                "y_in": 0.0
+              },
+              "end": {
+                "x_in": 6.6667,
+                "y_in": 1.6528
+              },
+              "name": "Straight Connector 25"
+            }
+          },
+          {
+            "kind": "connector",
+            "alias": "straight_connector_28",
+            "body": {
+              "connector_type": "straight",
+              "start": {
+                "x_in": 6.6667,
+                "y_in": 5.8472
+              },
+              "end": {
+                "x_in": 6.6667,
+                "y_in": 7.5
+              },
+              "name": "Straight Connector 28"
+            }
+          },
+          {
+            "kind": "connector",
+            "alias": "straight_connector_30",
+            "body": {
+              "connector_type": "straight",
+              "start": {
+                "x_in": 0.8264,
+                "y_in": 2.9306
+              },
+              "end": {
+                "x_in": 0.8264,
+                "y_in": 4.5834
+              },
+              "name": "Straight Connector 30"
+            }
+          },
+          {
+            "kind": "connector",
+            "alias": "straight_connector_31",
+            "body": {
+              "connector_type": "straight",
+              "start": {
+                "x_in": 12.5069,
+                "y_in": 2.9306
+              },
+              "end": {
+                "x_in": 12.5069,
+                "y_in": 4.5834
+              },
+              "name": "Straight Connector 31"
+            }
+          },
+          {
+            "kind": "connector",
+            "alias": "straight_connector_44",
+            "body": {
+              "connector_type": "straight",
+              "start": {
+                "x_in": 6.6667,
+                "y_in": 0.0
+              },
+              "end": {
+                "x_in": 6.6667,
+                "y_in": 1.6528
+              },
+              "name": "Straight Connector 44"
+            }
+          },
+          {
+            "kind": "connector",
+            "alias": "straight_connector_45",
+            "body": {
+              "connector_type": "straight",
+              "start": {
+                "x_in": 6.6667,
+                "y_in": 5.8472
+              },
+              "end": {
+                "x_in": 6.6667,
+                "y_in": 7.5
+              },
+              "name": "Straight Connector 45"
+            }
+          },
+          {
+            "kind": "connector",
+            "alias": "straight_connector_42",
+            "body": {
+              "connector_type": "straight",
+              "start": {
+                "x_in": 0.8264,
+                "y_in": 2.9306
+              },
+              "end": {
+                "x_in": 0.8264,
+                "y_in": 4.5834
+              },
+              "name": "Straight Connector 42"
+            }
+          },
+          {
+            "kind": "connector",
+            "alias": "straight_connector_43",
+            "body": {
+              "connector_type": "straight",
+              "start": {
+                "x_in": 12.5069,
+                "y_in": 2.9306
+              },
+              "end": {
+                "x_in": 12.5069,
+                "y_in": 4.5834
+              },
+              "name": "Straight Connector 43"
+            }
+          },
+          {
+            "kind": "shape",
+            "alias": "rectangle_18",
+            "body": {
+              "geometry_preset": "rect",
+              "position": {
+                "left_in": 0.6956,
+                "top_in": 7.099,
+                "width_in": 2.3547,
+                "height_in": 0.2356
+              },
+              "name": "Rectangle 18",
+              "text_box": true,
+              "text": "\u00a9 2019 Snowflake "
+            }
+          },
+          {
+            "kind": "text",
+            "alias": "text_placeholder_2",
+            "body": {
+              "text": "\u201cMAYBE TONE IT DOWN WITH THE EXPLOSIONS\u201d ",
+              "position": {
+                "left_in": 1.9167,
+                "top_in": 1.7708,
+                "width_in": 9.5,
+                "height_in": 3.9583
+              },
+              "name": "Text Placeholder 2"
+            }
+          },
+          {
+            "kind": "text",
+            "alias": "textbox_1",
+            "body": {
+              "text": "MICHAEL BAY",
+              "position": {
+                "left_in": 2.1528,
+                "top_in": 4.4583,
+                "width_in": 9.0278,
+                "height_in": 0.8078
+              },
+              "name": "TextBox 1"
+            }
+          }
+        ],
+        "connects": {}
+      }
+    },
+    {
+      "kind": "slide",
+      "order_index": 0,
+      "provenance": {
+        "fingerprint": "((('BridgeFreeform', 'mid-left', 's', False, 'solidFill', None), 1), (('BridgeFreeform', 'mid-mid', 'm', False, 'solidFill', None), 1), (('BridgeFreeform', 'mid-mid', 'xs', False, 'solidFill', None), 5), (('BridgeFreeform', 'top-right', 'm', False, 'solidFill', None), 1), (('BridgeImage', 'mid-left', 's', False, 'none', None), 1), (('BridgeImage', 'top-left', 'lg', False, 'none', None), 1), (('BridgeShape', 'bot-left', 'xs', True, 'none', None), 1), (('BridgeText', 'mid-mid', 'xs', True, 'none', None), 1))",
+        "member_count": 1,
+        "members": [
+          {
+            "ref_id": "ref_ylAlBWhq6sRCwSXS",
+            "slide_n": 23
+          }
+        ]
+      },
+      "template": {
+        "id": "9294305acb1b4ce397bfd25f97f5a7c2",
+        "name": "Thank You & Copyright",
+        "description": "A closing slide with a thank\u2011you headline and optional copyright notice.",
+        "category": "Induced:snowflake",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778557762.6368308,
+        "updated_at": 1778557762.636831,
+        "tags": [
+          "closing",
+          "thank you",
+          "copyright",
+          "induced",
+          "footer"
+        ],
+        "inputs_schema": {
+          "title": {
+            "type": "string",
+            "required": true,
+            "default": "THANK YOU",
+            "description": "Main heading displayed on the slide."
+          },
+          "copyright_text": {
+            "type": "string",
+            "required": false,
+            "default": "\u00a9 2019 Snowflake Inc. All Rights Reserved",
+            "description": "Text for the copyright line, including year and company name."
+          }
+        },
+        "sample_inputs": {
+          "title": "THANK YOU",
+          "copyright_text": "\u00a9 2019 Snowflake Inc. All Rights Reserved"
+        },
+        "layout": [
+          {
+            "kind": "text",
+            "alias": "textbox_1470",
+            "body": {
+              "text": "THANK YOU",
+              "position": {
+                "left_in": 5.534,
+                "top_in": 3.8817,
+                "width_in": 2.142,
+                "height_in": 0.5049
+              },
+              "name": "TextBox 1470"
+            }
+          },
+          {
+            "kind": "shape",
+            "alias": "rectangle_13",
+            "body": {
+              "geometry_preset": "rect",
+              "position": {
+                "left_in": 0.6956,
+                "top_in": 7.099,
+                "width_in": 2.3547,
+                "height_in": 0.2356
+              },
+              "name": "Rectangle 13",
+              "text_box": true,
+              "text": "\u00a9 2019 Snowflake "
+            }
+          }
+        ],
+        "connects": {}
+      }
+    }
+  ],
+  "snapshot_version": 1,
+  "snapshot_created_at": 1778557762
+}
