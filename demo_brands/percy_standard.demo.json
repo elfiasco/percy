@@ -5,11 +5,11 @@
   "prompt_id": "demo.showcase",
   "summary": {
     "demo_id": "demo.showcase",
-    "demo_name": "Showcase brief (7 slides)",
+    "demo_name": "Showcase brief",
     "slides_applied": 7,
     "errors": [],
     "ok": true,
-    "elapsed_seconds": 11.8
+    "elapsed_seconds": 18.0
   },
   "demo_slides_json": [
     {
@@ -49,7 +49,7 @@
           },
           "text_runs": [
             {
-              "text": "Q4 2025 Northwind Update",
+              "text": "Northwind Q4 2025",
               "font_name": "Inter",
               "font_size": 52,
               "font_bold": true,
@@ -78,7 +78,7 @@
           },
           "text_runs": [
             {
-              "text": "Three commitments shipped, one miss to talk about.",
+              "text": "Our biggest quarter ever \u2014 and what comes next",
               "font_name": "Inter",
               "font_size": 22,
               "font_bold": null,
@@ -107,7 +107,7 @@
           },
           "text_runs": [
             {
-              "text": "Operations team \u00b7 December 2025",
+              "text": "Company-Wide All-Hands \u00b7 December 2025",
               "font_name": "Inter",
               "font_size": 11,
               "font_bold": null,
@@ -143,7 +143,7 @@
           },
           "text_runs": [
             {
-              "text": "Q4 ARR ADDED",
+              "text": "Q4 2025 Net New ARR",
               "font_name": "Inter",
               "font_size": 14,
               "font_bold": true,
@@ -201,7 +201,7 @@
           },
           "text_runs": [
             {
-              "text": "Net new annual recurring revenue",
+              "text": "Largest single quarter in Northwind's history",
               "font_name": "Inter",
               "font_size": 24,
               "font_bold": null,
@@ -230,7 +230,7 @@
           },
           "text_runs": [
             {
-              "text": "Largest single quarter in our history. Up 18% QoQ.",
+              "text": "Up 18% quarter-over-quarter. Mid-market expansion led the quarter for the second straight period.",
               "font_name": "Inter",
               "font_size": 14,
               "font_bold": null,
@@ -255,118 +255,6 @@
         {
           "type": "BridgeShape",
           "position": {
-            "left_in": 0.0,
-            "top_in": 0.0,
-            "width_in": 3.5,
-            "height_in": 7.5
-          },
-          "fill": {
-            "type": "solid",
-            "color": "#F0E6D8"
-          },
-          "line": {
-            "visible": false,
-            "color": null,
-            "width": null
-          }
-        },
-        {
-          "type": "BridgeShape",
-          "position": {
-            "left_in": 0.5,
-            "top_in": 0.6,
-            "width_in": 2.5,
-            "height_in": 3.5
-          },
-          "fill": {
-            "type": "none",
-            "color": null
-          },
-          "text_runs": [
-            {
-              "text": "01",
-              "font_name": "JetBrains Mono",
-              "font_size": 140,
-              "font_bold": true,
-              "font_italic": null,
-              "color": "#888888"
-            }
-          ],
-          "text_align": "left",
-          "line": {
-            "visible": false,
-            "color": null,
-            "width": null
-          }
-        },
-        {
-          "type": "BridgeShape",
-          "position": {
-            "left_in": 4.2,
-            "top_in": 2.9,
-            "width_in": 8.6,
-            "height_in": 1.4
-          },
-          "fill": {
-            "type": "none",
-            "color": null
-          },
-          "text_runs": [
-            {
-              "text": "What worked",
-              "font_name": "Inter",
-              "font_size": 48,
-              "font_bold": true,
-              "font_italic": null,
-              "color": "#2A2F3A"
-            }
-          ],
-          "text_align": "left",
-          "line": {
-            "visible": false,
-            "color": null,
-            "width": null
-          }
-        },
-        {
-          "type": "BridgeShape",
-          "position": {
-            "left_in": 4.2,
-            "top_in": 4.4,
-            "width_in": 8.6,
-            "height_in": 0.6
-          },
-          "fill": {
-            "type": "none",
-            "color": null
-          },
-          "text_runs": [
-            {
-              "text": "Three commitments, three ships.",
-              "font_name": "Inter",
-              "font_size": 18,
-              "font_bold": null,
-              "font_italic": null,
-              "color": "#6A6F7A"
-            }
-          ],
-          "text_align": "left",
-          "line": {
-            "visible": false,
-            "color": null,
-            "width": null
-          }
-        }
-      ]
-    },
-    {
-      "slide_n": 4,
-      "width_in": 13.333,
-      "height_in": 7.5,
-      "elements": [
-        {
-          "type": "BridgeShape",
-          "position": {
             "left_in": 0.5,
             "top_in": 0.6,
             "width_in": 12.33,
@@ -378,7 +266,7 @@
           },
           "text_runs": [
             {
-              "text": "Q4 KPI Snapshot",
+              "text": "Q4 Scorecard",
               "font_name": "Inter",
               "font_size": 28,
               "font_bold": true,
@@ -454,7 +342,7 @@
           },
           "text_runs": [
             {
-              "text": "ARR added",
+              "text": "Net New ARR",
               "font_name": "Inter",
               "font_size": 14,
               "font_bold": null,
@@ -559,7 +447,7 @@
           },
           "text_runs": [
             {
-              "text": "Gross retention",
+              "text": "Gross Retention",
               "font_name": "Inter",
               "font_size": 14,
               "font_bold": null,
@@ -664,7 +552,7 @@
           },
           "text_runs": [
             {
-              "text": "Logos closed",
+              "text": "Logos Closed",
               "font_name": "Inter",
               "font_size": 14,
               "font_bold": null,
@@ -711,7 +599,7 @@
       ]
     },
     {
-      "slide_n": 5,
+      "slide_n": 4,
       "width_in": 13.333,
       "height_in": 7.5,
       "elements": [
@@ -725,17 +613,17 @@
           },
           "chart_type": "column_clustered",
           "chart_categories": [
-            "Q1",
-            "Q2",
-            "Q3",
-            "Q4"
+            "Q1 2025",
+            "Q2 2025",
+            "Q3 2025",
+            "Q4 2025"
           ],
           "chart_series_count": 1
         }
       ]
     },
     {
-      "slide_n": 6,
+      "slide_n": 5,
       "width_in": 13.333,
       "height_in": 7.5,
       "elements": [
@@ -753,7 +641,7 @@
           },
           "text_runs": [
             {
-              "text": "What shipped this quarter",
+              "text": "What We Shipped in Q4",
               "font_name": "Inter",
               "font_size": 32,
               "font_bold": true,
@@ -782,7 +670,7 @@
           },
           "text_runs": [
             {
-              "text": "\u2014  Aurora migration finished Nov 12 \u2014 read latency down 38%.",
+              "text": "\u2014  Aurora migration finished Nov 12 \u2014 read latency down 38%",
               "font_name": "Inter",
               "font_size": 20,
               "font_bold": null,
@@ -811,7 +699,7 @@
           },
           "text_runs": [
             {
-              "text": "\u2014  Self-serve onboarding launched. 14% of new logos used it.",
+              "text": "\u2014  Self-serve onboarding launched \u2014 14% of new logos used it in Q4",
               "font_name": "Inter",
               "font_size": 20,
               "font_bold": null,
@@ -840,7 +728,7 @@
           },
           "text_runs": [
             {
-              "text": "\u2014  Mobile app v2 in public beta. 2,100 users, 4.6 stars.",
+              "text": "\u2014  Mobile app v2 in public beta \u2014 2,100 users, 4.6-star rating",
               "font_name": "Inter",
               "font_size": 20,
               "font_bold": null,
@@ -869,7 +757,7 @@
           },
           "text_runs": [
             {
-              "text": "\u2014  {{item4}}",
+              "text": "\u2014  ",
               "font_name": "Inter",
               "font_size": 20,
               "font_bold": null,
@@ -898,7 +786,7 @@
           },
           "text_runs": [
             {
-              "text": "\u2014  {{item5}}",
+              "text": "\u2014  ",
               "font_name": "Inter",
               "font_size": 20,
               "font_bold": null,
@@ -907,6 +795,194 @@
             }
           ],
           "text_align": null,
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        }
+      ]
+    },
+    {
+      "slide_n": 6,
+      "width_in": 13.333,
+      "height_in": 7.5,
+      "elements": [
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 0.5,
+            "top_in": 0.6,
+            "width_in": 12.33,
+            "height_in": 1.0
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
+          "text_runs": [
+            {
+              "text": "Honest Look: Wins & The Miss",
+              "font_name": "Inter",
+              "font_size": 32,
+              "font_bold": true,
+              "font_italic": null,
+              "color": "#2A2F3A"
+            }
+          ],
+          "text_align": "left",
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 0.5,
+            "top_in": 2.0,
+            "width_in": 5.9,
+            "height_in": 4.6
+          },
+          "fill": {
+            "type": "solid",
+            "color": "#F0E6D8"
+          },
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 0.85,
+            "top_in": 2.25,
+            "width_in": 5.4,
+            "height_in": 0.4
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
+          "text_runs": [
+            {
+              "text": "What Went Well",
+              "font_name": "Inter",
+              "font_size": 11,
+              "font_bold": true,
+              "font_italic": null,
+              "color": "#7DA1CC"
+            }
+          ],
+          "text_align": "left",
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 0.85,
+            "top_in": 2.7,
+            "width_in": 5.4,
+            "height_in": 3.7
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
+          "text_runs": [
+            {
+              "text": "Record net new ARR of $2.4M, up 18% QoQ. Gross retention hit 98.7%, up 1.2 points \u2014 a signal that our existing customers are healthier than ever. Mid-market expansion drove the quarter for the second straight period.",
+              "font_name": "Inter",
+              "font_size": 16,
+              "font_bold": null,
+              "font_italic": null,
+              "color": "#2A2F3A"
+            }
+          ],
+          "text_align": "left",
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 6.95,
+            "top_in": 2.0,
+            "width_in": 5.9,
+            "height_in": 4.6
+          },
+          "fill": {
+            "type": "solid",
+            "color": "#F0E6D8"
+          },
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 7.3,
+            "top_in": 2.25,
+            "width_in": 5.4,
+            "height_in": 0.4
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
+          "text_runs": [
+            {
+              "text": "Where We Fell Short",
+              "font_name": "Inter",
+              "font_size": 11,
+              "font_bold": true,
+              "font_italic": null,
+              "color": "#7DA1CC"
+            }
+          ],
+          "text_align": "left",
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 7.3,
+            "top_in": 2.7,
+            "width_in": 5.4,
+            "height_in": 3.7
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
+          "text_runs": [
+            {
+              "text": "Logos closed came in at 47 \u2014 four fewer than Q3. New logo velocity slowed as the team prioritized mid-market expansion deals. We're examining our SMB pipeline coverage heading into Q1 2026.",
+              "font_name": "Inter",
+              "font_size": 16,
+              "font_bold": null,
+              "font_italic": null,
+              "color": "#2A2F3A"
+            }
+          ],
+          "text_align": "left",
           "line": {
             "visible": false,
             "color": null,
@@ -952,7 +1028,7 @@
           },
           "text_runs": [
             {
-              "text": "Thank you.",
+              "text": "Thank you \u2014 this quarter is yours.",
               "font_name": "Inter",
               "font_size": 64,
               "font_bold": true,
@@ -981,7 +1057,7 @@
           },
           "text_runs": [
             {
-              "text": "ops@northwind.so",
+              "text": "Questions? Reach us at ops@northwind.so",
               "font_name": "JetBrains Mono",
               "font_size": 20,
               "font_bold": null,
@@ -1010,7 +1086,7 @@
           },
           "text_runs": [
             {
-              "text": "Office hours Thursdays at 11am PT.",
+              "text": "Office hours every Thursday at 11am PT",
               "font_name": "Inter",
               "font_size": 14,
               "font_bold": null,
@@ -1029,5 +1105,5 @@
     }
   ],
   "snapshot_version": 1,
-  "generated_at": 1778565523
+  "generated_at": 1778598445
 }

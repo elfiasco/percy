@@ -154,82 +154,64 @@ Vary accent colors by slide mood. Default cobalt; sage for the
 DEMO_SHOWCASE_V1 = DemoPrompt(
     id="demo.showcase",
     version="v1",
-    name="Showcase brief (7 slides)",
+    name="Showcase brief",
     description=(
-        "Tight 7-slide quarterly update with FIXED content and FIXED data "
-        "across every run. Designed for the marketing splash: same exact "
-        "message + same exact numbers, fed to two different agents (one "
-        "per template set), so the only thing that varies in the output is "
-        "which templates each agent picks to fulfill the brief. That's the "
-        "demo: completely different visual decks from completely different "
-        "template choices, not just a recolored palette."
+        "Quarterly business update for fictional 'Northwind'. The CONTENT "
+        "and DATA are locked — same exact numbers, same exact copy across "
+        "every run. But the brief deliberately does NOT prescribe slide "
+        "structure, layouts, or template types. The agent surveys whatever "
+        "templates the active set provides and composes a deck the way IT "
+        "thinks tells the story best. Different sets → different agent "
+        "choices → completely different visual decks. That's the demo."
     ),
     slide_count=7,
-    # Content + data are LOCKED here so every agent producing this deck
-    # works with identical raw material. The choice of template per slot
-    # is what the agent decides — and that decision differs by available
-    # template inventory in each set.
     prompt="""\
-Build a 7-slide quarterly business update deck for a fictional B2B SaaS
-company called Northwind. Audience: company-wide all-hands. Use the
-EXACT content + data below — don't invent your own numbers, names, or
-copy. Your job is to choose which template best fulfills each slot
-from the templates available in this set, not to write new content.
+Build a quarterly business update deck for a fictional B2B SaaS company
+called Northwind. Audience: company-wide all-hands. Use the EXACT
+numbers + copy below — don't paraphrase, don't invent new metrics.
 
-  1. COVER SLIDE
-     Title:    "Q4 2025 Northwind Update"
-     Subtitle: "Three commitments shipped, one miss to talk about."
-     Presenter: "Operations team"
-     Date:     "December 2025"
+How to present this is YOUR call. Survey the templates available in
+this set and pick whichever ones tell the story best. Use as many or
+as few slides as feels right (somewhere between 5 and 9 is typical).
 
-  2. HEADLINE METRIC SLIDE
-     The single number that defines the quarter.
-     Eyebrow: "Q4 ARR ADDED"
-     Value:   "$2.4M"
-     Label:   "Net new annual recurring revenue"
-     Context: "Largest single quarter in our history. Up 18% QoQ."
+The story to tell:
 
-  3. SECTION DIVIDER
-     Section number: "01"
-     Section title:  "What worked"
-     Subtitle:       "Three commitments, three ships."
+  * It's Q4 2025. The quarter's headline: $2.4M net new ARR — the
+    largest single quarter in Northwind's history, up 18% QoQ. Three
+    commitments shipped; one miss to talk about.
 
-  4. KPI SNAPSHOT SLIDE (3 metrics side-by-side)
-     KPI 1: value "$2.4M",  label "ARR added",       delta "▲ 18% QoQ"
-     KPI 2: value "98.7%",  label "Gross retention", delta "▲ 1.2 pts"
-     KPI 3: value "47",     label "Logos closed",    delta "▼ 4 vs Q3"
+  * The key metrics for the quarter:
+      ARR added       — $2.4M       (▲ 18% QoQ)         a win
+      Gross retention — 98.7%       (▲ 1.2 pts)         a win
+      Logos closed    — 47          (▼ 4 vs Q3)         a slight miss
 
-  5. CHART / DATA SLIDE
-     Title:     "Quarterly ARR added"
-     Categories: ["Q1", "Q2", "Q3", "Q4"]
-     Values:     [1.6, 1.9, 2.0, 2.4]
-     Takeaway:  "Mid-market expansion led the quarter for the second
-                 straight period."
-     Source:    "Source: Salesforce snapshot, 2025-12-12."
+  * Quarterly ARR added over the year:
+      Q1: $1.6M   Q2: $1.9M   Q3: $2.0M   Q4: $2.4M
+    The narrative: mid-market expansion led the quarter for the second
+    straight period.
+    Source: Salesforce snapshot, 2025-12-12.
 
-  6. NARRATIVE SLIDE (3 em-dash bullets)
-     Title:    "What shipped this quarter"
-     Item 1:   "Aurora migration finished Nov 12 — read latency down 38%."
-     Item 2:   "Self-serve onboarding launched. 14% of new logos used it."
-     Item 3:   "Mobile app v2 in public beta. 2,100 users, 4.6 stars."
+  * What we shipped this quarter (three things):
+      — Aurora migration finished Nov 12. Read latency down 38%.
+      — Self-serve onboarding launched. 14% of new logos used it.
+      — Mobile app v2 in public beta. 2,100 users, 4.6 stars.
 
-  7. CLOSING SLIDE
-     Headline: "Thank you."
-     Contact:  "ops@northwind.so"
-     Next:     "Office hours Thursdays at 11am PT."
+  * Wrap warmly: thank-you, contact ops@northwind.so, office hours
+    Thursdays at 11am PT.
 
-Constraints:
-  * Use the EXACT text + numbers above. Don't paraphrase.
-  * For each slot, pick the template from THIS SET that best fits the
-    purpose described — title slide for slot 1, big-number for slot 2,
-    section divider for slot 3, KPI grid for slot 4, bar chart for
-    slot 5, bulleted list for slot 6, closing for slot 7.
-  * If the set doesn't have an exact template for a slot, pick the
-    closest fit OR use a generic text element to compose the slot.
-  * Vary accent colors meaningfully — sage for wins (slides 3-4),
-    cobalt default elsewhere, brick is fine for the miss in slot 4.
+Guidance, not prescription:
+  * If the set has a chart template that fits, use it for the Q1-Q4 ARR
+    progression. If it only has text templates, prose works fine.
+  * If the set has KPI / metric tile templates, the three quarterly
+    metrics work well as a snapshot. If not, lay them out however
+    reads cleanly.
+  * Vary accent colors when meaningful — for example, brick or ochre
+    on the slight-miss line if your set supports accent inputs.
+  * Don't repeat the same template back-to-back unless it's the best
+    fit.
 
-Output: one slide plan per row with template_id + inputs.
+Output: one slide plan per row, in deck order, with template_id +
+inputs.
 """,
 )
 

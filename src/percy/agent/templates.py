@@ -222,15 +222,21 @@ def apply_template(
     """
     inputs = inputs or {}
 
-    # Validate inputs
+    # Validate inputs + pre-fill defaults for EVERY schema entry that has
+    # one (not just required ones). This guarantees that no {{var}}
+    # placeholder leaks through to the rendered output just because the
+    # planner forgot to include an optional input. Saw this on the
+    # Snowflake demo: agent picked a template with an `eyebrow` input
+    # and never filled it → literal "{{eyebrow}}" showed up on screen.
     errors: list[str] = []
     schema = template.get("inputs_schema") or {}
     for key, spec in schema.items():
-        if spec.get("required") and key not in inputs:
-            if "default" in spec:
-                inputs[key] = spec["default"]
-            else:
-                errors.append(f"missing required input: {key}")
+        if key in inputs:
+            continue
+        if "default" in spec:
+            inputs[key] = spec["default"]
+        elif spec.get("required"):
+            errors.append(f"missing required input: {key}")
     if errors:
         return {"ok": False, "error": "; ".join(errors)}
 
@@ -386,13 +392,13 @@ def _substitute_str(s: str | None, inputs: dict) -> Any:
         key = m.group(1)
         if key in inputs:
             return inputs[key]
-        # Fall through to string mode (keeps the placeholder visible).
+        # Missing → empty string. We do NOT preserve the literal `{{var}}`
+        # because that would leak placeholders into rendered slides.
 
     def repl(m2: _re.Match) -> str:
         key = m2.group(1).strip()
-        val = inputs.get(key, m2.group(0))
-        # If we hit this branch we're inside a longer template string — coerce
-        # to str so the surrounding text stays intact.
+        # Default to empty string when the key is missing — same reason.
+        val = inputs.get(key, "")
         return str(val)
     return _re.sub(r"\{\{([^}]+)\}\}", repl, s)
 
