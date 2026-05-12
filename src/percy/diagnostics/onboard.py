@@ -137,8 +137,37 @@ def _extract_theme_fonts(presentation: Any) -> tuple[str | None, str | None]:
 
 
 def _extract_theme_colors(presentation: Any) -> dict[str, str]:
-    """Extract the color palette from the first slide master's theme. Returns normalized_key→#RRGGBB."""
+    """Extract the color palette from the first slide master's theme.
+
+    Keys are stored under MULTIPLE aliases so any code path looking up a theme
+    color resolves regardless of which naming convention it uses:
+
+      - canonical: LIGHT_1, DARK_1, ACCENT_1...
+      - python-pptx enum names: BACKGROUND_1, TEXT_1, ACCENT_1...
+      - OOXML raw: bg1, tx1, accent1...
+
+    Without these aliases, _fill_hex(...).fore_color.theme_color returns
+    `BACKGROUND_1` from python-pptx but our dict only had `LIGHT_1`,
+    causing every scheme-color slide background and shape fill to silently
+    fall through to None (and Studio defaulted to white). Same applies to
+    `TEXT_1` vs `DARK_1`.
+    """
     result: dict[str, str] = {}
+    # python-pptx enum-name aliases — these are what fill.fore_color.theme_color.name returns
+    _PPTX_ENUM_ALIAS = {
+        "LIGHT_1":  ["BACKGROUND_1", "bg1"],
+        "LIGHT_2":  ["BACKGROUND_2", "bg2"],
+        "DARK_1":   ["TEXT_1", "tx1"],
+        "DARK_2":   ["TEXT_2", "tx2"],
+        "ACCENT_1": ["accent1"],
+        "ACCENT_2": ["accent2"],
+        "ACCENT_3": ["accent3"],
+        "ACCENT_4": ["accent4"],
+        "ACCENT_5": ["accent5"],
+        "ACCENT_6": ["accent6"],
+        "HYPERLINK":         ["HYPERLINK", "hlink"],
+        "FOLLOWED_HYPERLINK":["FOLLOWED_HYPERLINK", "folHlink"],
+    }
     try:
         from lxml import etree
         from pptx.oxml.ns import qn
@@ -163,7 +192,11 @@ def _extract_theme_colors(presentation: Any) -> dict[str, str]:
                     if sys_el is not None:
                         hex_val = sys_el.get("lastClr")
                 if hex_val:
-                    result[normalized] = "#" + hex_val.lstrip("#")
+                    color = "#" + hex_val.lstrip("#")
+                    result[normalized] = color
+                    # Also store under aliases for resilience
+                    for alias in _PPTX_ENUM_ALIAS.get(normalized, []):
+                        result[alias] = color
             return result
     except Exception:
         pass

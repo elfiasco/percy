@@ -187,6 +187,13 @@ function renderYAxis(data: ChartData, horizontal = false, zeroFloor = false) {
     }
   }
   const fontSize = ax.tick_label_font_size ?? 11
+  // PowerPoint default for horizontal bar charts: categories appear in REVERSE
+  // of data order (first data point on the BOTTOM bar, last on TOP). LibreOffice,
+  // matplotlib, and Excel all follow this convention. Recharts defaults to data-
+  // order, so apply the reverse implicitly for horizontal layouts. If the bridge
+  // model explicitly sets `reverse_order=true`, the user has overridden, so we
+  // invert again (the explicit override should produce data-order display).
+  const yReversed = horizontal ? !ax.reverse_order : !!ax.reverse_order
   return (
     <YAxis
       dataKey={horizontal ? "__cat__" : undefined}
@@ -197,7 +204,7 @@ function renderYAxis(data: ChartData, horizontal = false, zeroFloor = false) {
       tickLine={false}
       tickMargin={6}
       width={horizontal ? 60 : 44}
-      reversed={ax.reverse_order}
+      reversed={yReversed}
       tickCount={!horizontal ? 6 : undefined}
       tickFormatter={!horizontal && ax.number_format ? (v) => formatNumber(v, ax.number_format!) : undefined}
     />
