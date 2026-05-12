@@ -177,20 +177,32 @@ async function getSlideCount(docId) {
   } catch { return 1 }
 }
 
-// ── API: reference render ─────────────────────────────────────────────────────
-// PRIMARY REFERENCE: /original.png is the LibreOffice/PPTX-native render of the
-// original deck — that's what the user is actually comparing Studio against.
-// FALLBACK: bridge.png (matplotlib render of the bridge model). Used only when
-// the original isn't available (e.g. PDF onboard, scratch docs).
-async function fetchReferencePng(docId, slideN, dpi = 120) {
-  // First try /original.png — the faithful pptx-as-rendered baseline
+// ── Reference render ──────────────────────────────────────────────────────────
+// PRIMARY: PowerPoint-rendered PNGs at `<pptxDir>/<pptxStem>__powerpoint/slide-NNN.png`.
+// These are produced once per deck via scripts/render_pptx_powerpoint.py using
+// COM automation against the real PowerPoint app on Windows — the authoritative
+// PPTX renderer.
+// FALLBACK 1: /api/docs/.../original.png (LibreOffice render — has known
+// chart/rotation/font bugs but covers decks that haven't been pre-rendered).
+// FALLBACK 2: matplotlib bridge.png / on-demand render.png.
+import { readFile as fsReadFile } from "node:fs/promises"
+async function fetchReferencePng(docId, slideN, dpi = 120, pptxPath = null) {
+  // PowerPoint-rendered local PNG, if available
+  if (pptxPath) {
+    const pptDir = dirname(pptxPath)
+    const stem   = basename(pptxPath, ".pptx")
+    const local  = join(pptDir, `${stem}__powerpoint`, `slide-${String(slideN).padStart(3, "0")}.png`)
+    if (existsSync(local)) {
+      return await fsReadFile(local)
+    }
+  }
+  // /original.png — LibreOffice render
   try {
     const r = await apiFetch(`/api/docs/${docId}/slides/${slideN}/original.png`)
     return Buffer.from(await r.arrayBuffer())
   } catch (e) {
     if (!e.message.includes("404")) throw e
   }
-  // Fallback to matplotlib bridge render
   if (!FORCE_REF) {
     try {
       const r = await apiFetch(`/api/docs/${docId}/slides/${slideN}/bridge.png`)
@@ -394,6 +406,27 @@ async function screenshotSlides(browser, projId, docId, slideNums, outDir) {
       for (const v of visibility) {
         console.log(`      VIS "${v.text}" color=${v.color} fs=${v.fontSize} lh=${v.lineHeight} op=${v.opacity} z=${v.elementZ}`)
       }
+      // Element CSS positions — to debug percentages drift
+      const elPos = await page.evaluate(() => {
+        const c = document.querySelector('[data-slide-canvas="true"]')
+        const cRect = c?.getBoundingClientRect()
+        return Array.from(document.querySelectorAll('[data-slide-canvas="true"] [data-element="true"]')).map((e) => {
+          const s = e.style
+          const r = e.getBoundingClientRect()
+          return {
+            css: { left: s.left, top: s.top, width: s.width, height: s.height },
+            pct: cRect ? {
+              left: ((r.x - cRect.x) / cRect.width * 100).toFixed(1),
+              w:    (r.width / cRect.width * 100).toFixed(1),
+            } : null,
+          }
+        })
+      })
+      console.log(`      slide ${n} element CSS positions:`)
+      for (let i = 0; i < Math.min(5, elPos.length); i++) {
+        const p = elPos[i]
+        console.log(`        [${i}] css={${p.css.left} ${p.css.top} ${p.css.width} ${p.css.height}} → ${p.pct.left}%/${p.pct.w}%`)
+      }
       // Dump actual inline HTML for first text element so we can see what styles are present
       const html = await page.evaluate(() => {
         const el = document.querySelector('[data-slide-canvas="true"] [data-element="true"] p')
@@ -501,7 +534,7 @@ async function runDeck(browser, pptxPath, docIdOverride, projIdOverride) {
     if (!needFetch) { process.stdout.write(".") }
     else {
       try {
-        const buf = await fetchReferencePng(docId, n, DPI)
+        const buf = await fetchReferencePng(docId, n, DPI, pptxPath)
         await writeFile(dest, buf)
         process.stdout.write("•")
       } catch (e) {
