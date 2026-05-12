@@ -220,85 +220,78 @@ function TextRuns({
   const raw = runs.map((r) => r.text).join("")
   if (!raw.trim()) return null
 
-  // ── Real browser-driven text layout via <foreignObject> ──
-  // SVG `<text>` doesn't wrap. Instead of approximating chars-per-line
-  // with a fragile multiplier (which under-counts wide bold glyphs at
-  // display sizes and lets text like "Q4 2025 Northwind Update" run
-  // past the box edge), drop into HTML inside a `<foreignObject>`. The
-  // browser does the actual text measurement + wrapping — same engine
-  // that wraps text in the studio editor's Tiptap renderer. Width-based
-  // overflow disappears; long copy wraps to a second line as it would
-  // in any HTML container.
-  //
-  // We also keep the SVG coordinate system: foreignObject's x/y/width/
-  // height are in user-space units (inches in our viewBox), so positions
-  // line up exactly with the rest of the SVG slide.
-  const baseSize = (first?.font_size as number) || 14
-  const sizeIn = baseSize / 72
+  // ── Word-wrap via SVG <tspan> with auto-shrink ──
+  // Tried <foreignObject> with HTML inside; CSS px in SVG user-space
+  // rendered text at the wrong scale in production browsers (text was
+  // microscopic or weirdly positioned, "Thank you" lost its "T", etc.).
+  // The robust path is manual SVG-text word-wrap with a conservative
+  // char-width estimate. Bold display fonts have wider glyphs than the
+  // conventional 0.55-of-pt approximation; using 0.62 catches more
+  // overflow cases. If wrapped lines exceed the box height, shrink the
+  // font 10% and re-wrap (up to 6 attempts, floor 8pt).
+  {
+  let pt = (first?.font_size as number) || 14
   const color = first.color || "#2A2F3A"
   const bold = !!first.font_bold
   const italic = !!first.font_italic
   const fontFamily = first.font_name || "Inter, system-ui, sans-serif"
-  const textAlign = (align === "center" ? "center" : align === "right" ? "right" : "left") as
-    "left" | "center" | "right"
 
-  // For each line break in the source, render a <p>. Within a paragraph
-  // each run is a <span> with its own styling. The browser wraps
-  // naturally inside the box width.
-  const paragraphs: ElementJson["text_runs"][] = []
-  let buf: NonNullable<ElementJson["text_runs"]> = []
-  for (const r of runs) {
-    const segs = (r.text ?? "").split(/\r?\n/)
-    segs.forEach((seg, i) => {
-      if (i > 0) { paragraphs.push(buf); buf = [] }
-      if (seg) buf.push({ ...r, text: seg })
-    })
+  const explicitLines = raw.split(/\r?\n/).flatMap((line) => line ? [line] : [""])
+  const CHAR_W_RATIO = bold ? 0.66 : 0.62
+
+  const wrapAt = (size: number) => {
+    const charsPerLine = Math.max(1, Math.floor((w * 72) / (size * CHAR_W_RATIO)))
+    const out: string[] = []
+    for (const seg of explicitLines) {
+      if (!seg.trim()) { out.push(""); continue }
+      if (seg.length <= charsPerLine) { out.push(seg); continue }
+      const words = seg.split(/\s+/)
+      let cur = ""
+      for (const word of words) {
+        if (!cur) { cur = word; continue }
+        if ((cur.length + 1 + word.length) <= charsPerLine) cur += " " + word
+        else { out.push(cur); cur = word }
+      }
+      if (cur) out.push(cur)
+    }
+    return out
   }
-  if (buf.length) paragraphs.push(buf)
+
+  let lines = wrapAt(pt)
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const lineHeightIn = (pt * 1.18) / 72
+    if (lines.length * lineHeightIn <= h * 0.98 || pt <= 8) break
+    pt = Math.max(8, pt * 0.9)
+    lines = wrapAt(pt)
+  }
+  const sizeIn = pt / 72
+  const lineH  = sizeIn * 1.18
+
+  const hardCap = Math.max(2, Math.floor((w * 72) / (pt * 0.50)))
+  const finalLines = lines.map((ln) => ln.length > hardCap ? ln.slice(0, hardCap - 1) + "…" : ln)
+
+  const anchor = align === "center" ? "middle" : align === "right" ? "end" : "start"
+  const tx = anchor === "middle" ? x + w / 2 : anchor === "end" ? x + w : x
+  const ty = y + sizeIn * 1.0
 
   return (
-    <foreignObject x={x} y={y} width={w} height={h}>
-      {/* xmlns is required for foreignObject HTML in Safari */}
-      <div
-        xmlns="http://www.w3.org/1999/xhtml"
-        style={{
-          width: "100%", height: "100%",
-          fontFamily,
-          fontSize: `${sizeIn}px`,           // SVG user-units are inches; 1in = font_in
-          color,
-          fontWeight: bold ? 700 : 400,
-          fontStyle: italic ? "italic" : "normal",
-          textAlign,
-          lineHeight: 1.18,
-          display: "flex",
-          flexDirection: "column",
-          justifyContent: "flex-start",
-          overflow: "hidden",
-          // Allow long unbreakable words (URLs, code) to wrap rather
-          // than overflow horizontally.
-          overflowWrap: "anywhere",
-          wordBreak: "normal",
-          margin: 0, padding: 0,
-        }}
-      >
-        {paragraphs.map((segs, i) => (
-          <p key={i} style={{ margin: 0 }}>
-            {segs && segs.length > 0 ? segs.map((r, j) => (
-              <span key={j} style={{
-                fontWeight: r.font_bold ? 700 : undefined,
-                fontStyle: r.font_italic ? "italic" : undefined,
-                color: r.color || undefined,
-                fontFamily: r.font_name || undefined,
-                fontSize: r.font_size ? `${(r.font_size as number) / 72}px` : undefined,
-              }}>
-                {r.text}
-              </span>
-            )) : " "}
-          </p>
-        ))}
-      </div>
-    </foreignObject>
+    <text
+      x={tx} y={ty}
+      fontSize={sizeIn}
+      fill={color}
+      fontFamily={fontFamily}
+      fontWeight={bold ? 700 : 400}
+      fontStyle={italic ? "italic" : "normal"}
+      textAnchor={anchor}
+    >
+      {finalLines.map((ln, i) => (
+        <tspan key={i} x={tx} dy={i === 0 ? 0 : lineH}>
+          {ln || " "}
+        </tspan>
+      ))}
+    </text>
   )
+  }
 }
 
 
