@@ -199,13 +199,30 @@ class StudioStore {
   }
 
   async loadSlide(docId: string, slideN: number): Promise<SlideElementsResponse> {
-    this.patch({ docId, slideN, loading: true, error: null })
+    // When the active slide changes, the OLD slide's elements must not stay in
+    // the rendered list — otherwise a transient API failure on the new slide
+    // leaves the canvas showing the previous slide's content while the URL /
+    // slideN say we're on the new slide. The visible result: stale icons +
+    // "! text load failed" overlays everywhere (because each old element's text
+    // payload fetch hits the new slide's endpoint and 404s on the old id).
+    const slideChanged = this.state.slideN !== slideN || this.state.docId !== docId
+    if (slideChanged) {
+      this.patch({
+        docId,
+        slideN,
+        elements: [],         // clear stale; hydrate or error path will repopulate
+        payloads: {},         // drop payloads keyed to old slide
+        renderKeys: {},
+        selectedIds: [],
+        editingElementId: null,
+        loading: true,
+        error: null,
+      })
+    } else {
+      this.patch({ docId, slideN, loading: true, error: null })
+    }
     try {
       const response = await fetchSlideElements(docId, slideN)
-      // Guard: only hydrate if we're still on the slide we fetched for.
-      // During rapid navigation, multiple loadSlide calls can be in-flight
-      // simultaneously; the last patch({ slideN }) wins, so earlier responses
-      // arriving out of order must not clobber the correct slide's elements.
       if (this.state.slideN === response.slide_number) {
         this.hydrateSlide(docId, response)
       }
