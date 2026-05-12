@@ -27,7 +27,7 @@
  * wasn't). SlideViewer lets one engine drive both surfaces.
  */
 
-import { useEffect, useMemo, useState } from "react"
+import { useMemo } from "react"
 import { StudioStore, StudioStoreContext, useStudioStore } from "../lib/studio/store"
 import type {
   StudioElement,
@@ -374,26 +374,27 @@ function toTableData(el: ViewerElementJson): TableData | null {
 export default function SlideViewer({
   slideData, width = 480, className, background = "#FFFFFF",
 }: SlideViewerProps) {
-  // One StudioStore per SlideViewer instance — keeps the splash's 7
-  // slides from sharing state with each other or with the editor.
-  // useMemo for stable identity across re-renders.
-  const store = useMemo(() => new StudioStore(), [])
-
-  const docId  = slideData.doc_id || `viewer-${Math.random().toString(36).slice(2, 10)}`
+  const docId  = slideData.doc_id || `viewer-static`
   const slideN = slideData.slide_n
   const W      = slideData.width_in  || 13.333
   const H      = slideData.height_in || 7.5
   const bgColor = background || slideData.background_color || "#FFFFFF"
 
-  // Build StudioElement[] + payloads, prime the local store. Re-runs
-  // when slide data changes (e.g. the splash flipping brands).
-  const [hydrated, setHydrated] = useState(false)
-  useEffect(() => {
+  // Create + prime the local store SYNCHRONOUSLY in useMemo so it's
+  // populated before any child renderer mounts. Doing this in useEffect
+  // is too late — the renderers' own useEffect fires first (deeper
+  // children run first in React's effect order), they call
+  // loadChartPayload/etc on an empty store, the cache miss triggers a
+  // network fetch to /api/docs/<viewer-doc>/... which returns 401
+  // (no auth + no real doc), and the slide renders empty with errors.
+  //
+  // Priming in useMemo runs BEFORE child mount, so by the time the
+  // renderers' effects fire, the store already has the payloads cached.
+  const store = useMemo(() => {
+    const s = new StudioStore()
     const studioElements: StudioElement[] = slideData.elements.map((el, i) =>
       toStudioElement(el, docId, slideN, i, W, H),
     )
-
-    // Step 1: hydrate slide state (elements, dimensions, doc/slide IDs)
     const response: SlideElementsResponse = {
       slide_number:    slideN,
       slide_width_in:  W,
@@ -402,42 +403,25 @@ export default function SlideViewer({
       elements:        studioElements,
       background_color: bgColor,
     }
-    store.hydrateSlide(docId, response)
-
-    // Step 2: prime per-element payloads. primePayload sets both the
-    // payload data AND the slide-key so the renderers' loadPayload
-    // cache check returns the data without firing a network fetch.
+    s.hydrateSlide(docId, response)
     slideData.elements.forEach((raw, i) => {
       const eid = studioElements[i].id
-
       const text = toTextContent(raw)
-      if (text) store.primePayload(docId, slideN, eid, "text", text)
-      // Even text-less shapes need a style payload (the renderer reads
-      // fill/line from there for the background rect).
-      store.primePayload(docId, slideN, eid, "style", toStyleData(raw))
-
+      if (text) s.primePayload(docId, slideN, eid, "text", text)
+      s.primePayload(docId, slideN, eid, "style", toStyleData(raw))
       if (raw.type === "BridgeChart") {
         const chart = toChartData(raw)
-        if (chart) store.primePayload(docId, slideN, eid, "chart", chart)
+        if (chart) s.primePayload(docId, slideN, eid, "chart", chart)
       }
       if (raw.type === "BridgeTable") {
         const table = toTableData(raw)
-        if (table) store.primePayload(docId, slideN, eid, "table", table)
+        if (table) s.primePayload(docId, slideN, eid, "table", table)
       }
     })
-
-    setHydrated(true)
-  }, [store, slideData, docId, slideN, W, H, bgColor])
+    return s
+  }, [slideData, docId, slideN, W, H, bgColor])
 
   const height = Math.round((width * H) / W)
-
-  if (!hydrated) {
-    return (
-      <div className={className} style={{ width, height }}>
-        <div className="w-full h-full bg-surface/30 animate-pulse" />
-      </div>
-    )
-  }
 
   return (
     <StudioStoreContext.Provider value={store}>
