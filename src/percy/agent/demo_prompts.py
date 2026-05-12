@@ -21,17 +21,31 @@ without losing reproducibility.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(slots=True, frozen=True)
 class DemoPrompt:
+    """A canned demo brief.
+
+    Two shapes:
+      * Legacy free-form prompts use `prompt` (a single string).
+      * Blueprint-driven demos use `blueprint` (a JSON dict with
+        deck_summary + slides[]). The agent processes one slide at a
+        time via deck_planner.apply_blueprint instead of trying to plan
+        the whole deck in one LLM call. Always-7-slides decks (or any
+        fixed shape) should use this.
+
+    If both are set, `blueprint` wins. If only `prompt` is set, callers
+    use the older /generate-deck path.
+    """
     id: str
     version: str
     name: str
     description: str
     slide_count: int
-    prompt: str
+    prompt: str = ""
+    blueprint: dict = field(default_factory=dict)
 
 
 # ── Canned demo: 10-slide quarterly business update ─────────────────────────
@@ -154,65 +168,87 @@ Vary accent colors by slide mood. Default cobalt; sage for the
 DEMO_SHOWCASE_V1 = DemoPrompt(
     id="demo.showcase",
     version="v1",
-    name="Showcase brief",
+    name="Showcase brief (7 slides)",
     description=(
-        "Quarterly business update for fictional 'Northwind'. The CONTENT "
-        "and DATA are locked — same exact numbers, same exact copy across "
-        "every run. But the brief deliberately does NOT prescribe slide "
-        "structure, layouts, or template types. The agent surveys whatever "
-        "templates the active set provides and composes a deck the way IT "
-        "thinks tells the story best. Different sets → different agent "
-        "choices → completely different visual decks. That's the demo."
+        "Northwind Q4 quarterly update — exactly 7 slides, fully scripted "
+        "blueprint. The agent processes ONE slide at a time given only the "
+        "deck summary + that slide's slot/intent/content. Each call picks "
+        "the best template from the active set and fills it in. Different "
+        "sets → different template picks per slot → completely different "
+        "visual decks, but always the same story."
     ),
     slide_count=7,
-    prompt="""\
-Build a quarterly business update deck for a fictional B2B SaaS company
-called Northwind. Audience: company-wide all-hands. Use the EXACT
-numbers + copy below — don't paraphrase, don't invent new metrics.
-
-How to present this is YOUR call. Survey the templates available in
-this set and pick whichever ones tell the story best. Use as many or
-as few slides as feels right (somewhere between 5 and 9 is typical).
-
-The story to tell:
-
-  * It's Q4 2025. The quarter's headline: $2.4M net new ARR — the
-    largest single quarter in Northwind's history, up 18% QoQ. Three
-    commitments shipped; one miss to talk about.
-
-  * The key metrics for the quarter:
-      ARR added       — $2.4M       (▲ 18% QoQ)         a win
-      Gross retention — 98.7%       (▲ 1.2 pts)         a win
-      Logos closed    — 47          (▼ 4 vs Q3)         a slight miss
-
-  * Quarterly ARR added over the year:
-      Q1: $1.6M   Q2: $1.9M   Q3: $2.0M   Q4: $2.4M
-    The narrative: mid-market expansion led the quarter for the second
-    straight period.
-    Source: Salesforce snapshot, 2025-12-12.
-
-  * What we shipped this quarter (three things):
-      — Aurora migration finished Nov 12. Read latency down 38%.
-      — Self-serve onboarding launched. 14% of new logos used it.
-      — Mobile app v2 in public beta. 2,100 users, 4.6 stars.
-
-  * Wrap warmly: thank-you, contact ops@northwind.so, office hours
-    Thursdays at 11am PT.
-
-Guidance, not prescription:
-  * If the set has a chart template that fits, use it for the Q1-Q4 ARR
-    progression. If it only has text templates, prose works fine.
-  * If the set has KPI / metric tile templates, the three quarterly
-    metrics work well as a snapshot. If not, lay them out however
-    reads cleanly.
-  * Vary accent colors when meaningful — for example, brick or ochre
-    on the slight-miss line if your set supports accent inputs.
-  * Don't repeat the same template back-to-back unless it's the best
-    fit.
-
-Output: one slide plan per row, in deck order, with template_id +
-inputs.
-""",
+    blueprint={
+        "deck_summary": (
+            "Q4 2025 quarterly business update for Northwind (a B2B SaaS "
+            "company). Internal all-hands audience. Confident but honest — "
+            "the headline is a record-quarter ARR win, but logos came in "
+            "under plan and we own that."
+        ),
+        "slides": [
+            {
+                "slot": 1,
+                "instruction": (
+                    "Cover slide. Title: \"Q4 2025 Northwind Update\". "
+                    "Subtitle: \"Three commitments shipped, one miss to "
+                    "talk about.\" Presenter is the Operations team, "
+                    "December 2025."
+                ),
+            },
+            {
+                "slot": 2,
+                "instruction": (
+                    "Headline win — make the single number the whole slide. "
+                    "$2.4M net new ARR added in Q4. Largest single quarter "
+                    "in our history, up 18% QoQ. Eyebrow \"Q4 ARR added.\""
+                ),
+            },
+            {
+                "slot": 3,
+                "instruction": (
+                    "Three KPIs side-by-side. Title \"Q4 at a glance.\" "
+                    "ARR added $2.4M (▲ 18% QoQ). Gross retention 98.7% "
+                    "(▲ 1.2 pts). Logos closed 47 (▼ 4 vs Q3 — that's the miss)."
+                ),
+            },
+            {
+                "slot": 4,
+                "instruction": (
+                    "Quarterly ARR progression — bar chart if you have one. "
+                    "Q1 $1.6M, Q2 $1.9M, Q3 $2.0M, Q4 $2.4M. Title \"ARR "
+                    "added by quarter.\" Takeaway: mid-market expansion led "
+                    "the quarter for the second straight period. Source: "
+                    "Salesforce snapshot, 2025-12-12."
+                ),
+            },
+            {
+                "slot": 5,
+                "instruction": (
+                    "Three things we shipped this quarter — bulleted list "
+                    "or em-dash format. (1) Aurora migration finished Nov 12, "
+                    "read latency down 38%. (2) Self-serve onboarding "
+                    "launched, 14% of new logos used it. (3) Mobile app v2 "
+                    "in public beta, 2,100 users, 4.6 stars."
+                ),
+            },
+            {
+                "slot": 6,
+                "instruction": (
+                    "Honest look at the miss. Short body. \"We closed 47 "
+                    "logos vs the 51 plan. Mid-funnel held but enterprise "
+                    "pipeline build slowed. Sales engineering capacity "
+                    "expanded in November; effects show up in Q1.\""
+                ),
+            },
+            {
+                "slot": 7,
+                "instruction": (
+                    "Close warmly. \"Thank you.\" Contact ops@northwind.so. "
+                    "Office hours Thursdays at 11am PT."
+                ),
+            },
+        ],
+    },
 )
 
 

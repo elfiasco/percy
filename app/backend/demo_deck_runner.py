@@ -38,6 +38,63 @@ from . import auth_db
 log = logging.getLogger("percy.demo_runner")
 
 
+def _run_blueprint(
+    *, demo: Any, doc_id: str, template_set_id: str, studio: Any,
+) -> dict[str, Any]:
+    """Per-slide, blueprint-driven deck generation.
+
+    Pre-creates exactly N empty slides (one per blueprint entry) on the
+    target doc so each per-slide LLM call has a stable slide_n to apply
+    against. Then delegates to deck_planner.apply_blueprint which runs
+    the planning LLM calls in parallel and applies sequentially.
+    """
+    from . import main as _backend_main
+    from percy.bridge import BridgeSlide
+    from percy.agent import deck_planner
+    from percy.agent.deck_planner import Blueprint
+    from percy.agent import templates as _agent_tpls
+    from app.backend.agent_chat import _make_llm_call
+
+    # ── 1. Hydrate available templates from the set ──
+    items = auth_db.list_template_set_items(template_set_id)
+    available_templates: list[dict[str, Any]] = []
+    for it in items:
+        t = _agent_tpls.get_template(it["template_id"])
+        if t:
+            available_templates.append(t)
+    if not available_templates:
+        return {"ok": False, "error": "template set has no items"}
+
+    # ── 2. Ensure the doc has enough slides ──
+    doc = _backend_main._docs.get(doc_id, {}).get("doc")
+    blueprint = Blueprint.from_dict(demo.blueprint)
+    needed = max((s.slot for s in blueprint.slides), default=1)
+    while len(doc.slides) < needed:
+        n = (max((s.slide_number for s in doc.slides), default=0) + 1)
+        doc.slides.append(BridgeSlide(slide_number=n, elements=[],
+                                       width=13.333, height=7.5))
+
+    # ── 3. Make the LLM call helper. Force Sonnet 4.6 for the demo. ──
+    raw_llm = _make_llm_call("us.anthropic.claude-sonnet-4-6")
+    def safe_llm(system: str, user: str) -> str:
+        return raw_llm(system, user)
+
+    # ── 4. Run the blueprint flow ──
+    bp_result = deck_planner.apply_blueprint(
+        blueprint=blueprint,
+        available_templates=available_templates,
+        studio=studio,
+        llm_call=safe_llm,
+        parallel=True,
+    )
+    return {
+        "ok": bp_result.ok,
+        "applied": bp_result.applied,
+        "errors": bp_result.errors,
+        "plans": [p.to_dict() for p in bp_result.plans],
+    }
+
+
 def run_demo(
     *,
     template_set_id: str,
@@ -141,9 +198,13 @@ def run_demo(
     log.info("run_demo: starting set=%s prompt=%s doc=%s project=%s",
              template_set_id, demo.id, doc_id, project["id"])
 
-    # Drive generate-deck via Studio in-process, forcing Bedrock Sonnet 4.6.
-    # We pass `model` in the body so the planner uses our chosen Sonnet
-    # rather than whatever PERCY_LLM_PROVIDER is set to.
+    # Drive deck generation in-process. Two paths:
+    #   * BLUEPRINT path (preferred — used when the canned demo has a
+    #     `blueprint` dict): per-slide LLM calls via deck_planner. Each
+    #     call sees only that slide's instruction + the set's templates,
+    #     so layout selection is focused and there's no clustering bug.
+    #   * Legacy free-form prompt path: generate-deck endpoint plans the
+    #     whole deck in one LLM call (older, more error-prone).
     from percy.agent.script_api import Studio
     studio = Studio(
         base_url="http://internal",
@@ -152,23 +213,31 @@ def run_demo(
         timeout_s=300,
         asgi_app=asgi_app,
     )
-    payload = {
-        "prompt": demo.prompt,
-        "doc_id": doc_id,
-        "start_slide": 1,
-        "template_set_id": template_set_id,
-        "model": "us.anthropic.claude-sonnet-4-6",
-    }
     t0 = time.time()
-    try:
-        result = studio._post("/api/agent/generate-deck", payload)
-    except Exception as exc:
-        log.exception("run_demo: generate-deck call failed")
-        # Don't leave a half-baked project lying around.
-        try: auth_db.delete_project(project["id"])
-        except Exception: pass
-        return {"ok": False, "error": f"generate-deck failed: {exc}",
-                "set_id": template_set_id, "prompt_id": demo.id}
+
+    if getattr(demo, "blueprint", None):
+        # ── Blueprint flow ──
+        result = _run_blueprint(
+            demo=demo, doc_id=doc_id,
+            template_set_id=template_set_id, studio=studio,
+        )
+    else:
+        # ── Legacy free-form prompt flow ──
+        payload = {
+            "prompt": demo.prompt,
+            "doc_id": doc_id,
+            "start_slide": 1,
+            "template_set_id": template_set_id,
+            "model": "us.anthropic.claude-sonnet-4-6",
+        }
+        try:
+            result = studio._post("/api/agent/generate-deck", payload)
+        except Exception as exc:
+            log.exception("run_demo: generate-deck call failed")
+            try: auth_db.delete_project(project["id"])
+            except Exception: pass
+            return {"ok": False, "error": f"generate-deck failed: {exc}",
+                    "set_id": template_set_id, "prompt_id": demo.id}
     elapsed = time.time() - t0
 
     summary = {
