@@ -327,6 +327,39 @@ export function pythonModuleDownloadUrl(setId: string, opts: { polish?: boolean 
   return `/api/template-sets/${setId}/python-module/download${qs}`
 }
 
+// ── Demo deck generation ────────────────────────────────────────────────────
+
+export interface DemoPromptSummary {
+  id: string
+  version: string
+  name: string
+  description: string
+  slide_count: number
+}
+
+export async function listDemoPrompts(): Promise<{ demos: DemoPromptSummary[]; default_id: string }> {
+  return jfetch("/api/demo-prompts")
+}
+
+export async function runDemoDeck(
+  setId: string,
+  opts: { demo_id?: string; prompt_override?: string; target_doc_id?: string } = {},
+): Promise<{
+  ok: boolean
+  doc_id: string
+  demo_id: string
+  demo_name: string
+  set_id: string
+  slides_applied: number
+  errors: string[]
+  plan: unknown
+}> {
+  return jfetch(`/api/template-sets/${setId}/demo-deck`, {
+    method: "POST",
+    body: JSON.stringify(opts),
+  })
+}
+
 export async function acceptCandidate(
   setId: string,
   candidate: MinedCandidate,

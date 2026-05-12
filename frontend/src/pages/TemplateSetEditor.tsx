@@ -9,9 +9,12 @@ import {
   mineTemplates, acceptCandidate,
   setAsDefault,
   getPythonModule, pythonModuleDownloadUrl,
+  runDemoDeck, listDemoPrompts,
   type TemplateSet, type TemplateSetItem, type TemplateSetRef,
   type MinedCandidate, type PaletteColor, type BrandFont, type StyleRules,
+  type DemoPromptSummary,
 } from "../lib/templateSetsApi"
+import TemplatePreview from "../components/TemplatePreview"
 import Logo from "../components/Logo"
 import ThemeToggle from "../theme/ThemeToggle"
 import { useToast, useDialog } from "../components/Toaster"
@@ -155,7 +158,8 @@ export default function TemplateSetEditor() {
           )}
         </div>
         <div className="flex items-center gap-3">
-          {!set.is_default && (
+          <DemoDeckButton setId={set.id} />
+          {!set.is_default && !set.is_builtin && (
             <button
               onClick={handleSetAsDefault}
               disabled={busy}
@@ -164,12 +168,14 @@ export default function TemplateSetEditor() {
               Set as org default
             </button>
           )}
-          <button
-            onClick={handleDelete}
-            className="text-[10px] uppercase tracking-wider px-2 py-1 text-muted hover:text-red-400 transition-colors"
-          >
-            Delete
-          </button>
+          {!set.is_builtin && (
+            <button
+              onClick={handleDelete}
+              className="text-[10px] uppercase tracking-wider px-2 py-1 text-muted hover:text-red-400 transition-colors"
+            >
+              Delete
+            </button>
+          )}
           <ThemeToggle size="xs" />
         </div>
       </div>
@@ -206,6 +212,7 @@ export default function TemplateSetEditor() {
             items={slideItems}
             kindLabel="slide"
             onChange={refreshItems}
+            palette={set.palette}
           />
         )}
         {activeTab === "elements" && (
@@ -214,6 +221,7 @@ export default function TemplateSetEditor() {
             items={elementItems}
             kindLabel="element"
             onChange={refreshItems}
+            palette={set.palette}
           />
         )}
         {activeTab === "brand" && (
@@ -265,6 +273,107 @@ export default function TemplateSetEditor() {
           <PythonTab setId={set.id} setName={set.name} />
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Demo deck button ───────────────────────────────────────────────────────
+
+function DemoDeckButton({ setId }: { setId: string }) {
+  const toast = useToast()
+  const navigate = useNavigate()
+  const [demos, setDemos] = useState<DemoPromptSummary[]>([])
+  const [defaultId, setDefaultId] = useState<string>("")
+  const [open, setOpen] = useState(false)
+  const [running, setRunning] = useState(false)
+
+  useEffect(() => {
+    listDemoPrompts()
+      .then((r) => { setDemos(r.demos); setDefaultId(r.default_id) })
+      .catch(() => {})
+  }, [])
+
+  const run = async (demoId: string) => {
+    setOpen(false)
+    setRunning(true)
+    toast.info("Generating demo deck — this can take 30-60 seconds…")
+    try {
+      const r = await runDemoDeck(setId, { demo_id: demoId })
+      if (r.ok && r.doc_id) {
+        toast.success(`Deck generated: ${r.slides_applied} slides`)
+        // The demo deck isn't a project — it's a raw in-memory Bridge doc.
+        // Until we add an "open by doc_id" route in Studio, send the user
+        // to projects with a hint param so they know to look for it.
+        navigate(`/projects?demo_doc=${r.doc_id}`)
+      } else {
+        toast.error(
+          `Deck partially generated. Errors: ${(r.errors || []).slice(0, 2).join("; ")}`,
+        )
+      }
+    } catch (e) {
+      toast.error(`Demo failed: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  if (running) {
+    return (
+      <div className="text-[10px] uppercase tracking-wider px-3 py-1 border border-accent text-accent flex items-center gap-2">
+        <span className="inline-block w-2 h-2 border border-accent border-t-transparent rounded-full animate-spin" />
+        Generating...
+      </div>
+    )
+  }
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        className="text-[10px] uppercase tracking-wider px-3 py-1 border border-accent text-accent hover:bg-accent/10 transition-colors flex items-center gap-1"
+      >
+        Run demo deck
+        <span className="text-[8px]">▾</span>
+      </button>
+      {open && (
+        <>
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setOpen(false)}
+          />
+          <div className="absolute top-full right-0 mt-1 w-80 border border-edge bg-surface shadow-xl z-50">
+            <div className="p-3 border-b border-edge">
+              <div className="text-[11px] text-paper font-medium">Generate a demo deck</div>
+              <div className="text-[10px] text-muted leading-relaxed mt-1">
+                The agent picks layouts from this set and composes a fresh
+                deck. Doesn't get told which templates to use — that's the test.
+              </div>
+            </div>
+            {demos.length === 0 ? (
+              <div className="p-3 text-[11px] text-muted italic">Loading…</div>
+            ) : (
+              demos.map((d) => (
+                <button
+                  key={d.id}
+                  onClick={() => run(d.id)}
+                  className="w-full text-left p-3 border-b border-edge last:border-0 hover:bg-paper/5 transition-colors"
+                >
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <span className="text-[12px] text-paper">{d.name}</span>
+                    {d.id === defaultId && (
+                      <span className="text-[8px] uppercase tracking-wider text-muted">DEFAULT</span>
+                    )}
+                  </div>
+                  <div className="text-[10px] text-muted leading-relaxed line-clamp-2">
+                    {d.description}
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -411,11 +520,13 @@ function ItemsTab({
   items,
   kindLabel,
   onChange,
+  palette,
 }: {
   setId: string
   items: TemplateSetItem[]
   kindLabel: "slide" | "element"
   onChange: () => Promise<void>
+  palette: PaletteColor[]
 }) {
   const toast = useToast()
   const dialog = useDialog()
@@ -454,46 +565,66 @@ function ItemsTab({
 
   return (
     <div className="p-6">
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
-        {items.map((it) => (
-          <div
-            key={it.template_id}
-            className="border border-edge bg-surface/30 hover:border-accent transition-colors p-4 flex flex-col"
-          >
-            <div className="text-[10px] uppercase tracking-wider text-muted mb-1">
-              {it.kind}
-            </div>
-            <div className="text-[14px] text-paper font-medium mb-1 line-clamp-2">
-              {it.template?.name || it.template_id}
-            </div>
-            <div className="text-[11px] text-muted mb-3 line-clamp-3 flex-1">
-              {it.template?.description || ""}
-            </div>
-            {it.template?.tags && it.template.tags.length > 0 && (
-              <div className="flex flex-wrap gap-1 mb-3">
-                {it.template.tags.slice(0, 4).map((tag) => (
-                  <span
-                    key={tag}
-                    className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 border border-edge text-muted rounded"
-                  >
-                    {tag}
-                  </span>
-                ))}
-              </div>
-            )}
-            {it.provenance?.member_count && (
-              <div className="text-[10px] text-muted mb-2">
-                Induced from {String(it.provenance.member_count)} samples
-              </div>
-            )}
-            <button
-              onClick={() => handleRemove(it)}
-              className="text-[10px] uppercase tracking-wider text-muted hover:text-red-400 self-start mt-auto pt-2"
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {items.map((it) => {
+          const layout = (it.template?.layout as Array<Record<string, unknown>>) ?? []
+          const sampleInputs = (it.template?.sample_inputs as Record<string, unknown>) ?? {}
+          return (
+            <div
+              key={it.template_id}
+              className="border border-edge bg-surface/30 hover:border-accent transition-colors overflow-hidden flex flex-col"
             >
-              Remove
-            </button>
-          </div>
-        ))}
+              {/* SVG preview — the visual at-a-glance */}
+              {layout.length > 0 && (
+                <div className="bg-paper/5 border-b border-edge p-3">
+                  <TemplatePreview
+                    layout={layout}
+                    sampleInputs={sampleInputs}
+                    palette={palette}
+                    width={420}
+                  />
+                </div>
+              )}
+
+              <div className="p-4 flex flex-col flex-1">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 border border-edge text-muted">
+                    {it.kind}
+                  </span>
+                  <div className="text-[14px] text-paper font-medium truncate flex-1">
+                    {it.template?.name || it.template_id}
+                  </div>
+                </div>
+                <div className="text-[11px] text-muted mb-3 line-clamp-2 flex-1">
+                  {it.template?.description || ""}
+                </div>
+                {it.template?.tags && it.template.tags.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mb-2">
+                    {it.template.tags.slice(0, 5).map((tag) => (
+                      <span
+                        key={tag}
+                        className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 border border-edge text-muted"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {it.provenance?.member_count && (
+                  <div className="text-[10px] text-muted mb-2">
+                    Induced from {String(it.provenance.member_count)} samples
+                  </div>
+                )}
+                <button
+                  onClick={() => handleRemove(it)}
+                  className="text-[10px] uppercase tracking-wider text-muted hover:text-red-400 self-start mt-auto pt-2"
+                >
+                  Remove
+                </button>
+              </div>
+            </div>
+          )
+        })}
       </div>
     </div>
   )

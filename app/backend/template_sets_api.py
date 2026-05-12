@@ -816,6 +816,116 @@ class AcceptCandidateRequest(BaseModel):
     order_index: int = 0
 
 
+# ── Demo deck generation ────────────────────────────────────────────────────
+
+
+class DemoDeckRequest(BaseModel):
+    demo_id: str | None = None             # which canned prompt; None = default 10-slide
+    prompt_override: str | None = None     # custom prompt instead of canned
+    target_doc_id: str | None = None       # write to existing doc; None = create new
+
+
+@router.post("/api/template-sets/{set_id}/demo-deck")
+async def demo_deck(request: Request, set_id: str, req: DemoDeckRequest):
+    """Run a canned 'make me a deck from this set' demo.
+
+    Picks a prompt (default = quarterly business update, 10 slides), creates
+    a fresh blank Bridge document, then calls the existing generate-deck
+    machinery scoped to this Template Set's items. The agent has to choose
+    layouts from the set without being told which ones.
+
+    Returns the new doc_id so the caller can navigate to /studio.
+
+    This is the same flow we'd use for a public unauthenticated marketing
+    demo — minus the auth check.
+    """
+    user = auth.require_user(request)
+    _require_set_member(user, set_id)
+
+    from percy.agent.demo_prompts import get_demo_prompt
+    try:
+        demo = get_demo_prompt(req.demo_id)
+    except KeyError as exc:
+        raise HTTPException(400, str(exc))
+
+    prompt = req.prompt_override or demo.prompt
+
+    # 1. Get / create the target doc
+    from . import main as _backend_main
+    if req.target_doc_id:
+        doc_id = req.target_doc_id
+        if doc_id not in _backend_main._docs:
+            raise HTTPException(404, "target_doc_id not in memory")
+    else:
+        # Create a blank doc.
+        from percy.bridge import (
+            BridgeSlide, PercyDocument, PresentationMetadata,
+        )
+        import uuid as _uuid
+        new_doc = PercyDocument(
+            slides=[BridgeSlide(slide_number=1, elements=[], width=13.333, height=7.5)],
+            metadata=PresentationMetadata(slide_count=1),
+            theme_colors={},
+        )
+        doc_id = str(_uuid.uuid4())[:8]
+        _backend_main._docs[doc_id] = {
+            "doc": new_doc, "name": f"Demo: {demo.name}",
+            "_undo_stack": [], "bridge_dir": None,
+        }
+        log.info("demo_deck: created blank doc %s for set %s", doc_id, set_id)
+
+    # 2. Delegate to generate-deck with template_set_id forced to this set.
+    #    We post in-process (httpx ASGITransport) so audit + cost telemetry
+    #    flow correctly.
+    from percy.agent.script_api import Studio
+    studio = Studio(
+        base_url=f"{request.url.scheme}://{request.url.netloc}",
+        doc_id=doc_id,
+        auth_token=request.cookies.get("percy_session"),
+        timeout_s=180,
+        asgi_app=request.app,
+    )
+    payload = {
+        "prompt": prompt,
+        "doc_id": doc_id,
+        "start_slide": 1,
+        "template_set_id": set_id,
+    }
+    try:
+        result = studio._post("/api/agent/generate-deck", payload)
+    except Exception as exc:
+        log.exception("demo_deck: generate-deck call failed")
+        raise HTTPException(500, f"demo deck generation failed: {exc}")
+
+    return {
+        "ok": result.get("ok", True),
+        "doc_id": doc_id,
+        "demo_id": demo.id,
+        "demo_name": demo.name,
+        "set_id": set_id,
+        "slides_applied": len(result.get("applied") or []),
+        "errors": result.get("errors") or [],
+        "plan": result.get("plan"),
+    }
+
+
+@router.get("/api/demo-prompts")
+def list_demo_prompts(request: Request):
+    """Catalog of available canned demo prompts. Used by the editor's
+    'Run demo' dropdown so users can pick between the 5-slide product
+    launch and the 10-slide quarterly update."""
+    auth.require_user(request)
+    from percy.agent.demo_prompts import DEMO_PROMPTS, DEFAULT_DEMO_ID
+    return {
+        "demos": [
+            {"id": p.id, "version": p.version, "name": p.name,
+             "description": p.description, "slide_count": p.slide_count}
+            for p in DEMO_PROMPTS.values()
+        ],
+        "default_id": DEFAULT_DEMO_ID,
+    }
+
+
 @router.post("/api/template-sets/{set_id}/accept-candidate")
 def accept_candidate(request: Request, set_id: str, req: AcceptCandidateRequest):
     """Accept a mined candidate. Persists it as a real agent template and

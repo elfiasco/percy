@@ -158,7 +158,37 @@ async def generate_deck_route(request: Request):
         raise HTTPException(503, f"no LLM available: {exc}")
 
     # 2. Plan with the LLM
-    available = templates.list_templates(category="Percy Standard")
+    # Template menu resolution:
+    #   - If template_set_id is explicit, use only that set's items.
+    #   - Else if the doc's project has an active set (folder-chain walk),
+    #     use that set's items.
+    #   - Else fall back to all Percy Standard templates (legacy default).
+    template_set_id = body.get("template_set_id")
+    if not template_set_id:
+        try:
+            from app.backend import auth_db
+            project = auth_db.get_project_by_doc_id(doc_id)
+            if project:
+                active = auth_db.resolve_active_template_set(project_id=project["id"])
+                if active:
+                    template_set_id = active["id"]
+        except Exception as exc:
+            log.warning("generate_deck: active-set resolution failed: %s", exc)
+
+    available: list[dict] = []
+    if template_set_id:
+        try:
+            from app.backend import auth_db
+            items = auth_db.list_template_set_items(template_set_id)
+            for it in items:
+                t = templates.get_template(it["template_id"])
+                if t:
+                    available.append(t)
+        except Exception as exc:
+            log.warning("generate_deck: set %s hydration failed: %s", template_set_id, exc)
+    if not available:
+        available = templates.list_templates(category="Percy Standard")
+
     plan = deck_generator.plan_deck(prompt, available_templates=available, llm_call=llm)
 
     if not plan.slides:
