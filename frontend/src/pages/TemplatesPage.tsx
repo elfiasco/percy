@@ -400,6 +400,12 @@ function TemplateDetail({
             {extracting && <span className="inline-block w-2 h-2 border border-ink border-t-transparent rounded-full animate-spin" />}
             {extracting ? "Extracting…" : "Run extraction"}
           </button>
+          <Link
+            to={`/template-sets/${template.id}`}
+            className="text-[11px] tracking-[0.14em] uppercase border border-accent text-accent hover:bg-accent/10 px-4 py-2 transition-colors font-medium flex items-center gap-2"
+          >
+            Open in advanced editor →
+          </Link>
         </div>
         <div className="space-y-1.5">
           {attached.length === 0 && (

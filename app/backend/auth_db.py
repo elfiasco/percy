@@ -1404,15 +1404,21 @@ def add_template_set_item(
 
 
 def remove_template_set_item(set_id: str, template_id: str) -> bool:
+    """Detect existence before deleting so we can return a reliable bool —
+    the connection adapter doesn't surface rowcount."""
     with get_conn() as conn:
-        cur = conn.execute(
+        existing = conn.execute(
+            "SELECT 1 FROM studio_template_set_items WHERE set_id = ? AND template_id = ?",
+            (set_id, template_id),
+        ).fetchone()
+        if not existing:
+            return False
+        conn.execute(
             "DELETE FROM studio_template_set_items WHERE set_id = ? AND template_id = ?",
             (set_id, template_id),
         )
-        affected = getattr(cur, "rowcount", 0) or 0
-        if affected:
-            conn.execute("UPDATE studio_templates SET updated_at = ? WHERE id = ?", (_now(), set_id))
-    return bool(affected)
+        conn.execute("UPDATE studio_templates SET updated_at = ? WHERE id = ?", (_now(), set_id))
+    return True
 
 
 def list_template_set_items(set_id: str, *, kind: str | None = None) -> list[dict[str, Any]]:
@@ -1529,8 +1535,14 @@ def get_project_by_doc_id(doc_id: str) -> dict[str, Any] | None:
 
 def delete_template_set_ref(ref_id: str) -> bool:
     with get_conn() as conn:
-        cur = conn.execute("DELETE FROM studio_template_set_refs WHERE id = ?", (ref_id,))
-        return bool(getattr(cur, "rowcount", 0) or 0)
+        existing = conn.execute(
+            "SELECT 1 FROM studio_template_set_refs WHERE id = ?",
+            (ref_id,),
+        ).fetchone()
+        if not existing:
+            return False
+        conn.execute("DELETE FROM studio_template_set_refs WHERE id = ?", (ref_id,))
+    return True
 
 
 # ── Team environments ───────────────────────────────────────────────────────

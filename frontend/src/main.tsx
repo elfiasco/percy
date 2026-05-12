@@ -19,6 +19,7 @@ import Dashboard from "./pages/Dashboard"
 import ProjectsPage from "./pages/ProjectsPage"
 import ProjectDetailPage from "./pages/ProjectDetailPage"
 import TemplatesPage from "./pages/TemplatesPage"
+import TemplateSetEditor from "./pages/TemplateSetEditor"
 import StudioPage from "./pages/StudioPage"
 import DevPage   from "./pages/DevPage"
 import InviteAccept from "./pages/InviteAccept"
@@ -47,6 +48,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/projects"         element={<ProjectsPage />} />
           <Route path="/project/:projectId" element={<ProjectDetailPage />} />
           <Route path="/templates"        element={<TemplatesPage />} />
+          <Route path="/template-sets/:setId" element={<TemplateSetEditor />} />
           <Route path="/studio/:projectId" element={<StudioPage />} />
           <Route path="/dev"              element={<DevPage />} />
           <Route path="/invite/accept"    element={<InviteAccept />} />
