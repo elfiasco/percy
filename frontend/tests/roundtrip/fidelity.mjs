@@ -524,6 +524,8 @@ async function runDeck(browser, pptxPath, docIdOverride, projIdOverride) {
           top:  el.top_in  ?? el.top,
           w:    el.width_in ?? el.w,
           h:    el.height_in ?? el.h,
+          left_pct: el.left_pct,
+          width_pct: el.width_pct,
           preset: el.geometry_preset,
           z:      el.z_index ?? null,
         }
