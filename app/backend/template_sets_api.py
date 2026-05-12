@@ -614,7 +614,50 @@ def _run_brand_extract(set_id: str) -> dict[str, Any] | None:
         "extracted_at": int(time.time()),
     }
     auth_db.update_template(set_id, brand=brand_summary, last_extracted_at=int(time.time()))
+
+    # Chain into deterministic style-profile extraction so charts + tables +
+    # text styles update on every onboard. Lives in its own helper because
+    # the dataclasses module produces a typed StyleProfile rather than the
+    # ad-hoc brand-summary dict above.
+    try:
+        _run_style_extract(set_id)
+    except Exception as exc:
+        log.warning("auto-style-extract failed for set %s: %s", set_id, exc)
+
     return brand_summary
+
+
+def _run_style_extract(set_id: str) -> dict[str, Any] | None:
+    """Deterministic style-profile extraction across all ready refs in a set.
+
+    Writes the result to studio_templates.style_profile. The polish step
+    (LLM-written when_to_use / when_to_avoid strings) is *not* run here —
+    that's lazily applied at codegen time so we don't burn LLM tokens on
+    every onboard.
+    """
+    refs = auth_db.list_template_set_refs(set_id)
+    refs_ready = [r for r in refs if r.get("status") == "ready" and r.get("doc_id")]
+    if not refs_ready:
+        return None
+    from . import main as _backend_main
+    from percy.agent import style_extraction
+
+    docs: list[Any] = []
+    theme: dict[str, str] = {}
+    for r in refs_ready:
+        d = _backend_main._docs.get(r.get("doc_id"))
+        if d and d.get("doc"):
+            docs.append(d["doc"])
+            theme.update(getattr(d["doc"], "theme_colors", None) or {})
+    if not docs:
+        return None
+    profile = style_extraction.extract_profile(docs, theme_colors=theme)
+    profile_dict = profile.to_dict()
+    auth_db.update_template(set_id, style_profile=profile_dict)
+    log.info("style profile: set=%s docs=%d charts=%d tables=%d palette=%d",
+             set_id, len(docs), len(profile.chart_styles),
+             1 if profile.table_style else 0, len(profile.palette_ordered))
+    return profile_dict
 
 
 # ── Onboarding refs into Bridge docs + auto-brand-extract ───────────────────
@@ -785,6 +828,107 @@ def accept_candidate(request: Request, set_id: str, req: AcceptCandidateRequest)
 class ConfirmProposedBrandRequest(BaseModel):
     palette: list[dict[str, Any]] | None = None
     fonts: list[dict[str, Any]] | None = None
+
+
+# ── Style profile extraction + Python codegen ───────────────────────────────
+
+
+@router.post("/api/template-sets/{set_id}/extract-styles")
+def extract_styles_route(request: Request, set_id: str):
+    """Run deterministic chart/table/text style extraction across this set's
+    onboarded references. Stored in studio_templates.style_profile as JSON;
+    surfaces via GET /api/template-sets/{id}/style-profile."""
+    user = auth.require_user(request)
+    _require_set_editor(user, set_id)
+    profile = _run_style_extract(set_id)
+    if profile is None:
+        raise HTTPException(
+            400,
+            "No onboarded reference docs ready for style extraction. Upload "
+            "PPTX/PDF and let onboarding finish first.",
+        )
+    return {"ok": True, "style_profile": profile}
+
+
+@router.get("/api/template-sets/{set_id}/style-profile")
+def get_style_profile_route(request: Request, set_id: str):
+    """Read the structured StyleProfile for a set. The shape is defined by
+    src/percy/agent/style_profiles.py and is the canonical machine-readable
+    "warm start" for downstream agents."""
+    user = auth.require_user(request)
+    tpl = _require_set_member(user, set_id)
+    return {"style_profile": tpl.get("style_profile") or {}}
+
+
+@router.get("/api/template-sets/{set_id}/python-module")
+def get_python_module_route(request: Request, set_id: str, polish: bool = False):
+    """Generate the typed Python builder module for this Template Set.
+
+    Returns the full module source as a JSON string. Pass `?polish=true` to
+    additionally invoke the LLM for when_to_use / when_to_avoid / example
+    docstring fields (one call per template — adds latency + cost).
+
+    The returned module can be downloaded via /python-module/download or
+    imported by a notebook user after writing it to disk.
+    """
+    user = auth.require_user(request)
+    tpl = _require_set_member(user, set_id)
+    items = auth_db.list_template_set_items(set_id)
+    if not items:
+        raise HTTPException(
+            400, "Template set has no items. Mine or add templates before generating code.",
+        )
+    # Hydrate items with the underlying agent template.
+    from percy.agent import templates as _agent_tpls, template_codegen
+    from percy.agent.style_profiles import StyleProfile
+    for it in items:
+        it["template"] = _agent_tpls.get_template(it["template_id"])
+
+    style_profile_dict = tpl.get("style_profile") or {}
+    style_profile = StyleProfile.from_dict(style_profile_dict)
+
+    polish_map: dict[str, dict[str, str]] = {}
+    if polish:
+        try:
+            from app.backend.agent_chat import _make_llm_call
+            llm_call = _make_llm_call()
+            for it in items:
+                t = it.get("template")
+                if not t:
+                    continue
+                polish_map[t["id"]] = template_codegen.polish_template(t, llm_call)
+        except Exception as exc:
+            log.warning("polish step failed; returning module without LLM polish: %s", exc)
+
+    module_text = template_codegen.generate_module(
+        set_name=tpl["name"],
+        description=tpl.get("description") or "",
+        palette=tpl.get("palette") or [],
+        fonts=tpl.get("fonts") or [],
+        style_profile=style_profile,
+        items=items,
+        polish_by_template_id=polish_map,
+    )
+    return {"module_text": module_text, "polished": bool(polish), "item_count": len(items)}
+
+
+@router.get("/api/template-sets/{set_id}/python-module/download")
+def download_python_module_route(request: Request, set_id: str, polish: bool = False):
+    """Same as /python-module but returns the source as a downloadable .py
+    file with Content-Disposition: attachment so browsers save it directly."""
+    from fastapi.responses import Response
+    user = auth.require_user(request)
+    tpl = _require_set_member(user, set_id)
+    res = get_python_module_route(request, set_id, polish=polish)
+    module_text = res["module_text"]
+    # Snake-case slug for the filename.
+    import re as _re
+    slug = _re.sub(r"[^A-Za-z0-9]+", "_", tpl["name"].lower()).strip("_") or "brand"
+    return Response(
+        content=module_text,
+        media_type="text/x-python",
+        headers={"Content-Disposition": f'attachment; filename="{slug}_brand.py"'},
+    )
 
 
 @router.post("/api/template-sets/{set_id}/confirm-brand")

@@ -149,6 +149,50 @@ class Studio:
         path = f"/api/docs/{self.doc_id}/slides/{slide_n}/elements"
         return self._get(path).get("elements", [])
 
+    def add_slide(self, after_n: int = 0) -> int:
+        """Insert a blank slide after `after_n` (0 = append). Returns the new
+        slide's 1-based index. Used by codegen-emitted slide builder functions.
+        """
+        path = f"/api/docs/{self.doc_id}/slides"
+        if after_n:
+            path = f"{path}?after_n={int(after_n)}"
+        result = self._post(path, {})
+        n = int(result.get("slide_number") or result.get("n") or 0)
+        self.ops.append({"op": "add_slide", "slide_n": n})
+        return n
+
+    # ── Typed convenience wrappers (used by generated brand modules) ─────
+    #
+    # All return the created element's id. The generic create_element() is
+    # equivalent; these are sugar that reads better in auto-generated code:
+    #
+    #   studio.create_text(slide_n, {"text": "Hi", ...})
+    #
+    # vs
+    #
+    #   studio.create_element(slide_n, "text", {"text": "Hi", ...})
+
+    def create_text(self, slide_n: int, body: dict) -> str:
+        return self.create_element(slide_n, "text", body).get("id", "")
+
+    def create_shape(self, slide_n: int, body: dict) -> str:
+        return self.create_element(slide_n, "shape", body).get("id", "")
+
+    def create_chart(self, slide_n: int, body: dict) -> str:
+        return self.create_element(slide_n, "chart", body).get("id", "")
+
+    def create_table(self, slide_n: int, body: dict) -> str:
+        return self.create_element(slide_n, "table", body).get("id", "")
+
+    def create_connector(self, slide_n: int, body: dict) -> str:
+        return self.create_element(slide_n, "connector", body).get("id", "")
+
+    def create_image(self, slide_n: int, body: dict) -> str:
+        return self.create_element(slide_n, "image-typed", body).get("id", "")
+
+    def create_live_group(self, slide_n: int, body: dict) -> str:
+        return self.create_element(slide_n, "live-group", body).get("id", "")
+
     # ── HTTP plumbing ───────────────────────────────────────────────────
 
     def _post(self, path: str, body: dict) -> dict:

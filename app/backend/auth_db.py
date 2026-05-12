@@ -611,6 +611,10 @@ _FORWARD_ADDS = [
     # scanning every template row.
     ("studio_orgs",      "default_template_set_id", "TEXT"),
     ("studio_folders",   "template_set_id",         "TEXT"),
+    # Style profile — chart/table style fingerprints + palette ordering,
+    # produced by src/percy/agent/style_extraction.py. Read by codegen and
+    # by future agents that want programmatic access to brand specifics.
+    ("studio_templates", "style_profile",   "TEXT NOT NULL DEFAULT '{}'"),
 ]
 
 
@@ -1140,6 +1144,10 @@ def _decode_template(row: dict[str, Any] | None) -> dict[str, Any] | None:
     row["instructions_md"] = row.get("instructions_md") or ""
     row["folder_id"] = row.get("folder_id") or None
     row["is_default"] = bool(row.get("is_default") or 0)
+    # Style profile — defaults to empty dict so callers can do
+    # `tpl["style_profile"].get("chart_styles", [])` without a None check.
+    try: row["style_profile"] = _json.loads(row.get("style_profile") or "{}")
+    except Exception: row["style_profile"] = {}
     return row
 
 
@@ -1202,7 +1210,7 @@ def list_org_templates(org_id: str, *, viewer_id: str) -> list[dict[str, Any]]:
     return [d for d in (_decode_template(r) for r in rows) if d]
 
 
-_TEMPLATE_JSON_FIELDS = ("brand", "source_project_ids", "palette", "fonts", "style_rules")
+_TEMPLATE_JSON_FIELDS = ("brand", "source_project_ids", "palette", "fonts", "style_rules", "style_profile")
 
 
 def update_template(template_id: str, **fields: Any) -> dict[str, Any] | None:
