@@ -64,3 +64,33 @@ The fidelity test (`frontend/tests/roundtrip/fidelity.mjs`) measures **StudioCan
 - **Phase 3:** Switch splash (ShowcaseSection) + template editor callers to view-mode StudioCanvas.
 - **Phase 4:** Delete `SlideSvg.tsx` + `TemplatePreview.tsx`.
 - **Phase 5:** Re-screenshot splash → pixel-diff vs the baselines in this folder; re-run fidelity test against the Snowflake PPTX → confirm RMS does not regress.
+
+---
+
+## Outcome: consolidation shipped
+
+After ~8 iterations of debugging (foreignObject CSS-in-SVG broke,
+useEffect-vs-useMemo timing for store priming, missing payloads for
+text-less shapes, missing `--pt-scale` CSS variable, wrong transform
+scale formula), the splash now renders via the studio renderers:
+
+- `frontend/src/components/SlideSvg.tsx` — **DELETED** (633 lines)
+- `frontend/src/components/TemplatePreview.tsx` — thin shim around SlideViewer (~280 lines, was 301 of standalone SVG rendering)
+- `frontend/src/components/SlideViewer.tsx` — **NEW** (~620 lines, mounts studio renderers in view mode)
+
+Real wins on the live splash (`v6_*.png` in this folder):
+
+- **Tiptap word wrap.** Snowflake slot 1 "Q4 2025 Northwind Update" now breaks to a second line via the same Tiptap that powers the editor. No char-width heuristic.
+- **Real Recharts bars.** Slot 4 chart on both decks renders with real axes, brand-resolved series colors, no hand-rolled placeholder bars.
+- **KPI tiles.** Percy Standard slot 3 shows three KPI tiles with the same composition + spacing as in the editor.
+- **One bug surface.** Every future fix to Tiptap text, Recharts chart, or TiptapTable lands on both the editor AND the splash AND template previews simultaneously.
+
+Iteration trail (post-consolidation screenshots):
+- `consol_*.png` — first deploy, empty slides + 401 flood (useEffect timing)
+- `v4_consol_*.png` — second deploy, fixed timing, still 401s (missing kind-priming for text-less shapes)
+- `v5_consol_percy.png` — all 401s resolved, slides STILL empty (vh-based font math producing invisible-or-huge text)
+- `v6_*.png` — fixed `--pt-scale` + transform scale, slides actually render
+
+The PEG `report.md` (this file) documents the path forward as
+finished, not outstanding. Future renderer changes go directly to
+`studio/renderers/*` and propagate everywhere.
