@@ -442,6 +442,61 @@ def _parameterize_geometry(layout: list[dict], inputs_schema: dict[str, dict]) -
         "_text", "_categories", "_series", "_title", "_data",
         "_fill_color",
     )
+
+    def _genericize_default_text(default: str) -> str:
+        """Replace source-deck text patterns with a generic placeholder
+        so the agent isn't tempted to keep the prototype's literal copy
+        when it forgets to override an input.
+
+        Patterns we strip:
+          * Copyright lines: "© 2019 Snowflake", "Copyright 2024 Acme Inc"
+          * Trailing "All Rights Reserved"
+          * Presenter lines: "<NAME>, CEO OF X | SEPTEMBER 2018",
+            "First Last  •  TITLE  •  DATE"
+          * Source-deck attributions: "TEMPLATE 2018", "DECK NAME 2019"
+          * Bare-year lines
+
+        We don't try to be exhaustive — just catch the common patterns
+        we've actually seen leak through (Snowflake, Salesforce,
+        BlackRock onboards). The cost of false-negatives is cosmetic
+        leakage; the cost of false-positives is dropping real content,
+        so this errs toward conservative — only matches when a strong
+        copyright / source-attribution signal is present.
+        """
+        import re as _re
+        if not isinstance(default, str) or not default.strip():
+            return default
+        s = default.strip()
+
+        # Copyright patterns
+        if _re.search(r"(?i)(©|\(c\)|copyright)\s*\d{4}", s):
+            return ""
+        if _re.search(r"(?i)all rights reserved", s):
+            return ""
+        # "Reach us at <BRAND_email>", standard footer email
+        if _re.search(r"(?i)\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(19|20)\d{2}\b", s):
+            # Month + year combo (e.g. "SEPTEMBER 2018") — almost always
+            # a presenter/date line, not user content. The blueprint
+            # provides its own dates.
+            return ""
+        # Presenter line: title role and a date or year nearby
+        if _re.search(r"(?i)\b(ceo|cfo|cto|coo|cmo|president|founder|chief|director|head\s+of)\b", s) and _re.search(r"\b(19|20)\d{2}\b", s):
+            return ""
+        # "SNOWFLAKE TEMPLATE 2018" / "ACME REPORT 2024" style
+        if _re.search(r"(?i)^[A-Z][A-Z\s]{2,}\s+(template|report|deck|slides?|presentation)\s+\d{4}\s*$", s):
+            return ""
+        # Bare-year-line ("2024", "© 2025")
+        if _re.match(r"^\s*(©\s*)?(19|20)\d{2}\s*$", s):
+            return ""
+        # Single bare ALL-CAPS word ≤ 16 chars — almost certainly a
+        # brand or product name from the source deck cover slide
+        # ("SNOWFLAKE", "NORTHWIND") that the agent should override.
+        # We blank the default so a forgotten override doesn't leak
+        # the source brand.
+        if _re.match(r"^\s*[A-Z][A-Z]{2,15}\s*$", s):
+            return ""
+
+        return default
     for i, entry in enumerate(layout):
         alias = entry.get("alias") or f"el_{i}"
         entry["alias"] = alias
@@ -507,7 +562,7 @@ def _parameterize_geometry(layout: list[dict], inputs_schema: dict[str, dict]) -
                     inputs_schema[var_name] = {
                         "type": "string",
                         "required": False,
-                        "default": concat[:300],
+                        "default": _genericize_default_text(concat[:300]),
                         "description": f"{alias}: text content",
                     }
                     first["text"] = "{{" + var_name + "}}"
@@ -522,7 +577,7 @@ def _parameterize_geometry(layout: list[dict], inputs_schema: dict[str, dict]) -
             inputs_schema[var_name] = {
                 "type": "string",
                 "required": False,
-                "default": text_str[:300],
+                "default": _genericize_default_text(text_str[:300]),
                 "description": f"{alias}: text content",
             }
             body["text"] = "{{" + var_name + "}}"

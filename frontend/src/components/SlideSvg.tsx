@@ -34,7 +34,12 @@ interface ElementJson {
   chart_type?: string | null
   chart_categories?: string[]
   chart_series_count?: number
+  chart_series?: Array<{ name?: string; values: number[]; color?: string | null }>
+  chart_title?: string | null
   table_dim?: [number, number]
+  table_data?: string[][]
+  first_row_header?: boolean
+  banded_rows?: boolean
 }
 
 interface SlideSvgData {
@@ -159,14 +164,20 @@ function ElementSvg({ el, canvasW, canvasH }: { el: ElementJson; canvasW: number
       )
 
     case "BridgeChart":
-      return <ChartPlaceholder x={x} y={y} w={w} h={h}
-                               chartType={el.chart_type}
-                               categories={el.chart_categories}
-                               seriesCount={el.chart_series_count}
-                               textRuns={el.text_runs} />
+      return <ChartRender x={x} y={y} w={w} h={h}
+                          chartType={el.chart_type}
+                          categories={el.chart_categories}
+                          series={el.chart_series}
+                          seriesCount={el.chart_series_count}
+                          title={el.chart_title}
+                          textRuns={el.text_runs} />
 
     case "BridgeTable":
-      return <TablePlaceholder x={x} y={y} w={w} h={h} dim={el.table_dim} />
+      return <TableRender x={x} y={y} w={w} h={h}
+                          dim={el.table_dim}
+                          data={el.table_data}
+                          firstRowHeader={el.first_row_header}
+                          bandedRows={el.banded_rows} />
 
     case "BridgeConnector":
       return showStroke ? (
@@ -235,94 +246,335 @@ function TextRuns({
 }
 
 
-function ChartPlaceholder({
-  x, y, w, h, chartType, categories, seriesCount, textRuns,
+/**
+ * ChartRender — draws an actual chart (bars, lines, arcs) from the
+ * svg-data endpoint's chart_series + chart_categories payload. Falls
+ * back to a styled placeholder sketch only when series data is empty
+ * (e.g. older brands or charts the agent created without series).
+ */
+function ChartRender({
+  x, y, w, h, chartType, categories, series, seriesCount, title, textRuns,
 }: {
   x: number; y: number; w: number; h: number
   chartType?: string | null
   categories?: string[]
+  series?: Array<{ name?: string; values: number[]; color?: string | null }>
   seriesCount?: number
+  title?: string | null
   textRuns?: ElementJson["text_runs"]
 }) {
-  const palette = ["#7DA1CC", "#6FA17A", "#C5994A", "#B8634F"]
   const ct = (chartType || "").toLowerCase()
-  const isDonut = ct.includes("donut") || ct.includes("doughnut") || ct.includes("pie")
-  const isLine = ct.includes("line")
-  const isArea = ct.includes("area")
+  const kind = ct.includes("donut") || ct.includes("doughnut") ? "donut"
+    : ct.includes("pie")   ? "pie"
+    : ct.includes("line")  ? "line"
+    : ct.includes("area")  ? "area"
+    : ct.includes("bar_") || ct === "bar_clustered" || ct === "bar_stacked" || ct === "bar_stacked_100" ? "bar"
+    : "column"
+
+  const palette = ["#7DA1CC", "#6FA17A", "#C5994A", "#B8634F", "#8E7CC3", "#4A8E94"]
+  const seriesIn = (series && series.length > 0) ? series : null
+
+  // ── Title row (above the plot area) ──
+  const titleH = h * 0.14
+  const plotX = x + w * 0.02
+  const plotY = y + titleH
+  const plotW = w * 0.96
+  const plotH = h - titleH - h * 0.10   // leave a thin margin at bottom for axis labels
+
+  // Build the data matrix [series][cat]
+  const cats = (categories && categories.length > 0)
+    ? categories
+    : (seriesIn ? seriesIn[0].values.map((_, i) => `C${i + 1}`) : ["A", "B", "C", "D", "E"])
+
+  const allValues = seriesIn
+    ? seriesIn.flatMap((s) => s.values)
+    : [40, 65, 50, 85, 70]
+  const vmax = Math.max(1, ...allValues)
+  const vmin = Math.min(0, ...allValues)
 
   return (
     <g>
-      <rect x={x} y={y} width={w} height={h} fill="#FAFAFA" />
-      {isDonut ? (
-        // Three-slice donut sketch
-        <>
-          <circle cx={x + w / 2} cy={y + h / 2} r={Math.min(w, h) * 0.4}
-                  fill="none" stroke={palette[0]} strokeWidth={Math.min(w, h) * 0.16}
-                  strokeDasharray={`${Math.PI * Math.min(w, h) * 0.4} ${Math.PI * Math.min(w, h) * 0.6}`}
-                  transform={`rotate(-90 ${x + w / 2} ${y + h / 2})`} />
-          <circle cx={x + w / 2} cy={y + h / 2} r={Math.min(w, h) * 0.4}
-                  fill="none" stroke={palette[1]} strokeWidth={Math.min(w, h) * 0.16}
-                  strokeDasharray={`${Math.PI * Math.min(w, h) * 0.25} ${Math.PI * Math.min(w, h) * 0.75}`}
-                  transform={`rotate(60 ${x + w / 2} ${y + h / 2})`} />
-        </>
-      ) : isLine || isArea ? (
-        // Line sketch
-        <>
-          {isArea && (
-            <path d={`M ${x + w * 0.05} ${y + h * 0.8} L ${x + w * 0.25} ${y + h * 0.6} L ${x + w * 0.5} ${y + h * 0.5} L ${x + w * 0.75} ${y + h * 0.35} L ${x + w * 0.95} ${y + h * 0.2} L ${x + w * 0.95} ${y + h * 0.85} L ${x + w * 0.05} ${y + h * 0.85} Z`}
-                  fill={palette[0]} opacity={0.5} />
-          )}
-          <polyline points={`${x + w * 0.05},${y + h * 0.8} ${x + w * 0.25},${y + h * 0.6} ${x + w * 0.5},${y + h * 0.5} ${x + w * 0.75},${y + h * 0.35} ${x + w * 0.95},${y + h * 0.2}`}
-                    fill="none" stroke={palette[0]} strokeWidth={Math.min(w, h) * 0.015} />
-        </>
-      ) : (
-        // Bars
-        [0, 1, 2, 3, 4].map((i) => {
-          const frac = [0.4, 0.65, 0.5, 0.85, 0.7][i]
-          const bw = w * 0.12
-          const bx = x + w * 0.1 + i * w * 0.16
-          const bh = h * frac * 0.7
-          return (
-            <rect key={i} x={bx} y={y + h * 0.85 - bh} width={bw} height={bh}
-                  fill={palette[i % palette.length]} />
-          )
-        })
+      <rect x={x} y={y} width={w} height={h} fill="#FFFFFF" />
+
+      {/* Title — prefer textRuns, fall back to title field, fall back to chart label */}
+      {(title || (textRuns && textRuns.length > 0)) && (
+        <TextRuns runs={textRuns} x={x + 0.05} y={y + 0.04} w={w - 0.1} h={titleH} align="left" />
       )}
-      {/* Reuse the actual chart title from text_runs if present */}
-      <TextRuns runs={textRuns} x={x} y={y} w={w} h={h * 0.18} align="left" />
-      <text x={x + w / 2} y={y + h - 0.1}
-            fontSize={0.13} fill="#9C9EA7" fontFamily="Inter"
-            textAnchor="middle">
-        {chartType || "chart"}{seriesCount ? ` · ${seriesCount} series` : ""}
-      </text>
+
+      {kind === "donut" || kind === "pie" ? (
+        <DonutOrPie cx={plotX + plotW / 2} cy={plotY + plotH / 2}
+                    r={Math.min(plotW, plotH) * 0.42}
+                    isDonut={kind === "donut"}
+                    series={seriesIn} categories={cats}
+                    palette={palette} />
+      ) : kind === "line" || kind === "area" ? (
+        <LineOrArea x={plotX} y={plotY} w={plotW} h={plotH}
+                    isArea={kind === "area"}
+                    series={seriesIn} categories={cats}
+                    vmax={vmax} vmin={vmin} palette={palette} />
+      ) : kind === "bar" ? (
+        <HorizontalBars x={plotX} y={plotY} w={plotW} h={plotH}
+                        series={seriesIn} categories={cats}
+                        vmax={vmax} palette={palette} />
+      ) : (
+        <VerticalBars x={plotX} y={plotY} w={plotW} h={plotH}
+                      series={seriesIn} categories={cats}
+                      vmax={vmax} palette={palette} />
+      )}
+
+      {/* Footer label — only when we have no real data, to hint */}
+      {!seriesIn && (
+        <text x={x + w / 2} y={y + h - 0.05}
+              fontSize={0.11} fill="#9C9EA7" fontFamily="Inter"
+              textAnchor="middle">
+          {chartType || "chart"}{seriesCount ? ` · ${seriesCount} series` : ""}
+        </text>
+      )}
     </g>
   )
 }
 
 
-function TablePlaceholder({
-  x, y, w, h, dim,
+function VerticalBars({
+  x, y, w, h, series, categories, vmax, palette,
+}: {
+  x: number; y: number; w: number; h: number
+  series: Array<{ values: number[]; color?: string | null }> | null
+  categories: string[]
+  vmax: number
+  palette: string[]
+}) {
+  const cats = categories.slice(0, 12)
+  const n = cats.length || 1
+  const sCount = series ? series.length : 1
+  const groupW = w / n
+  const bandPad = groupW * 0.18
+  const innerW = groupW - 2 * bandPad
+  const barW = sCount > 0 ? innerW / sCount : innerW
+
+  const bars: React.ReactNode[] = []
+  for (let i = 0; i < n; i++) {
+    for (let s = 0; s < sCount; s++) {
+      const v = series ? (series[s].values[i] ?? 0) : [40, 65, 50, 85, 70, 55][i % 6]
+      const bh = Math.max(0.01, (Math.max(0, v) / vmax) * (h * 0.92))
+      const bx = x + i * groupW + bandPad + s * barW
+      const color = (series && series[s].color) || palette[s % palette.length]
+      bars.push(
+        <rect key={`${i}-${s}`} x={bx} y={y + h - bh} width={barW * 0.92} height={bh} fill={color} />
+      )
+    }
+  }
+  // Axis labels (just category names, bottom)
+  const labels = cats.map((c, i) => (
+    <text key={`l${i}`} x={x + i * groupW + groupW / 2} y={y + h + 0.18}
+          fontSize={0.1} fill="#6E7280" fontFamily="Inter" textAnchor="middle">
+      {String(c).slice(0, 8)}
+    </text>
+  ))
+  return (
+    <g>
+      <line x1={x} y1={y + h} x2={x + w} y2={y + h} stroke="#D5D5D5" strokeWidth={0.012} />
+      {bars}
+      {labels}
+    </g>
+  )
+}
+
+
+function HorizontalBars({
+  x, y, w, h, series, categories, vmax, palette,
+}: {
+  x: number; y: number; w: number; h: number
+  series: Array<{ values: number[]; color?: string | null }> | null
+  categories: string[]
+  vmax: number
+  palette: string[]
+}) {
+  const cats = categories.slice(0, 12)
+  const n = cats.length || 1
+  const rowH = h / n
+  const bars: React.ReactNode[] = []
+  const labels: React.ReactNode[] = []
+  for (let i = 0; i < n; i++) {
+    const v = series && series[0] ? (series[0].values[i] ?? 0) : [40, 65, 50, 85, 70, 55][i % 6]
+    const bw = Math.max(0.01, (Math.max(0, v) / vmax) * (w * 0.85))
+    bars.push(
+      <rect key={i} x={x + w * 0.15} y={y + i * rowH + rowH * 0.18}
+            width={bw} height={rowH * 0.64}
+            fill={(series && series[0].color) || palette[0]} />
+    )
+    labels.push(
+      <text key={`l${i}`} x={x + w * 0.14} y={y + i * rowH + rowH * 0.62}
+            fontSize={0.1} fill="#6E7280" fontFamily="Inter" textAnchor="end">
+        {String(cats[i]).slice(0, 10)}
+      </text>
+    )
+  }
+  return <g>{bars}{labels}</g>
+}
+
+
+function LineOrArea({
+  x, y, w, h, isArea, series, categories, vmax, vmin, palette,
+}: {
+  x: number; y: number; w: number; h: number
+  isArea: boolean
+  series: Array<{ values: number[]; color?: string | null }> | null
+  categories: string[]
+  vmax: number; vmin: number
+  palette: string[]
+}) {
+  const seriesToDraw = series || [{ values: [40, 50, 65, 60, 80, 95], color: palette[0] }]
+  const range = Math.max(0.001, vmax - vmin)
+
+  const lines: React.ReactNode[] = []
+  seriesToDraw.forEach((s, si) => {
+    const pts = s.values.map((v, i) => {
+      const px = x + (s.values.length <= 1 ? w / 2 : (i / (s.values.length - 1)) * w)
+      const py = y + h - ((v - vmin) / range) * (h * 0.92)
+      return [px, py] as const
+    })
+    const color = s.color || palette[si % palette.length]
+    if (isArea) {
+      const path = `M ${pts[0][0]} ${y + h} ` +
+                   pts.map(([px, py]) => `L ${px} ${py}`).join(" ") +
+                   ` L ${pts[pts.length - 1][0]} ${y + h} Z`
+      lines.push(<path key={`a${si}`} d={path} fill={color} opacity={0.45} />)
+    }
+    const poly = pts.map(([px, py]) => `${px},${py}`).join(" ")
+    lines.push(
+      <polyline key={`l${si}`} points={poly} fill="none" stroke={color}
+                strokeWidth={Math.min(w, h) * 0.012} strokeLinejoin="round"
+                strokeLinecap="round" />
+    )
+    pts.forEach(([px, py], i) => {
+      lines.push(<circle key={`p${si}-${i}`} cx={px} cy={py} r={Math.min(w, h) * 0.014} fill={color} />)
+    })
+  })
+  const xLabels = categories.slice(0, 12).map((c, i, arr) => (
+    <text key={`xl${i}`} x={x + (arr.length <= 1 ? w / 2 : (i / (arr.length - 1)) * w)}
+          y={y + h + 0.18}
+          fontSize={0.1} fill="#6E7280" fontFamily="Inter" textAnchor="middle">
+      {String(c).slice(0, 8)}
+    </text>
+  ))
+  return (
+    <g>
+      <line x1={x} y1={y + h} x2={x + w} y2={y + h} stroke="#D5D5D5" strokeWidth={0.012} />
+      {lines}
+      {xLabels}
+    </g>
+  )
+}
+
+
+function DonutOrPie({
+  cx, cy, r, isDonut, series, categories, palette,
+}: {
+  cx: number; cy: number; r: number
+  isDonut: boolean
+  series: Array<{ values: number[]; color?: string | null }> | null
+  categories: string[]
+  palette: string[]
+}) {
+  // First-series values (pies/donuts only ever plot one series).
+  const values = (series && series[0] && series[0].values.length > 0)
+    ? series[0].values
+    : [3, 5, 2, 4]
+  const total = values.reduce((a, v) => a + Math.max(0, v), 0) || 1
+  let acc = 0
+  const slices = values.map((v, i) => {
+    const a0 = (acc / total) * Math.PI * 2 - Math.PI / 2
+    acc += Math.max(0, v)
+    const a1 = (acc / total) * Math.PI * 2 - Math.PI / 2
+    const large = a1 - a0 > Math.PI ? 1 : 0
+    const x0 = cx + Math.cos(a0) * r
+    const y0 = cy + Math.sin(a0) * r
+    const x1 = cx + Math.cos(a1) * r
+    const y1 = cy + Math.sin(a1) * r
+    const color = palette[i % palette.length]
+    return (
+      <path key={i}
+            d={`M ${cx} ${cy} L ${x0} ${y0} A ${r} ${r} 0 ${large} 1 ${x1} ${y1} Z`}
+            fill={color} />
+    )
+  })
+  return (
+    <g>
+      {slices}
+      {isDonut && <circle cx={cx} cy={cy} r={r * 0.55} fill="#FFFFFF" />}
+    </g>
+  )
+}
+
+
+function TableRender({
+  x, y, w, h, dim, data, firstRowHeader, bandedRows,
 }: {
   x: number; y: number; w: number; h: number
   dim?: [number, number]
+  data?: string[][]
+  firstRowHeader?: boolean
+  bandedRows?: boolean
 }) {
-  const [rows, cols] = dim || [4, 4]
+  const cells = (data && data.length > 0) ? data : null
+  const [rows, cols] = cells
+    ? [cells.length, Math.max(1, ...cells.map((r) => r.length))]
+    : (dim || [4, 4])
+  const showRows = Math.min(rows, 10)
+  const showCols = Math.min(cols, 6)
+  const cellH = h / Math.max(1, showRows)
+  const cellW = w / Math.max(1, showCols)
+
+  const rects: React.ReactNode[] = []
+  const texts: React.ReactNode[] = []
+
+  for (let r = 0; r < showRows; r++) {
+    const isHeader = firstRowHeader && r === 0
+    const fill = isHeader ? "#1F3A6B" : (bandedRows && r % 2 === 1 ? "#F2F3F7" : "#FFFFFF")
+    rects.push(
+      <rect key={`r${r}`} x={x} y={y + r * cellH} width={w} height={cellH} fill={fill} />
+    )
+    if (cells) {
+      for (let c = 0; c < showCols; c++) {
+        const text = cells[r]?.[c] || ""
+        if (!text) continue
+        texts.push(
+          <text key={`t${r}-${c}`}
+                x={x + c * cellW + cellW * 0.08}
+                y={y + r * cellH + cellH * 0.62}
+                fontSize={Math.min(cellH * 0.45, 0.16)}
+                fill={isHeader ? "#FFFFFF" : "#2A2F3A"}
+                fontWeight={isHeader ? 600 : 400}
+                fontFamily="Inter">
+            {String(text).slice(0, Math.max(6, Math.floor(cellW / 0.07)))}
+          </text>
+        )
+      }
+    }
+  }
+
+  // Grid lines
+  const grid: React.ReactNode[] = []
+  for (let c = 1; c < showCols; c++) {
+    grid.push(<line key={`v${c}`}
+                    x1={x + c * cellW} x2={x + c * cellW}
+                    y1={y} y2={y + h}
+                    stroke="#E2E4EA" strokeWidth={0.01} />)
+  }
+  for (let r = 1; r < showRows; r++) {
+    grid.push(<line key={`h${r}`}
+                    x1={x} x2={x + w}
+                    y1={y + r * cellH} y2={y + r * cellH}
+                    stroke="#E2E4EA" strokeWidth={0.01} />)
+  }
+
   return (
     <g>
-      <rect x={x} y={y} width={w} height={h} fill="#FFFFFF" stroke="#D5D5D5" strokeWidth={0.02} />
-      <rect x={x} y={y} width={w} height={h / Math.max(1, rows)} fill="#7DA1CC" />
-      {Array.from({ length: Math.min(cols, 6) - 1 }).map((_, i) => (
-        <line key={`v${i}`}
-              x1={x + (w / Math.min(cols, 6)) * (i + 1)} x2={x + (w / Math.min(cols, 6)) * (i + 1)}
-              y1={y} y2={y + h}
-              stroke="#E0E0E0" strokeWidth={0.012} />
-      ))}
-      {Array.from({ length: Math.min(rows, 8) - 1 }).map((_, i) => (
-        <line key={`h${i}`}
-              x1={x} x2={x + w}
-              y1={y + (h / Math.min(rows, 8)) * (i + 1)} y2={y + (h / Math.min(rows, 8)) * (i + 1)}
-              stroke="#E5E5E5" strokeWidth={0.01} />
-      ))}
+      <rect x={x} y={y} width={w} height={h} fill="#FFFFFF" stroke="#D5D5D5" strokeWidth={0.018} />
+      {rects}
+      {grid}
+      {texts}
     </g>
   )
 }

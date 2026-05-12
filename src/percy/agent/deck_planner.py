@@ -403,6 +403,7 @@ def apply_blueprint(
         result = _sa.execute_plan(
             plan, studio=studio, slide_n=spec.slot,
             all_templates=available_templates,
+            spec=spec, llm_call=llm_call, self_review=True,
         )
 
         # Vision-pass critique (on by default).
@@ -423,6 +424,9 @@ def apply_blueprint(
             "elements_total": result.elements_created,
             "error": result.error,
             "stdout": result.stdout[:500],
+            "review_followup_code": result.review_followup_code,
+            "review_followup_ok": result.review_followup_ok,
+            "placeholders_dropped": result.placeholders_dropped,
             "critique": critique_dict,
         })
         if not result.ok and result.error:

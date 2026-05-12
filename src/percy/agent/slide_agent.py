@@ -94,6 +94,9 @@ class SlideExecutionResult:
     error: str | None = None
     elements_created: int = 0
     stdout: str = ""
+    review_followup_code: str = ""
+    review_followup_ok: bool | None = None
+    placeholders_dropped: int = 0
 
 
 # ── Phase 1 — strategy selection ──────────────────────────────────────────
@@ -442,6 +445,9 @@ def execute_plan(
     studio: Any,
     slide_n: int,
     all_templates: list[dict[str, Any]],
+    spec: Any = None,                         # SlideSpec — for Phase 2.5 review
+    llm_call: Callable[[str, str], str] | None = None,
+    self_review: bool = True,
 ) -> SlideExecutionResult:
     """Run the generated Python against a curated globals dict.
 
@@ -517,19 +523,61 @@ def execute_plan(
 
     import io, contextlib
     buf = io.StringIO()
+    primary_error: str | None = None
     try:
         with contextlib.redirect_stdout(buf):
             exec(compile(plan.code, f"<slide-{slide_n}>", "exec"), g)
     except Exception as exc:
         tb = traceback.format_exc(limit=4)
         log.warning("execute_plan[slot=%d]: %s\n%s", slide_n, exc, tb)
-        return SlideExecutionResult(
-            ok=False, error=f"{exc}\n{tb[-600:]}",
-            elements_created=elements_total, stdout=buf.getvalue(),
-        )
+        primary_error = f"{exc}\n{tb[-600:]}"
 
+    # ── Post-pass 1: drop placeholder text elements ──
+    placeholders_dropped = _drop_placeholder_elements(studio, slide_n)
+
+    # ── Post-pass 2: Phase 2.5 self-review (optional) ──
+    review_code = ""
+    review_ok: bool | None = None
+    review_rationale = ""
+    if self_review and llm_call is not None and spec is not None and primary_error is None:
+        try:
+            current_elements = _read_slide_elements_for_cleanup(studio, slide_n)
+            verdict, follow_code, rat = _phase25_review(
+                spec_slot=slide_n,
+                spec_instruction=getattr(spec, "instruction", ""),
+                elements=current_elements,
+                llm_call=llm_call,
+            )
+            review_rationale = rat
+            log.info("phase25[slot=%d]: verdict=%s — %s",
+                     slide_n, verdict, rat[:80])
+            if verdict == "add" and follow_code.strip():
+                review_code = follow_code
+                try:
+                    with contextlib.redirect_stdout(buf):
+                        exec(compile(follow_code, f"<slide-{slide_n}-review>", "exec"), g)
+                    review_ok = True
+                    # Also strip any new placeholders the follow-up introduced.
+                    placeholders_dropped += _drop_placeholder_elements(studio, slide_n)
+                except Exception as exc:
+                    log.warning("phase25[slot=%d]: follow-up code raised: %s", slide_n, exc)
+                    review_ok = False
+        except Exception as exc:
+            log.debug("phase25[slot=%d]: review skipped due to %s", slide_n, exc)
+
+    if primary_error:
+        return SlideExecutionResult(
+            ok=False, error=primary_error,
+            elements_created=elements_total, stdout=buf.getvalue(),
+            placeholders_dropped=placeholders_dropped,
+        )
     return SlideExecutionResult(
-        ok=True, elements_created=elements_total, stdout=buf.getvalue(),
+        ok=True,
+        elements_created=elements_total,
+        stdout=buf.getvalue(),
+        review_followup_code=review_code,
+        review_followup_ok=review_ok,
+        placeholders_dropped=placeholders_dropped,
     )
 
 
@@ -555,6 +603,199 @@ def _content_inputs_for_catalog(schema: dict[str, dict]) -> dict[str, str]:
             desc = (v.get("description") or v.get("type") or "")[:80]
         out[k] = desc
     return out
+
+
+# ── Post-execution cleanup ─────────────────────────────────────────────────
+
+
+_PLACEHOLDER_PATTERNS = [
+    re.compile(r"^\s*\[[A-Z][A-Z\s\-_/]{2,}\]\s*$"),         # [CHART GOES HERE]
+    re.compile(r"^\s*<[A-Z][A-Z\s\-_/]{2,}>\s*$"),           # <PLACEHOLDER>
+    re.compile(r"^\s*\{\{[A-Za-z_][A-Za-z_0-9]*\}\}\s*$"),    # raw {{var}} leak
+    re.compile(r"(?i)^\s*(todo|tbd|fixme|placeholder)[\s:.\-]*$"),
+    re.compile(r"(?i)^\s*(chart|table|image|figure|graph|diagram|kpi)\s+(goes|here)"),
+]
+
+
+def _looks_like_placeholder(text: str) -> bool:
+    if not isinstance(text, str):
+        return False
+    return any(p.search(text) for p in _PLACEHOLDER_PATTERNS)
+
+
+def _drop_placeholder_elements(studio: Any, slide_n: int) -> int:
+    """Walk the slide's elements after execution, delete ones whose text
+    is clearly a placeholder leak from the LLM ("[CHART GOES HERE]",
+    "<TITLE>", "TODO: ...", unresolved {{var}} leaks). Returns count
+    of elements removed.
+
+    Uses the studio /slides/{n}/elements endpoint to enumerate with
+    real element ids, then text content via svg-data. The two endpoints
+    return entries in the same order so we zip them.
+    """
+    try:
+        listing = studio._get(f"/api/docs/{studio.doc_id}/slides/{slide_n}/elements")
+        svg = studio._get(f"/api/docs/{studio.doc_id}/slides/{slide_n}/svg-data")
+    except Exception as exc:
+        log.debug("drop_placeholders[slot=%d]: could not read slide: %s", slide_n, exc)
+        return 0
+
+    by_index: dict[int, str] = {}
+    listing_elements = listing.get("elements") or []
+    for i, el in enumerate(listing_elements):
+        eid = el.get("id") or el.get("element_id") or el.get("shape_id")
+        if eid:
+            by_index[i] = str(eid)
+
+    svg_elements = svg.get("elements") or []
+    removed = 0
+    for i, el in enumerate(svg_elements):
+        runs = el.get("text_runs") or []
+        text = "".join(r.get("text", "") for r in runs) if runs else (el.get("text") or "")
+        if not text.strip():
+            continue
+        if not _looks_like_placeholder(text):
+            continue
+        eid = by_index.get(i)
+        if not eid:
+            continue
+        try:
+            studio._delete(f"/api/docs/{studio.doc_id}/slides/{slide_n}/elements/{eid}")
+            removed += 1
+            log.info("drop_placeholders[slot=%d]: removed %r", slide_n, text[:60])
+        except Exception as exc:
+            log.debug("drop_placeholders[slot=%d]: delete %s failed: %s", slide_n, eid, exc)
+    return removed
+
+
+def _read_slide_elements_for_cleanup(studio: Any, slide_n: int) -> list[dict[str, Any]]:
+    """Fetch element JSON from the studio for the cleanup pass."""
+    try:
+        data = studio._get(f"/api/docs/{studio.doc_id}/slides/{slide_n}/svg-data")
+        return data.get("elements") or []
+    except Exception:
+        return []
+
+
+# ── Phase 2.5 — self-review ────────────────────────────────────────────────
+
+
+_PHASE25_SYSTEM = """\
+You just generated a slide. Now review it.
+
+You see:
+  * The original slide instruction.
+  * The list of elements currently on the slide — each with type,
+    position, text content (if any), and key style fields.
+
+Decide ONE of:
+
+  * `done` — the slide reasonably fulfills the instruction. Don't
+    over-engineer. If it has the headline + the data + the supporting
+    copy that the instruction called for, it's fine. Most slides
+    should be `done`.
+
+  * `add` — something the instruction explicitly called for is
+    MISSING (a chart, a specific KPI, a source line, a clear title).
+    NOT for cosmetic preferences. Return Python code that adds the
+    missing piece(s) using the same helpers available in Phase 2:
+    apply_template, create_shape, create_text, create_chart,
+    create_table. Don't repeat anything already on the slide.
+
+Bias toward `done`. The cost of a `done` mistake is one slightly
+sparse slide; the cost of `add` mistakes is overcrowding +
+overlapping elements. If you must `add`, keep it to ONE new
+element unless multiple are clearly needed.
+
+The `code` field must use ONLY these helpers (already in scope) with
+these EXACT signatures:
+
+  apply_template(template_id: str, inputs: dict)
+  create_shape(left, top, width, height, fill_color="#hex", text="")
+  create_text(left, top, width, height, text="", font_size=None)
+  create_chart(left, top, width, height, chart_type, categories, series, title=None, legend=None)
+  create_table(left, top, width, height, data, first_row_header=True)
+  slide_n   # int, current slot — already bound
+
+All coordinates are in inches (canvas 13.333 × 7.5). chart_type
+must be exactly one of: column_clustered, bar_clustered, line,
+area_stacked, pie, doughnut. series is a list of dicts
+{name, values, color?}.
+
+Standard library is fine. Do NOT import third-party packages
+(no pptx, pandas, numpy). Do NOT reference variables that aren't
+defined above (no slide_5, no prs, no doc, no template). Use
+slide_n for the current slot.
+
+Respond with one JSON object, no prose, no fences:
+
+{
+  "verdict": "done" | "add",
+  "code": "<Python script — required only when verdict=='add'>",
+  "rationale": "<one short sentence — what's missing or why done>"
+}
+"""
+
+
+def _phase25_review(
+    *,
+    spec_slot: int,
+    spec_instruction: str,
+    elements: list[dict[str, Any]],
+    llm_call: Callable[[str, str], str],
+) -> tuple[str, str, str]:
+    """One LLM call: examine the current slide, decide done vs add.
+
+    Returns: (verdict, follow_up_code, rationale)
+    """
+    # Compact element view — type, position, text, key style.
+    compact: list[dict[str, Any]] = []
+    for el in elements:
+        runs = el.get("text_runs") or []
+        text = "".join(r.get("text", "") for r in runs) if runs else (el.get("text") or "")
+        pos = el.get("position") or {}
+        entry: dict[str, Any] = {
+            "type": el.get("type") or el.get("kind") or "?",
+            "pos": [round(pos.get("left_in", 0), 2), round(pos.get("top_in", 0), 2),
+                    round(pos.get("width_in", 0), 2), round(pos.get("height_in", 0), 2)],
+        }
+        if text:
+            entry["text"] = text[:120]
+        ct = el.get("chart_type")
+        if ct:
+            entry["chart_type"] = ct
+            entry["categories"] = (el.get("categories") or [])[:6]
+            entry["series_count"] = len(el.get("series") or [])
+        td = el.get("table_dim")
+        if td:
+            entry["table_dim"] = td
+        compact.append(entry)
+
+    user = json.dumps({
+        "slot": spec_slot,
+        "instruction": spec_instruction,
+        "current_elements": compact,
+    }, ensure_ascii=False, default=str)[:18000]
+
+    try:
+        raw = llm_call(_PHASE25_SYSTEM, user)
+    except Exception as exc:
+        log.warning("phase25[slot=%d]: LLM call failed: %s", spec_slot, exc)
+        return ("done", "", f"phase25 LLM failed: {exc}")
+
+    parsed = _parse_json(raw)
+    if not parsed:
+        return ("done", "", "phase25 unparseable")
+
+    verdict = str(parsed.get("verdict") or "done").lower()
+    if verdict not in ("done", "add"):
+        verdict = "done"
+    code = _extract_python(parsed.get("code") or "") if verdict == "add" else ""
+    rat  = str(parsed.get("rationale") or "")[:200]
+    return (verdict, code, rat)
+
+
+# ── JSON helpers ───────────────────────────────────────────────────────────
 
 
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)

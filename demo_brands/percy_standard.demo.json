@@ -9,7 +9,7 @@
     "slides_applied": 7,
     "errors": [],
     "ok": true,
-    "elapsed_seconds": 26.5
+    "elapsed_seconds": 48.6
   },
   "demo_slides_json": [
     {
@@ -636,35 +636,6 @@
           "type": "BridgeShape",
           "position": {
             "left_in": 0.5,
-            "top_in": 1.6,
-            "width_in": 12.33,
-            "height_in": 4.5
-          },
-          "fill": {
-            "type": "solid",
-            "color": "#F0E6D8"
-          },
-          "text_runs": [
-            {
-              "text": "[CHART GOES HERE]",
-              "font_name": null,
-              "font_size": 18,
-              "font_bold": null,
-              "font_italic": null,
-              "color": "#1E293B"
-            }
-          ],
-          "text_align": null,
-          "line": {
-            "visible": false,
-            "color": null,
-            "width": null
-          }
-        },
-        {
-          "type": "BridgeShape",
-          "position": {
-            "left_in": 0.5,
             "top_in": 6.3,
             "width_in": 0.04,
             "height_in": 0.5
@@ -745,14 +716,55 @@
             "width_in": 11.333,
             "height_in": 4.2
           },
-          "chart_type": "column_clustered",
+          "chart_type": "bar_clustered",
           "chart_categories": [
             "Q1",
             "Q2",
             "Q3",
             "Q4"
           ],
-          "chart_series_count": 1
+          "chart_series_count": 1,
+          "chart_series": [
+            {
+              "name": "ARR ($M)",
+              "values": [
+                1.6,
+                1.9,
+                2.0,
+                2.4
+              ],
+              "color": "#3B82F6"
+            }
+          ]
+        },
+        {
+          "type": "BridgeChart",
+          "position": {
+            "left_in": 1.0,
+            "top_in": 1.8,
+            "width_in": 11.33,
+            "height_in": 4.2
+          },
+          "chart_type": "bar_clustered",
+          "chart_categories": [
+            "Q1",
+            "Q2",
+            "Q3",
+            "Q4"
+          ],
+          "chart_series_count": 1,
+          "chart_series": [
+            {
+              "name": "ARR ($M)",
+              "values": [
+                1.6,
+                1.9,
+                2.0,
+                2.4
+              ],
+              "color": "#3B82F6"
+            }
+          ]
         }
       ]
     },
@@ -956,7 +968,7 @@
           },
           "text_runs": [
             {
-              "text": "Q4 LOGO PERFORMANCE",
+              "text": "LOGO ATTAINMENT",
               "font_name": "Inter",
               "font_size": 10,
               "font_bold": true,
@@ -1163,5 +1175,5 @@
     }
   ],
   "snapshot_version": 1,
-  "generated_at": 1778604906
+  "generated_at": 1778612991
 }

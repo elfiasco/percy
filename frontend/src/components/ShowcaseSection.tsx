@@ -144,6 +144,52 @@ export default function ShowcaseSection() {
 }
 
 
+/** Parse the showcase API's `prompt_text` (a JSON-serialized blueprint
+ *  with deck_summary + slides[].instruction) and render it as a human
+ *  paragraph + numbered list. Falls back to the raw text if parse fails
+ *  (older brands or back-compat with prose-only prompts). */
+function BlueprintBrief({ raw }: { raw: string }) {
+  if (!raw) {
+    return (
+      <div className="border-l-2 border-accent pl-4 text-[11px] text-muted leading-[1.6]">
+        (prompt unavailable)
+      </div>
+    )
+  }
+  let parsed: { deck_summary?: string; slides?: { slot?: number; instruction?: string }[] } | null = null
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    // Not JSON — render as plain text (legacy prose prompt path).
+    return (
+      <pre className="border-l-2 border-accent pl-4 text-[11px] text-paper leading-[1.6] whitespace-pre-wrap max-h-[420px] overflow-auto"
+            style={{ fontFamily: "Inter, system-ui, sans-serif" }}>
+        {raw}
+      </pre>
+    )
+  }
+  const summary = parsed?.deck_summary || ""
+  const slides = parsed?.slides || []
+  return (
+    <div className="border-l-2 border-accent pl-4 max-h-[480px] overflow-auto space-y-4">
+      {summary && (
+        <p className="text-[12px] text-paper leading-[1.65]">{summary}</p>
+      )}
+      {slides.length > 0 && (
+        <ol className="space-y-2.5 text-[11px] text-paper leading-[1.55]">
+          {slides.map((s, i) => (
+            <li key={i} className="grid grid-cols-[auto_1fr] gap-3 items-start">
+              <span className="text-muted tabular-nums">{String(s.slot ?? i + 1).padStart(2, "0")}</span>
+              <span>{s.instruction || ""}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  )
+}
+
+
 function BrandPanel({
   brand, promptText,
 }: {
@@ -197,15 +243,12 @@ function BrandPanel({
           ))}
         </div>
 
-        {/* The brief — minimal frame */}
+        {/* The brief — humanized blueprint (summary + numbered slots) */}
         <div>
           <div className="text-[10px] tracking-[0.22em] uppercase text-muted mb-2">
             — The brief —
           </div>
-          <pre className="border-l-2 border-accent pl-4 text-[11px] text-paper leading-[1.6] whitespace-pre-wrap max-h-[420px] overflow-auto"
-                style={{ fontFamily: "Inter, system-ui, sans-serif" }}>
-            {promptText || "(prompt unavailable)"}
-          </pre>
+          <BlueprintBrief raw={promptText} />
         </div>
       </aside>
 

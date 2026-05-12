@@ -1359,20 +1359,46 @@ def _serialize_element_for_svg(el: Any, theme: dict[str, str]) -> dict[str, Any]
             "width": getattr(line, "width", None),
         }
 
-    # Chart placeholder marker
+    # Chart: emit enough data for the splash SlideSvg to draw real
+    # bars/lines/arcs with the actual values from the source slide
+    # (not a hardcoded sketch). Series colors resolved through main's
+    # _resolve_color helper so theme references survive.
     if et == "BridgeChart":
+        from app.backend.main import _resolve_color
         out["chart_type"] = getattr(el, "chart_type", None)
         cats = getattr(el, "categories", None)
         if cats and getattr(cats, "categories", None):
-            out["chart_categories"] = list(cats.categories)[:8]
+            out["chart_categories"] = list(cats.categories)[:12]
         series = getattr(el, "series", None) or []
         if series:
             out["chart_series_count"] = len(series)
+            out["chart_series"] = []
+            for s in series[:6]:
+                color = _resolve_color(getattr(s, "color", None), theme)
+                values = list(getattr(s, "values", None) or [])[:12]
+                out["chart_series"].append({
+                    "name":   getattr(s, "name", None) or "",
+                    "values": [float(v) if v is not None else 0.0 for v in values],
+                    "color":  color,
+                })
+        title_obj = getattr(el, "title", None)
+        if title_obj and getattr(title_obj, "title", None):
+            out["chart_title"] = title_obj.title
 
-    # Table placeholder marker
+    # Table: emit the full data + dimensions so the splash can render
+    # an actual grid with first-row header + values.
     if et == "BridgeTable":
         data = getattr(el, "data", None) or []
         out["table_dim"] = [len(data), len(data[0]) if data else 0]
+        # Cap to 10 rows × 6 cols for splash performance.
+        out["table_data"] = [
+            [str(c) if c is not None else "" for c in row[:6]]
+            for row in data[:10]
+        ]
+        tp = getattr(el, "table_properties", None)
+        if tp:
+            out["first_row_header"] = bool(getattr(tp, "first_row_header", False))
+            out["banded_rows"]      = bool(getattr(tp, "banded_rows", False))
 
     return out
 
