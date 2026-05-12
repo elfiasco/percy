@@ -417,6 +417,21 @@ async def agent_chat(request: Request):
         "deck_summary": _deck_summary(doc_id),
     }
 
+    # Inject the active Template Set's brand, instructions, and template
+    # catalog. The LLM uses these as preferred tokens (colors, fonts) and
+    # available slide/element templates. If no set is configured for this
+    # deck's org/folder chain, this is a no-op.
+    try:
+        from app.backend import agent_template_set_ctx as _tset_ctx
+        set_ctx = _tset_ctx.build_set_context(doc_id)
+        if set_ctx:
+            planner_context["template_set"] = set_ctx
+            log.info("agent_chat: active template set %s (inherited_from=%s) wired into context",
+                     set_ctx["set_metadata"]["id"],
+                     set_ctx["set_metadata"]["inherited_from"])
+    except Exception as exc:
+        log.warning("agent_chat: could not resolve active template set: %s", exc)
+
     # For coder mode, pull in supplementary-material chunks the script may need.
     if decision.mode == "scripted_plan":
         try:

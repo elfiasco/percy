@@ -76,6 +76,7 @@ from app.backend import sharing_api as _sharing_api  # noqa: E402
 from app.backend import billing_api as _billing_api  # noqa: E402
 from app.backend import sso_api as _sso_api  # noqa: E402
 from app.backend import admin_api as _admin_api  # noqa: E402
+from app.backend import template_sets_api as _template_sets_api  # noqa: E402
 _auth_db_mod.init_db()
 
 # ── Rate limit middleware — must be installed BEFORE auth so that when it runs
@@ -94,6 +95,7 @@ app.include_router(_sharing_api.router)
 app.include_router(_billing_api.router)
 app.include_router(_sso_api.router)
 app.include_router(_admin_api.router)
+_template_sets_api.register_template_sets_router(app)
 
 
 @app.on_event("startup")

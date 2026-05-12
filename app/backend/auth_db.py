@@ -286,7 +286,7 @@ _MIGRATIONS_COMMON = [
         owner_id            TEXT NOT NULL,
         name                TEXT NOT NULL,
         description         TEXT,
-        brand               TEXT NOT NULL DEFAULT '{}',  -- JSON: extracted brand data
+        brand               TEXT NOT NULL DEFAULT '{}',  -- JSON: extracted brand data (read-only stats)
         source_project_ids  TEXT NOT NULL DEFAULT '[]',  -- JSON array of project ids
         last_extracted_at   INTEGER,
         created_at          INTEGER NOT NULL,
@@ -298,6 +298,58 @@ _MIGRATIONS_COMMON = [
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_studio_templates_owner ON studio_templates(owner_id);
+    """,
+    # ── Template Set membership ─────────────────────────────────────────────
+    # Links a template-set row (studio_templates) to individual reusable slide
+    # or element templates owned by the agent layer (src/percy/agent/templates).
+    # No FK because the agent templates live in a separate sqlite DB; we treat
+    # the template_id as opaque and let the agent layer be the source of truth
+    # for the layout/inputs_schema.
+    """
+    CREATE TABLE IF NOT EXISTS studio_template_set_items (
+        set_id          TEXT NOT NULL,
+        template_id     TEXT NOT NULL,
+        kind            TEXT NOT NULL,                  -- 'slide' | 'element'
+        order_index     INTEGER NOT NULL DEFAULT 0,
+        provenance      TEXT NOT NULL DEFAULT '{}',     -- JSON: {induced_from: ref_id, confidence, ...}
+        added_by        TEXT,
+        added_at        INTEGER NOT NULL,
+        PRIMARY KEY (set_id, template_id)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_tsi_set  ON studio_template_set_items(set_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_tsi_kind ON studio_template_set_items(set_id, kind);
+    """,
+    # ── Template-set reference documents ────────────────────────────────────
+    # Example PPTX / PDF / MD files uploaded to a set for the agent to mine
+    # patterns from. Distinct from source_project_ids (which points at user
+    # projects); refs are standalone uploads scoped only to the set.
+    """
+    CREATE TABLE IF NOT EXISTS studio_template_set_refs (
+        id              TEXT PRIMARY KEY,
+        set_id          TEXT NOT NULL,
+        filename        TEXT NOT NULL,
+        mime_type       TEXT,
+        size_bytes      INTEGER NOT NULL DEFAULT 0,
+        storage_key     TEXT NOT NULL,
+        doc_id          TEXT,                           -- assigned once onboarded as a Bridge doc
+        slide_count     INTEGER NOT NULL DEFAULT 0,
+        element_count   INTEGER NOT NULL DEFAULT 0,
+        status          TEXT NOT NULL DEFAULT 'uploaded',  -- uploaded|onboarding|ready|failed
+        error           TEXT,
+        uploaded_by     TEXT NOT NULL,
+        uploaded_at     INTEGER NOT NULL,
+        onboarded_at    INTEGER
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_tsr_set    ON studio_template_set_refs(set_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_studio_tsr_status ON studio_template_set_refs(status);
     """,
     """
     CREATE TABLE IF NOT EXISTS studio_team_envs (
@@ -537,6 +589,28 @@ _FORWARD_ADDS = [
     # Projects gain a refresh schedule (None | "on_demand" | "daily" | "weekly" | "monthly")
     ("studio_projects", "schedule", "TEXT"),
     ("studio_users", "email_verified", "INTEGER NOT NULL DEFAULT 0"),
+    # ── Template Sets ────────────────────────────────────────────────────────
+    # Curated brand fields (separate from the auto-extracted `brand` stats).
+    # `palette`: JSON list of {name, hex, role?} entries chosen by the user
+    #            (or pre-populated via brand-extraction then confirmed).
+    # `fonts`:   JSON list of {role: 'heading'|'body'|'mono', name, fallbacks}
+    # `style_rules`: JSON dict — max_title_length, capitalization, number_format,
+    #                lock_to_palette (bool), forbid_off_palette_colors (bool), etc.
+    # `instructions_md`: free-form markdown voice/layout guide sent to the LLM
+    #                    verbatim when this set is active.
+    ("studio_templates", "instructions_md", "TEXT NOT NULL DEFAULT ''"),
+    ("studio_templates", "palette",         "TEXT NOT NULL DEFAULT '[]'"),
+    ("studio_templates", "fonts",           "TEXT NOT NULL DEFAULT '[]'"),
+    ("studio_templates", "style_rules",     "TEXT NOT NULL DEFAULT '{}'"),
+    # Inheritance walk: null folder_id = org-wide; folder_id set = team override.
+    # `is_default` marks the chosen set within a scope (one per (org_id, folder_id)).
+    ("studio_templates", "folder_id",       "TEXT"),
+    ("studio_templates", "is_default",      "INTEGER NOT NULL DEFAULT 0"),
+    # Direct pointers for fast resolution. Kept in sync with `is_default` by the
+    # set_default helpers, but cached here so the agent can resolve without
+    # scanning every template row.
+    ("studio_orgs",      "default_template_set_id", "TEXT"),
+    ("studio_folders",   "template_set_id",         "TEXT"),
 ]
 
 
@@ -1055,6 +1129,17 @@ def _decode_template(row: dict[str, Any] | None) -> dict[str, Any] | None:
     except Exception: row["brand"] = {}
     try: row["source_project_ids"] = _json.loads(row["source_project_ids"]) if row.get("source_project_ids") else []
     except Exception: row["source_project_ids"] = []
+    # New Template-Set fields. Defaults handle pre-migration rows that won't
+    # have these columns yet (older Postgres deployments).
+    try: row["palette"] = _json.loads(row.get("palette") or "[]")
+    except Exception: row["palette"] = []
+    try: row["fonts"] = _json.loads(row.get("fonts") or "[]")
+    except Exception: row["fonts"] = []
+    try: row["style_rules"] = _json.loads(row.get("style_rules") or "{}")
+    except Exception: row["style_rules"] = {}
+    row["instructions_md"] = row.get("instructions_md") or ""
+    row["folder_id"] = row.get("folder_id") or None
+    row["is_default"] = bool(row.get("is_default") or 0)
     return row
 
 
@@ -1064,16 +1149,34 @@ def create_template(
     owner_id: str,
     name: str,
     description: str | None = None,
+    folder_id: str | None = None,
+    is_default: bool = False,
 ) -> dict[str, Any]:
+    """Create a new template set.
+
+    `folder_id` pins this set to a folder (team override); None = org-wide.
+    `is_default` marks it as the active set for its scope. Only one default
+    per (org_id, folder_id) is enforced by set_default_template_set().
+    """
     assert scope in ("user", "team", "org")
     tid = _gen_id("tpl")
     now = _now()
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO studio_templates (id, org_id, scope, owner_id, name, description, brand, source_project_ids, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (tid, org_id, scope, owner_id, name, description, "{}", "[]", now, now),
+            """
+            INSERT INTO studio_templates
+              (id, org_id, scope, owner_id, name, description, brand, source_project_ids,
+               instructions_md, palette, fonts, style_rules, folder_id, is_default,
+               created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?,  ?, ?)
+            """,
+            (tid, org_id, scope, owner_id, name, description, "{}", "[]",
+             "", "[]", "[]", "{}", folder_id, 1 if is_default else 0,
+             now, now),
         )
+    if is_default:
+        # Promote in a transactional follow-up so unique-default invariant holds.
+        set_default_template_set(tid, org_id=org_id, folder_id=folder_id)
     return get_template(tid) or {}
 
 
@@ -1099,13 +1202,17 @@ def list_org_templates(org_id: str, *, viewer_id: str) -> list[dict[str, Any]]:
     return [d for d in (_decode_template(r) for r in rows) if d]
 
 
+_TEMPLATE_JSON_FIELDS = ("brand", "source_project_ids", "palette", "fonts", "style_rules")
+
+
 def update_template(template_id: str, **fields: Any) -> dict[str, Any] | None:
     if not fields:
         return get_template(template_id)
-    if "brand" in fields and not isinstance(fields["brand"], str):
-        fields["brand"] = _json.dumps(fields["brand"])
-    if "source_project_ids" in fields and not isinstance(fields["source_project_ids"], str):
-        fields["source_project_ids"] = _json.dumps(fields["source_project_ids"])
+    for k in _TEMPLATE_JSON_FIELDS:
+        if k in fields and not isinstance(fields[k], str):
+            fields[k] = _json.dumps(fields[k])
+    if "is_default" in fields:
+        fields["is_default"] = 1 if fields["is_default"] else 0
     fields["updated_at"] = _now()
     cols = ", ".join(f"{k} = ?" for k in fields)
     with get_conn() as conn:
@@ -1115,7 +1222,315 @@ def update_template(template_id: str, **fields: Any) -> dict[str, Any] | None:
 
 def delete_template(template_id: str) -> None:
     with get_conn() as conn:
+        # Cascade: drop items and refs first. We do this manually because the
+        # cross-DB nature (agent templates live elsewhere) means no FK to lean on.
+        conn.execute("DELETE FROM studio_template_set_items WHERE set_id = ?", (template_id,))
+        conn.execute("DELETE FROM studio_template_set_refs  WHERE set_id = ?", (template_id,))
+        # Clear pointers from orgs/folders that defaulted to this set.
+        conn.execute(
+            "UPDATE studio_orgs    SET default_template_set_id = NULL WHERE default_template_set_id = ?",
+            (template_id,),
+        )
+        conn.execute(
+            "UPDATE studio_folders SET template_set_id = NULL WHERE template_set_id = ?",
+            (template_id,),
+        )
         conn.execute("DELETE FROM studio_templates WHERE id = ?", (template_id,))
+
+
+# ── Template Set defaults + resolution walk ─────────────────────────────────
+
+def set_default_template_set(
+    template_id: str,
+    *,
+    org_id: str,
+    folder_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Promote `template_id` to be the active default for its scope.
+
+    Scope is keyed by (org_id, folder_id). Demotes any other set previously
+    flagged for the same scope so the resolution walk has a deterministic
+    answer. Mirrors the choice into `studio_orgs.default_template_set_id` or
+    `studio_folders.template_set_id` for fast resolution without scanning.
+    """
+    with get_conn() as conn:
+        # Demote siblings in the same scope.
+        if folder_id is None:
+            conn.execute(
+                "UPDATE studio_templates SET is_default = 0 "
+                "WHERE org_id = ? AND folder_id IS NULL AND id <> ?",
+                (org_id, template_id),
+            )
+            conn.execute(
+                "UPDATE studio_orgs SET default_template_set_id = ? WHERE id = ?",
+                (template_id, org_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE studio_templates SET is_default = 0 "
+                "WHERE folder_id = ? AND id <> ?",
+                (folder_id, template_id),
+            )
+            conn.execute(
+                "UPDATE studio_folders SET template_set_id = ? WHERE id = ?",
+                (template_id, folder_id),
+            )
+        conn.execute(
+            "UPDATE studio_templates SET is_default = 1, folder_id = ?, updated_at = ? WHERE id = ?",
+            (folder_id, _now(), template_id),
+        )
+    return get_template(template_id)
+
+
+def clear_default_template_set(*, org_id: str | None = None, folder_id: str | None = None) -> None:
+    """Remove the default-set pointer for an org or a folder. The template set
+    itself is preserved; just no longer the active one. Falls back to parent
+    inheritance on the next resolution.
+    """
+    with get_conn() as conn:
+        if folder_id is not None:
+            conn.execute(
+                "UPDATE studio_folders SET template_set_id = NULL WHERE id = ?",
+                (folder_id,),
+            )
+            conn.execute(
+                "UPDATE studio_templates SET is_default = 0 WHERE folder_id = ?",
+                (folder_id,),
+            )
+        elif org_id is not None:
+            conn.execute(
+                "UPDATE studio_orgs SET default_template_set_id = NULL WHERE id = ?",
+                (org_id,),
+            )
+            conn.execute(
+                "UPDATE studio_templates SET is_default = 0 "
+                "WHERE org_id = ? AND folder_id IS NULL",
+                (org_id,),
+            )
+
+
+def resolve_active_template_set(*, project_id: str | None = None, folder_id: str | None = None,
+                                 org_id: str | None = None) -> dict[str, Any] | None:
+    """Walk the folder chain to find the first template set that applies.
+
+    Resolution order:
+      1. Start at the project's folder (or `folder_id` if provided directly).
+      2. Walk up `parent_id` until a folder has `template_set_id` set.
+      3. Fall back to the org's `default_template_set_id`.
+      4. Return None if no set is configured anywhere.
+
+    Returns the full decoded template-set row (with brand, palette, fonts,
+    style_rules, instructions_md), or None.
+    """
+    target_org_id = org_id
+    target_folder_id = folder_id
+
+    if project_id and not target_folder_id:
+        project = get_project(project_id)
+        if not project:
+            return None
+        target_org_id = target_org_id or project.get("org_id")
+        target_folder_id = project.get("folder_id")
+
+    # Walk the folder chain up.
+    visited: set[str] = set()
+    with get_conn() as conn:
+        current_id = target_folder_id
+        while current_id and current_id not in visited:
+            visited.add(current_id)
+            row = conn.execute(
+                "SELECT id, parent_id, org_id, template_set_id FROM studio_folders WHERE id = ?",
+                (current_id,),
+            ).fetchone()
+            if not row:
+                break
+            if row.get("template_set_id"):
+                tpl = get_template(row["template_set_id"])
+                if tpl:
+                    return tpl
+            if not target_org_id:
+                target_org_id = row.get("org_id")
+            current_id = row.get("parent_id")
+
+        # Org default fallback.
+        if target_org_id:
+            org_row = conn.execute(
+                "SELECT default_template_set_id FROM studio_orgs WHERE id = ?",
+                (target_org_id,),
+            ).fetchone()
+            if org_row and org_row.get("default_template_set_id"):
+                return get_template(org_row["default_template_set_id"])
+
+    return None
+
+
+# ── Template Set items (slide + element templates in the set) ───────────────
+
+def add_template_set_item(
+    set_id: str,
+    template_id: str,
+    *,
+    kind: str,
+    order_index: int = 0,
+    added_by: str | None = None,
+    provenance: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Add a slide or element template to a set. Idempotent on (set_id, template_id):
+    re-adding updates kind / order_index / provenance rather than erroring."""
+    assert kind in ("slide", "element")
+    now = _now()
+    prov_json = _json.dumps(provenance or {})
+    with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT 1 FROM studio_template_set_items WHERE set_id = ? AND template_id = ?",
+            (set_id, template_id),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE studio_template_set_items SET kind = ?, order_index = ?, provenance = ? "
+                "WHERE set_id = ? AND template_id = ?",
+                (kind, order_index, prov_json, set_id, template_id),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO studio_template_set_items "
+                "(set_id, template_id, kind, order_index, provenance, added_by, added_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (set_id, template_id, kind, order_index, prov_json, added_by, now),
+            )
+        # Bump parent set's updated_at so list orderings stay sane.
+        conn.execute("UPDATE studio_templates SET updated_at = ? WHERE id = ?", (now, set_id))
+    return {"set_id": set_id, "template_id": template_id, "kind": kind, "order_index": order_index}
+
+
+def remove_template_set_item(set_id: str, template_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM studio_template_set_items WHERE set_id = ? AND template_id = ?",
+            (set_id, template_id),
+        )
+        affected = getattr(cur, "rowcount", 0) or 0
+        if affected:
+            conn.execute("UPDATE studio_templates SET updated_at = ? WHERE id = ?", (_now(), set_id))
+    return bool(affected)
+
+
+def list_template_set_items(set_id: str, *, kind: str | None = None) -> list[dict[str, Any]]:
+    sql = "SELECT * FROM studio_template_set_items WHERE set_id = ?"
+    params: list[Any] = [set_id]
+    if kind:
+        sql += " AND kind = ?"
+        params.append(kind)
+    sql += " ORDER BY order_index ASC, added_at ASC"
+    with get_conn() as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+    out = []
+    for r in rows:
+        try: r["provenance"] = _json.loads(r.get("provenance") or "{}")
+        except Exception: r["provenance"] = {}
+        out.append(r)
+    return out
+
+
+def reorder_template_set_items(set_id: str, ordered_template_ids: list[str]) -> None:
+    """Reassign order_index based on the given ordering. Items not in the list
+    are pushed to the end in their original relative order."""
+    with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT template_id FROM studio_template_set_items WHERE set_id = ?",
+            (set_id,),
+        ).fetchall()
+        existing_ids = {r["template_id"] for r in existing}
+        idx = 0
+        for tid in ordered_template_ids:
+            if tid in existing_ids:
+                conn.execute(
+                    "UPDATE studio_template_set_items SET order_index = ? "
+                    "WHERE set_id = ? AND template_id = ?",
+                    (idx, set_id, tid),
+                )
+                idx += 1
+        # Append untouched items at the tail keeping their old order.
+        for r in existing:
+            if r["template_id"] not in ordered_template_ids:
+                conn.execute(
+                    "UPDATE studio_template_set_items SET order_index = ? "
+                    "WHERE set_id = ? AND template_id = ?",
+                    (idx, set_id, r["template_id"]),
+                )
+                idx += 1
+        conn.execute("UPDATE studio_templates SET updated_at = ? WHERE id = ?", (_now(), set_id))
+
+
+# ── Template Set reference documents (mining sources) ───────────────────────
+
+def create_template_set_ref(
+    set_id: str, *,
+    filename: str,
+    mime_type: str | None,
+    size_bytes: int,
+    storage_key: str,
+    uploaded_by: str,
+    doc_id: str | None = None,
+    status: str = "uploaded",
+) -> dict[str, Any]:
+    rid = _gen_id("ref")
+    now = _now()
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO studio_template_set_refs "
+            "(id, set_id, filename, mime_type, size_bytes, storage_key, doc_id, "
+            " status, uploaded_by, uploaded_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (rid, set_id, filename, mime_type, size_bytes, storage_key, doc_id,
+             status, uploaded_by, now),
+        )
+    return get_template_set_ref(rid) or {}
+
+
+def update_template_set_ref(ref_id: str, **fields: Any) -> dict[str, Any] | None:
+    if not fields:
+        return get_template_set_ref(ref_id)
+    if "status" in fields and fields["status"] == "ready" and "onboarded_at" not in fields:
+        fields["onboarded_at"] = _now()
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    with get_conn() as conn:
+        conn.execute(f"UPDATE studio_template_set_refs SET {cols} WHERE id = ?",
+                     (*fields.values(), ref_id))
+    return get_template_set_ref(ref_id)
+
+
+def get_template_set_ref(ref_id: str) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM studio_template_set_refs WHERE id = ?", (ref_id,)).fetchone()
+    return row
+
+
+def list_template_set_refs(set_id: str) -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM studio_template_set_refs WHERE set_id = ? ORDER BY uploaded_at DESC",
+            (set_id,),
+        ).fetchall()
+    return rows
+
+
+def get_project_by_doc_id(doc_id: str) -> dict[str, Any] | None:
+    """Find a project whose `doc_id` column matches. Used by the agent to
+    resolve which project (and therefore which active template set) owns the
+    deck the user is editing."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM studio_projects WHERE doc_id = ? LIMIT 1",
+            (doc_id,),
+        ).fetchone()
+    return row
+
+
+def delete_template_set_ref(ref_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM studio_template_set_refs WHERE id = ?", (ref_id,))
+        return bool(getattr(cur, "rowcount", 0) or 0)
 
 
 # ── Team environments ───────────────────────────────────────────────────────

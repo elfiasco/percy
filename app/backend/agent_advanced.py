@@ -35,8 +35,12 @@ async def brand_check_route(doc_id: str, request: Request):
     d = _m._require(doc_id)
     doc = d["doc"]
 
-    # Build profile from request body (optional) or use Percy Default
+    # Profile resolution order:
+    #   1. Explicit profile in request body (caller-supplied; overrides everything)
+    #   2. Active Template Set for the deck's project (inheritance walk)
+    #   3. Percy default
     profile_body = body.get("profile") or {}
+    profile_source = "custom"
     if profile_body:
         profile = BrandProfile(
             name=profile_body.get("name", "Custom"),
@@ -47,10 +51,38 @@ async def brand_check_route(doc_id: str, request: Request):
             forbidden_fonts=set(profile_body.get("forbidden_fonts", [])),
         )
     else:
-        profile = BrandProfile.percy_default()
+        profile = None
+        try:
+            from app.backend import agent_template_set_ctx as _tset_ctx
+            tpl = _tset_ctx.resolve_active_set_for_doc(doc_id)
+            if tpl:
+                palette_hex = {
+                    (c.get("hex") or "").upper()
+                    for c in (tpl.get("palette") or [])
+                    if c.get("hex")
+                }
+                fonts = {f.get("name") for f in (tpl.get("fonts") or []) if f.get("name")}
+                style_rules = tpl.get("style_rules") or {}
+                if palette_hex or fonts:
+                    profile = BrandProfile(
+                        name=f"Set: {tpl['name']}",
+                        palette_hex=palette_hex,
+                        palette_tolerance=float(style_rules.get("palette_tolerance", 0.10)),
+                        fonts=fonts,
+                        forbidden_colors=set(style_rules.get("forbidden_colors") or []),
+                        forbidden_fonts=set(style_rules.get("forbidden_fonts") or []),
+                    )
+                    profile_source = f"template_set:{tpl['id']}"
+        except Exception:
+            pass
+        if profile is None:
+            profile = BrandProfile.percy_default()
+            profile_source = "percy_default"
 
     report = brand_check.check_document(doc, profile)
-    return report.to_dict()
+    result = report.to_dict()
+    result["profile_source"] = profile_source
+    return result
 
 
 # ── Diff ────────────────────────────────────────────────────────────────────
