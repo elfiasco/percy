@@ -114,12 +114,19 @@ export default function SlideSvg({
       height={height}
       preserveAspectRatio="xMidYMid meet"
       className={className}
-      style={{ display: "block" }}
+      style={{ display: "block", overflow: "hidden" }}
     >
-      <rect x={0} y={0} width={W} height={H} fill={background} />
-      {data.elements.map((el, idx) => (
-        <ElementSvg key={idx} el={el} canvasW={W} canvasH={H} />
-      ))}
+      <defs>
+        <clipPath id={`slideclip-${data.doc_id || "x"}-${data.slide_n}`}>
+          <rect x={0} y={0} width={W} height={H} />
+        </clipPath>
+      </defs>
+      <g clipPath={`url(#slideclip-${data.doc_id || "x"}-${data.slide_n})`}>
+        <rect x={0} y={0} width={W} height={H} fill={background} />
+        {data.elements.map((el, idx) => (
+          <ElementSvg key={idx} el={el} canvasW={W} canvasH={H} />
+        ))}
+      </g>
     </svg>
   )
 }
@@ -209,39 +216,88 @@ function TextRuns({
   align?: string
 }) {
   if (!runs || runs.length === 0) return null
-  const baseSize = (runs[0]?.font_size as number) || 14
-  const sizeIn = baseSize / 72
-  const anchor = align === "center" ? "middle" : align === "right" ? "end" : "start"
-  const tx = anchor === "middle" ? x + w / 2 : anchor === "end" ? x + w : x
-  const ty = y + sizeIn * 1.1
-
-  // Concatenate run text. Mixed formatting within runs is hard to do in SVG
-  // without measuring; we render the first run's formatting and concatenate
-  // text content. Faithful enough for the splash.
-  const text = runs.map((r) => r.text).join("")
-  if (!text.trim()) return null
   const first = runs[0]
+  const raw = runs.map((r) => r.text).join("")
+  if (!raw.trim()) return null
+
+  // ── Real browser-driven text layout via <foreignObject> ──
+  // SVG `<text>` doesn't wrap. Instead of approximating chars-per-line
+  // with a fragile multiplier (which under-counts wide bold glyphs at
+  // display sizes and lets text like "Q4 2025 Northwind Update" run
+  // past the box edge), drop into HTML inside a `<foreignObject>`. The
+  // browser does the actual text measurement + wrapping — same engine
+  // that wraps text in the studio editor's Tiptap renderer. Width-based
+  // overflow disappears; long copy wraps to a second line as it would
+  // in any HTML container.
+  //
+  // We also keep the SVG coordinate system: foreignObject's x/y/width/
+  // height are in user-space units (inches in our viewBox), so positions
+  // line up exactly with the rest of the SVG slide.
+  const baseSize = (first?.font_size as number) || 14
+  const sizeIn = baseSize / 72
   const color = first.color || "#2A2F3A"
   const bold = !!first.font_bold
   const italic = !!first.font_italic
   const fontFamily = first.font_name || "Inter, system-ui, sans-serif"
+  const textAlign = (align === "center" ? "center" : align === "right" ? "right" : "left") as
+    "left" | "center" | "right"
 
-  // Cap text length for tiny boxes
-  const maxChars = Math.floor((w / sizeIn) * 1.8)
-  const displayText = text.length > maxChars ? text.slice(0, Math.max(0, maxChars - 1)) + "…" : text
+  // For each line break in the source, render a <p>. Within a paragraph
+  // each run is a <span> with its own styling. The browser wraps
+  // naturally inside the box width.
+  const paragraphs: ElementJson["text_runs"][] = []
+  let buf: NonNullable<ElementJson["text_runs"]> = []
+  for (const r of runs) {
+    const segs = (r.text ?? "").split(/\r?\n/)
+    segs.forEach((seg, i) => {
+      if (i > 0) { paragraphs.push(buf); buf = [] }
+      if (seg) buf.push({ ...r, text: seg })
+    })
+  }
+  if (buf.length) paragraphs.push(buf)
 
   return (
-    <text
-      x={tx} y={ty}
-      fontSize={sizeIn}
-      fill={color}
-      fontFamily={fontFamily}
-      fontWeight={bold ? 700 : 400}
-      fontStyle={italic ? "italic" : "normal"}
-      textAnchor={anchor}
-    >
-      {displayText}
-    </text>
+    <foreignObject x={x} y={y} width={w} height={h}>
+      {/* xmlns is required for foreignObject HTML in Safari */}
+      <div
+        xmlns="http://www.w3.org/1999/xhtml"
+        style={{
+          width: "100%", height: "100%",
+          fontFamily,
+          fontSize: `${sizeIn}px`,           // SVG user-units are inches; 1in = font_in
+          color,
+          fontWeight: bold ? 700 : 400,
+          fontStyle: italic ? "italic" : "normal",
+          textAlign,
+          lineHeight: 1.18,
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "flex-start",
+          overflow: "hidden",
+          // Allow long unbreakable words (URLs, code) to wrap rather
+          // than overflow horizontally.
+          overflowWrap: "anywhere",
+          wordBreak: "normal",
+          margin: 0, padding: 0,
+        }}
+      >
+        {paragraphs.map((segs, i) => (
+          <p key={i} style={{ margin: 0 }}>
+            {segs && segs.length > 0 ? segs.map((r, j) => (
+              <span key={j} style={{
+                fontWeight: r.font_bold ? 700 : undefined,
+                fontStyle: r.font_italic ? "italic" : undefined,
+                color: r.color || undefined,
+                fontFamily: r.font_name || undefined,
+                fontSize: r.font_size ? `${(r.font_size as number) / 72}px` : undefined,
+              }}>
+                {r.text}
+              </span>
+            )) : " "}
+          </p>
+        ))}
+      </div>
+    </foreignObject>
   )
 }
 
