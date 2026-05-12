@@ -470,14 +470,23 @@ def delete_ref(request: Request, set_id: str, ref_id: str):
 
 
 def _run_onboard_in_background(set_id: str, ref_id: str, abs_path: str) -> None:
-    """Run the Bridge onboard pipeline + auto-brand-extract in a background
-    thread. Updates the ref row's status field as it progresses so polling
-    clients can show 'onboarding' → 'ready' / 'failed'.
+    """Run the Bridge onboard pipeline + auto-extract + auto-demo in a
+    background thread. Updates the ref row's status field as it progresses
+    so polling clients can show 'onboarding' → 'ready' / 'failed'.
 
-    Auto-brand-extract: once this ref onboards, if it's not the only ready
-    ref in the set, re-run extract-brand-from-refs so the user gets fresh
-    proposed_palette / proposed_fonts without an explicit click. Errors in
-    the extract step are logged but don't fail the onboard.
+    Pipeline (sequential, each step best-effort — failures log but don't
+    block the next step):
+
+      1. Onboard PPTX/PDF → Bridge doc
+      2. Auto brand-extract  (deterministic palette + fonts)
+      3. Auto style-extract  (chained inside _run_brand_extract)
+      4. Auto demo-deck      (throttled — once per 5 min per set)
+
+    Step 4 is the self-validation step: after every reference upload the
+    user gets a fresh demo deck showing how the agent uses their
+    (potentially newly-mined) templates and brand. Generated as a real
+    studio_project the user can open from /home or the editor's "Latest
+    demo" link.
     """
     try:
         from . import main as _backend_main
@@ -501,9 +510,143 @@ def _run_onboard_in_background(set_id: str, ref_id: str, abs_path: str) -> None:
             _run_brand_extract(set_id)
         except Exception as exc:
             log.warning("auto-brand-extract failed for set %s: %s", set_id, exc)
+
+        # Auto-run the canned demo prompt. Throttled — rapid-fire ref
+        # uploads share one demo run instead of burning LLM calls per file.
+        try:
+            _run_auto_demo(set_id)
+        except Exception as exc:
+            log.warning("auto-demo failed for set %s: %s", set_id, exc)
     except Exception as exc:
         log.exception("onboard_ref bg failed: set=%s ref=%s", set_id, ref_id)
         auth_db.update_template_set_ref(ref_id, status="failed", error=str(exc))
+
+
+_AUTO_DEMO_THROTTLE_SECONDS = 300   # 5 minutes — guard against multi-upload bursts
+
+
+def _run_auto_demo(set_id: str, *, force: bool = False) -> dict[str, Any] | None:
+    """Run the default canned demo prompt against this set.
+
+    Creates a fresh Bridge doc + a backing studio_project so the user can
+    open the demo through /studio/:project_id — no special "open raw doc"
+    route needed.
+
+    Throttled to once per _AUTO_DEMO_THROTTLE_SECONDS per set unless
+    `force=True`. Skips builtin sets (Percy Standard is stable; we don't
+    burn tokens demo-ing it on every boot).
+
+    On success, stashes the new doc_id + project_id + summary onto the
+    set's row. On failure logs and returns None (the calling pipeline
+    continues — auto-demo is non-blocking).
+    """
+    import json as _json
+    import time as _time
+    import uuid as _uuid
+
+    tpl = auth_db.get_template(set_id)
+    if not tpl:
+        return None
+    if tpl.get("is_builtin"):
+        log.info("auto-demo: skipping builtin set %s", set_id)
+        return None
+    last_at = int(tpl.get("last_demo_at") or 0)
+    if not force and last_at and (_time.time() - last_at) < _AUTO_DEMO_THROTTLE_SECONDS:
+        log.info("auto-demo: throttled (set=%s, %ds since last run)",
+                 set_id, int(_time.time() - last_at))
+        return None
+
+    # Drop the previous auto-demo project so we don't accumulate clutter.
+    # The doc itself lives in process memory and will get GC'd when the
+    # service recycles.
+    old_project_id = tpl.get("last_demo_project_id")
+    if old_project_id:
+        try:
+            auth_db.delete_project(old_project_id)
+            log.info("auto-demo: removed prior demo project %s", old_project_id)
+        except Exception as exc:
+            log.warning("auto-demo: could not remove prior project: %s", exc)
+
+    # Build a fresh blank Bridge doc.
+    from . import main as _backend_main
+    from percy.bridge import BridgeSlide, PercyDocument, PresentationMetadata
+
+    new_doc = PercyDocument(
+        slides=[BridgeSlide(slide_number=1, elements=[], width=13.333, height=7.5)],
+        metadata=PresentationMetadata(slide_count=1),
+        theme_colors={},
+    )
+    doc_id = str(_uuid.uuid4())[:8]
+    _backend_main._docs[doc_id] = {
+        "doc": new_doc, "name": f"Demo · {tpl['name']}",
+        "_undo_stack": [], "bridge_dir": None,
+    }
+
+    # Create the backing project so /studio/:project_id works.
+    from datetime import datetime as _dt
+    project_name = f"Demo · {tpl['name']} · {_dt.utcnow().strftime('%b %d')}"
+    project = auth_db.create_project(
+        tpl["org_id"], project_name,
+        folder_id=None, doc_source=None,
+        created_by=tpl.get("owner_id") or "__system__",
+    )
+    auth_db.update_project(project["id"], doc_id=doc_id)
+    log.info("auto-demo: starting set=%s demo_doc=%s project=%s",
+             set_id, doc_id, project["id"])
+
+    # Pick the default canned prompt.
+    from percy.agent.demo_prompts import get_demo_prompt
+    demo = get_demo_prompt()
+
+    # Drive generate-deck via Studio in-process. The asgi_app handle keeps
+    # us inside the same FastAPI app so audit + cost telemetry record
+    # correctly.
+    from percy.agent.script_api import Studio
+    from app.backend.main import app as _fastapi_app
+    studio = Studio(
+        base_url="http://internal",
+        doc_id=doc_id,
+        auth_token=None,
+        timeout_s=180,
+        asgi_app=_fastapi_app,
+    )
+    payload = {
+        "prompt": demo.prompt,
+        "doc_id": doc_id,
+        "start_slide": 1,
+        "template_set_id": set_id,
+    }
+    try:
+        result = studio._post("/api/agent/generate-deck", payload)
+    except Exception as exc:
+        log.exception("auto-demo: generate-deck call failed for set %s", set_id)
+        # Don't store a partial — leave last_demo_* untouched so the user
+        # doesn't see a misleading "last demo" pointer to a broken doc.
+        try:
+            auth_db.delete_project(project["id"])
+        except Exception:
+            pass
+        return None
+
+    summary = {
+        "demo_id": demo.id,
+        "demo_name": demo.name,
+        "slides_applied": len(result.get("applied") or []),
+        "errors": (result.get("errors") or [])[:3],
+        "ok": bool(result.get("ok", True)),
+    }
+    auth_db.update_template(
+        set_id,
+        last_demo_doc_id=doc_id,
+        last_demo_project_id=project["id"],
+        last_demo_at=int(_time.time()),
+        last_demo_summary=summary,
+    )
+    log.info("auto-demo: done set=%s slides_applied=%d errors=%d",
+             set_id, summary["slides_applied"], len(summary["errors"]))
+    return {
+        "doc_id": doc_id, "project_id": project["id"], **summary,
+    }
 
 
 def _run_brand_extract(set_id: str) -> dict[str, Any] | None:
@@ -907,6 +1050,23 @@ async def demo_deck(request: Request, set_id: str, req: DemoDeckRequest):
         "errors": result.get("errors") or [],
         "plan": result.get("plan"),
     }
+
+
+@router.post("/api/template-sets/{set_id}/rerun-auto-demo")
+def rerun_auto_demo(request: Request, set_id: str):
+    """Force-run the canned auto-demo for this set right now.
+
+    Bypasses the throttle that protects the background pipeline from
+    burning LLM tokens on rapid ref uploads. Used by the editor's
+    "Re-run demo" button so users can refresh on demand after editing
+    palette/instructions.
+    """
+    user = auth.require_user(request)
+    _require_set_editor(user, set_id)
+    result = _run_auto_demo(set_id, force=True)
+    if result is None:
+        raise HTTPException(500, "Demo run failed — see server logs.")
+    return result
 
 
 @router.get("/api/demo-prompts")

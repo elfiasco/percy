@@ -9,12 +9,13 @@ import {
   mineTemplates, acceptCandidate,
   setAsDefault,
   getPythonModule, pythonModuleDownloadUrl,
-  runDemoDeck, listDemoPrompts,
+  runDemoDeck, listDemoPrompts, rerunAutoDemo,
   type TemplateSet, type TemplateSetItem, type TemplateSetRef,
   type MinedCandidate, type PaletteColor, type BrandFont, type StyleRules,
   type DemoPromptSummary,
 } from "../lib/templateSetsApi"
 import TemplatePreview from "../components/TemplatePreview"
+import { openProject } from "../lib/authApi"
 import Logo from "../components/Logo"
 import ThemeToggle from "../theme/ThemeToggle"
 import { useToast, useDialog } from "../components/Toaster"
@@ -33,7 +34,7 @@ import PageLoader from "../components/PageLoader"
  *   Refs         — uploaded PPTX/PDF examples for mining
  */
 
-type TabKey = "slides" | "elements" | "brand" | "instructions" | "refs" | "python"
+type TabKey = "demo" | "slides" | "elements" | "brand" | "instructions" | "refs" | "python"
 
 export default function TemplateSetEditor() {
   const { setId } = useParams<{ setId: string }>()
@@ -44,7 +45,7 @@ export default function TemplateSetEditor() {
 
   const [set, setSet] = useState<TemplateSet | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<TabKey>("slides")
+  const [activeTab, setActiveTab] = useState<TabKey>("demo")
   const [items, setItems] = useState<TemplateSetItem[]>([])
   const [refs, setRefs] = useState<TemplateSetRef[]>([])
   const [busy, setBusy] = useState(false)
@@ -158,7 +159,6 @@ export default function TemplateSetEditor() {
           )}
         </div>
         <div className="flex items-center gap-3">
-          <DemoDeckButton setId={set.id} />
           {!set.is_default && !set.is_builtin && (
             <button
               onClick={handleSetAsDefault}
@@ -183,6 +183,7 @@ export default function TemplateSetEditor() {
       {/* tabs */}
       <div className="border-b border-edge bg-surface/40 px-5 flex items-center gap-1 text-[11px]">
         {([
+          ["demo", set.last_demo_doc_id ? `Demo (${set.last_demo_summary?.slides_applied ?? 0})` : "Demo"],
           ["slides", `Slides (${slideItems.length})`],
           ["elements", `Elements (${elementItems.length})`],
           ["brand", "Brand"],
@@ -206,6 +207,9 @@ export default function TemplateSetEditor() {
 
       {/* tab body */}
       <div className="flex-1 overflow-auto">
+        {activeTab === "demo" && (
+          <DemoTab set={set} onChange={refreshSet} />
+        )}
         {activeTab === "slides" && (
           <ItemsTab
             setId={set.id}
@@ -273,6 +277,171 @@ export default function TemplateSetEditor() {
           <PythonTab setId={set.id} setName={set.name} />
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Demo tab — the first thing the user sees ───────────────────────────────
+
+function DemoTab({ set, onChange }: { set: TemplateSet; onChange: () => Promise<void> }) {
+  const toast = useToast()
+  const navigate = useNavigate()
+  const [running, setRunning] = useState(false)
+
+  const hasDemo = !!set.last_demo_doc_id && !!set.last_demo_project_id
+  const summary = set.last_demo_summary || {}
+  const slidesApplied = summary.slides_applied ?? 0
+  const errors = summary.errors ?? []
+
+  const ago = (() => {
+    if (!set.last_demo_at) return ""
+    const seconds = Math.floor(Date.now() / 1000 - set.last_demo_at)
+    if (seconds < 60) return `${seconds}s ago`
+    if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
+    return `${Math.floor(seconds / 86400)}d ago`
+  })()
+
+  const handleRun = async () => {
+    setRunning(true)
+    toast.info("Running demo deck — this can take 30-60 seconds…")
+    try {
+      const r = await rerunAutoDemo(set.id)
+      await onChange()
+      if (r.ok) {
+        toast.success(`Demo deck refreshed: ${r.slides_applied} slides`)
+      } else {
+        toast.error(`Demo ran with errors: ${(r.errors || []).slice(0, 2).join("; ")}`)
+      }
+    } catch (e) {
+      toast.error(`Demo failed: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const handleOpen = async () => {
+    if (!set.last_demo_project_id) return
+    try {
+      // Pre-warm the project's doc through the standard openProject flow so
+      // Studio gets the cache it expects.
+      await openProject(set.last_demo_project_id)
+      navigate(`/studio/${set.last_demo_project_id}`)
+    } catch (e) {
+      toast.error(`Could not open demo: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  return (
+    <div className="p-6 max-w-5xl mx-auto">
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div>
+          <div className="text-[12px] text-paper font-medium mb-1">
+            How does the agent use this template set?
+          </div>
+          <div className="text-[11px] text-muted leading-relaxed max-w-2xl">
+            Every time you upload a reference document, Percy runs a fixed
+            10-slide quarterly-update prompt against this set. The agent
+            isn't told which templates to pick — it has to discover them
+            from the set's catalog. The deck below is the result of that
+            test.
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {hasDemo && (
+            <button
+              onClick={handleOpen}
+              className="text-[10px] uppercase tracking-wider px-3 py-1.5 border border-accent text-accent hover:bg-accent/10 transition-colors"
+            >
+              Open in Studio →
+            </button>
+          )}
+          <button
+            onClick={handleRun}
+            disabled={running}
+            className="text-[10px] uppercase tracking-wider px-3 py-1.5 border border-edge hover:border-accent hover:text-accent transition-colors flex items-center gap-1.5"
+          >
+            {running && <span className="inline-block w-2 h-2 border border-current border-t-transparent rounded-full animate-spin" />}
+            {running ? "Generating..." : hasDemo ? "Re-run demo" : "Run demo"}
+          </button>
+        </div>
+      </div>
+
+      {hasDemo ? (
+        <>
+          {/* Summary line */}
+          <div className="flex items-center gap-4 text-[11px] text-muted mb-4 border border-edge bg-surface/30 px-4 py-2.5">
+            <span><strong className="text-paper">{slidesApplied}</strong> slides applied</span>
+            <span className="text-edge">·</span>
+            <span>{summary.demo_name || "Quarterly business update"}</span>
+            <span className="text-edge">·</span>
+            <span>{ago}</span>
+            {errors.length > 0 && (
+              <>
+                <span className="text-edge">·</span>
+                <span className="text-bad">{errors.length} error{errors.length === 1 ? "" : "s"}</span>
+              </>
+            )}
+          </div>
+
+          {/* Slide grid — uses the doc's bridge-rendered PNGs */}
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+            {Array.from({ length: slidesApplied }).map((_, i) => {
+              const n = i + 1
+              return (
+                <button
+                  key={n}
+                  onClick={handleOpen}
+                  className="border border-edge bg-surface/30 hover:border-accent transition-colors overflow-hidden text-left"
+                >
+                  <div className="aspect-video bg-ink">
+                    <img
+                      src={`/api/docs/${set.last_demo_doc_id}/slides/${n}/bridge.png?v=${set.last_demo_at}`}
+                      alt={`Slide ${n}`}
+                      className="w-full h-full object-cover"
+                      loading="lazy"
+                      onError={(e) => {
+                        (e.currentTarget as HTMLImageElement).style.opacity = "0.2"
+                      }}
+                    />
+                  </div>
+                  <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted font-mono">
+                    Slide {n}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Errors detail if any */}
+          {errors.length > 0 && (
+            <div className="mt-6 border border-bad/30 bg-bad/5 p-4">
+              <div className="text-[11px] text-bad font-medium mb-2">
+                {errors.length} slide{errors.length === 1 ? "" : "s"} failed
+              </div>
+              <ul className="text-[11px] text-muted space-y-1 font-mono">
+                {errors.map((e, i) => <li key={i}>· {e}</li>)}
+              </ul>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="border border-dashed border-edge p-12 text-center">
+          <div className="text-[14px] text-paper mb-2">No demo yet</div>
+          <div className="text-[11px] text-muted leading-relaxed max-w-md mx-auto mb-4">
+            Upload a reference document under the <strong>Refs</strong> tab and
+            the demo runs automatically. Or run it now against the current
+            template catalog.
+          </div>
+          <button
+            onClick={handleRun}
+            disabled={running}
+            className="text-[10px] uppercase tracking-wider px-4 py-2 bg-accent text-ink hover:bg-accent/80 transition-colors"
+          >
+            {running ? "Generating..." : "Run demo now"}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

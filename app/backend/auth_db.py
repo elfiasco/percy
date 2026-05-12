@@ -622,6 +622,15 @@ _FORWARD_ADDS = [
     # user-created ones. Builtins are read-only for everyone, visible across
     # all orgs via list_org_templates' UNION.
     ("studio_templates", "is_builtin",      "INTEGER NOT NULL DEFAULT 0"),
+    # Auto-demo bookkeeping. Every ref onboarding pipeline ends with a
+    # throttled run of the canned demo prompt against this set, creating
+    # a real studio_project the user can open. We store the most recent
+    # demo's doc_id + project_id here so the editor can surface a
+    # "View latest demo" link without polling.
+    ("studio_templates", "last_demo_doc_id",     "TEXT"),
+    ("studio_templates", "last_demo_project_id", "TEXT"),
+    ("studio_templates", "last_demo_at",         "INTEGER"),
+    ("studio_templates", "last_demo_summary",    "TEXT NOT NULL DEFAULT '{}'"),
 ]
 
 
@@ -1162,6 +1171,9 @@ def _decode_template(row: dict[str, Any] | None) -> dict[str, Any] | None:
     # `tpl["style_profile"].get("chart_styles", [])` without a None check.
     try: row["style_profile"] = _json.loads(row.get("style_profile") or "{}")
     except Exception: row["style_profile"] = {}
+    # Auto-demo bookkeeping (defaults preserve None for "never run").
+    try: row["last_demo_summary"] = _json.loads(row.get("last_demo_summary") or "{}")
+    except Exception: row["last_demo_summary"] = {}
     return row
 
 
@@ -1227,7 +1239,7 @@ def list_org_templates(org_id: str, *, viewer_id: str) -> list[dict[str, Any]]:
     return [d for d in (_decode_template(r) for r in rows) if d]
 
 
-_TEMPLATE_JSON_FIELDS = ("brand", "source_project_ids", "palette", "fonts", "style_rules", "style_profile")
+_TEMPLATE_JSON_FIELDS = ("brand", "source_project_ids", "palette", "fonts", "style_rules", "style_profile", "last_demo_summary")
 
 
 def update_template(template_id: str, **fields: Any) -> dict[str, Any] | None:

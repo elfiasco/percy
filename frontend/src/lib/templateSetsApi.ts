@@ -46,6 +46,18 @@ export interface TemplateSet {
   style_rules: StyleRules
   folder_id: string | null
   is_default: boolean
+  is_builtin: boolean
+  // Auto-demo bookkeeping — populated after the onboard pipeline runs.
+  last_demo_doc_id: string | null
+  last_demo_project_id: string | null
+  last_demo_at: number | null
+  last_demo_summary: {
+    demo_id?: string
+    demo_name?: string
+    slides_applied?: number
+    errors?: string[]
+    ok?: boolean
+  }
   // Convenience counts populated by the list endpoint.
   items_count?: number
   slide_items_count?: number
@@ -339,6 +351,18 @@ export interface DemoPromptSummary {
 
 export async function listDemoPrompts(): Promise<{ demos: DemoPromptSummary[]; default_id: string }> {
   return jfetch("/api/demo-prompts")
+}
+
+export async function rerunAutoDemo(setId: string): Promise<{
+  doc_id: string
+  project_id: string
+  demo_id: string
+  demo_name: string
+  slides_applied: number
+  errors: string[]
+  ok: boolean
+}> {
+  return jfetch(`/api/template-sets/${setId}/rerun-auto-demo`, { method: "POST" })
 }
 
 export async function runDemoDeck(
