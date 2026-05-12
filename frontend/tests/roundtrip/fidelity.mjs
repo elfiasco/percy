@@ -220,6 +220,16 @@ async function screenshotSlides(browser, projId, docId, slideNums, outDir) {
   // 2200×847: 85vh = 720px so canvas matches reference (120 DPI, 6" tall) exactly.
   // At 900px, 85vh = 765px (6.25% too large) causing text-wrap differences post-resize.
   const ctx  = await browser.newContext({ viewport: { width: 2200, height: 847 } })
+  // Capture unknown-preset warnings from BridgeShapeRenderer so we know which
+  // shapes need geometry coverage.
+  const unknownPresets = new Set()
+  ctx.on("page", (p) => {
+    p.on("console", (m) => {
+      const t = m.text()
+      const mm = /unknown preset "([^"]+)"/.exec(t)
+      if (mm) unknownPresets.add(mm[1])
+    })
+  })
   if (_session) {
     await ctx.addCookies([{
       name: "percy_session", value: _session,
@@ -464,6 +474,9 @@ async function screenshotSlides(browser, projId, docId, slideNums, outDir) {
     console.log(`    slide ${n}: ${pngBuf.length} bytes → ${name}`)
   }
 
+  if (unknownPresets.size > 0) {
+    console.log(`  unknown shape presets seen: ${[...unknownPresets].sort().join(", ")}`)
+  }
   await ctx.close()
   return shots
 }

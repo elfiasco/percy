@@ -222,9 +222,18 @@ function shapeProps(
     }
 
     default:
+      // Unknown preset — log once per session so we can prioritize adding
+      // support for the shapes users actually have. The shape still renders
+      // as a fallback rect so the slide isn't broken.
+      if (preset && !_LOGGED_UNKNOWN_PRESETS.has(preset)) {
+        _LOGGED_UNKNOWN_PRESETS.add(preset)
+        console.warn(`[Percy] BridgeShape: unknown preset "${preset}" — rendering as rect fallback`)
+      }
       return { tag: "rect", x: 0, y: 0, width: 100, height: 100 }
   }
 }
+
+const _LOGGED_UNKNOWN_PRESETS = new Set<string>()
 
 function regularPolygon(n: number, cx: number, cy: number, r: number, startAngle: number): string {
   const pts: string[] = []
