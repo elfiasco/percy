@@ -514,6 +514,7 @@ async function runDeck(browser, pptxPath, docIdOverride, projIdOverride) {
     try {
       const slide = await apiJson(`/api/docs/${docId}/slides/${n}/elements`)
       const elems = Array.isArray(slide) ? slide : (slide.elements || [])
+      const slideBg = slide?.background_color ?? null
       const enriched = []
       for (const el of elems) {
         const e = {
@@ -550,7 +551,26 @@ async function runDeck(browser, pptxPath, docIdOverride, projIdOverride) {
         if (e.type === "BridgeShape") {
           try {
             const sty = await apiJson(`/api/docs/${docId}/slides/${n}/elements/${el.id}/style`)
-            e.shape = { fill_color: sty?.fill_color, fill_type: sty?.fill_type }
+            e.shape = { fill_color: sty?.fill_color, fill_type: sty?.fill_type, gradient_stops: sty?.gradient_stops }
+          } catch { /* tolerate */ }
+        }
+        // BridgeChart: dump chart data (series + colors + type) for parity debugging
+        if (e.type === "BridgeChart") {
+          try {
+            const cd = await apiJson(`/api/docs/${docId}/slides/${n}/elements/${el.id}/chart-data`)
+            e.chart = {
+              chart_type: cd?.chart_type,
+              num_series: (cd?.series || []).length,
+              series_summary: (cd?.series || []).map((s) => ({
+                name: s.name,
+                color: s.color,
+                num_points: (s.values || []).length,
+                points: (s.values || []).slice(0, 3),
+                point_colors: s.point_colors,
+              })),
+              category_axis: cd?.category_axis,
+              value_axis: cd?.value_axis,
+            }
           } catch { /* tolerate */ }
         }
         try {
@@ -573,7 +593,9 @@ async function runDeck(browser, pptxPath, docIdOverride, projIdOverride) {
         } catch { /* not all elements have text */ }
         enriched.push(e)
       }
-      await writeFile(join(elementsDir, `slide-${String(n).padStart(3, "0")}.json`), JSON.stringify(enriched, null, 2))
+      // Prepend background_color as a virtual first entry for backward compat
+      const withBg = [{ id: "__slide__", type: "SlideMeta", background_color: slideBg }, ...enriched]
+      await writeFile(join(elementsDir, `slide-${String(n).padStart(3, "0")}.json`), JSON.stringify(withBg, null, 2))
     } catch { /* tolerate */ }
   }
   console.log()
