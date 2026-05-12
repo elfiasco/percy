@@ -43,6 +43,7 @@ from percy.bridge import (
     CellAlignment,
     CellFormat,
     CellMerge,
+    ColorSpec,
     ConnectorEndpoints,
     FillAndBorder,
     FreeformFill,
@@ -72,6 +73,23 @@ from percy.bridge import (
     TextRun,
     TransformEmus,
 )
+
+
+def _hex_to_colorspec(hex_str: str | None) -> ColorSpec | None:
+    """Wrap a hex string in a ColorSpec so downstream consumers (brand
+    extraction, codegen, renderers) can use the standard ColorSpec API.
+
+    Earlier code in this file passed raw hex strings into ShapeFill.color
+    and ShapeLine.color — which broke brand extraction because those
+    fields are typed as ColorSpec | None, not str. Any caller doing
+    `fill.color.resolve(theme)` would get AttributeError on a string.
+
+    Returns None for None / empty input so call sites that filter on
+    None still work.
+    """
+    if not hex_str:
+        return None
+    return ColorSpec(value=hex_str)
 
 # ── constants ─────────────────────────────────────────────────────────────────
 
@@ -1375,7 +1393,7 @@ def _build_table_from_rect_cells(
             fmt_row.append(CellFormat(
                 text=plain or None,
                 paragraphs=cell_paras.get(key, []),
-                fill_color=fill_hex,
+                fill_color=_hex_to_colorspec(fill_hex),
                 alignment=CellAlignment(text_alignment="left", vertical_alignment="top"),
                 merge=CellMerge(),
                 grid_row=ri,
@@ -1831,12 +1849,12 @@ def _rounded_rect_to_shape(
         ),
         fill=ShapeFill(
             fill_type="solid" if has_fill else None,
-            color=fill_hex,
+            color=_hex_to_colorspec(fill_hex),
             transparency=transparency,
         ),
         line=ShapeLine(
             visible=has_stroke,
-            color=stroke_hex,
+            color=_hex_to_colorspec(stroke_hex),
             width=stroke_w if has_stroke else None,
             dash_style=_pdf_dashes_to_style(drawing.get("dashes")),
         ),
@@ -1898,7 +1916,7 @@ def _line_to_connector(drawing: dict, page_number: int, shape_id: int) -> Bridge
         endpoints=ConnectorEndpoints(start_x=sx, start_y=sy, end_x=ex, end_y=ey),
         line=ShapeLine(
             visible=True,
-            color=_rgb_to_hex(drawing.get("color")),
+            color=_hex_to_colorspec(_rgb_to_hex(drawing.get("color"))),
             width=drawing.get("width"),
             dash_style=_pdf_dashes_to_style(drawing.get("dashes")),
         ),
@@ -1945,12 +1963,12 @@ def _rect_to_shape(
         ),
         fill=ShapeFill(
             fill_type="solid" if has_fill else None,
-            color=fill_hex,
+            color=_hex_to_colorspec(fill_hex),
             transparency=transparency,
         ),
         line=ShapeLine(
             visible=has_stroke,
-            color=stroke_hex,
+            color=_hex_to_colorspec(stroke_hex),
             width=stroke_w if has_stroke else None,
         ),
         text_content=ShapeTextContent(has_text=False),
@@ -2010,11 +2028,11 @@ def _complex_path_to_freeform(
         )],
         fill=FreeformFill(
             fill_type="solid" if has_fill else None,
-            fill_color=fill_hex,
+            fill_color=_hex_to_colorspec(fill_hex),
             transparency=freeform_transparency,
         ),
         line=FreeformLine(
-            line_color=stroke_hex,
+            line_color=_hex_to_colorspec(stroke_hex),
             line_width=stroke_w if has_stroke else None,
         ),
         transform_emus=TransformEmus(

@@ -1,59 +1,51 @@
 {
   "slug": "caterpillar",
   "display_name": "Caterpillar",
-  "description": "Industrial brand mined from Caterpillar's 2026 investor presentation.",
+  "description": "Brand mined from Caterpillar's investor document.",
   "source_doc": "caterpillar_20260503_CI-Investor-Presentation-2026.pdf",
   "source_doc_slides": 20,
   "source_doc_elements": 881,
   "brand": {
     "proposed_palette": [
       {
-        "hex": "#F8C800",
-        "count": 24057,
-        "role": "primary",
-        "source": "pixel-sample"
+        "hex": "#BBBDC0",
+        "count": 172,
+        "role": "primary"
       },
       {
-        "hex": "#604838",
-        "count": 10049,
-        "role": "accent",
-        "source": "pixel-sample"
+        "hex": "#FCB912",
+        "count": 119,
+        "role": "accent"
       },
       {
-        "hex": "#E8B828",
-        "count": 7066,
-        "role": "accent",
-        "source": "pixel-sample"
+        "hex": "#4D4D4F",
+        "count": 49,
+        "role": "accent"
       },
       {
-        "hex": "#A08860",
-        "count": 6651,
-        "role": "accent",
-        "source": "pixel-sample"
+        "hex": "#000000",
+        "count": 46,
+        "role": "accent"
       },
       {
-        "hex": "#B09028",
-        "count": 6529,
-        "role": "neutral",
-        "source": "pixel-sample"
+        "hex": "#221F1F",
+        "count": 36,
+        "role": "neutral"
       },
       {
-        "hex": "#F8C000",
-        "count": 6250,
-        "role": "neutral",
-        "source": "pixel-sample"
+        "hex": "#FFFFFF",
+        "count": 31,
+        "role": "neutral"
       },
       {
-        "hex": "#F8E0B0",
-        "count": 5969,
-        "role": "neutral",
-        "source": "pixel-sample"
+        "hex": "#404040",
+        "count": 26,
+        "role": "neutral"
       },
       {
-        "hex": "#F0B800",
-        "count": 4888,
-        "role": "neutral",
-        "source": "pixel-sample"
+        "hex": "#FFC000",
+        "count": 24,
+        "role": "neutral"
       }
     ],
     "proposed_fonts": [
@@ -89,57 +81,48 @@
       "avg_body_size": 14.0
     },
     "docs_scanned": 1,
-    "extracted_at": 1778558086,
-    "pixel_sampled": true
+    "extracted_at": 1778558976
   },
   "palette": [
     {
-      "hex": "#F8C800",
-      "count": 24057,
-      "role": "primary",
-      "source": "pixel-sample"
+      "hex": "#BBBDC0",
+      "count": 172,
+      "role": "primary"
     },
     {
-      "hex": "#604838",
-      "count": 10049,
-      "role": "accent",
-      "source": "pixel-sample"
+      "hex": "#FCB912",
+      "count": 119,
+      "role": "accent"
     },
     {
-      "hex": "#E8B828",
-      "count": 7066,
-      "role": "accent",
-      "source": "pixel-sample"
+      "hex": "#4D4D4F",
+      "count": 49,
+      "role": "accent"
     },
     {
-      "hex": "#A08860",
-      "count": 6651,
-      "role": "accent",
-      "source": "pixel-sample"
+      "hex": "#000000",
+      "count": 46,
+      "role": "accent"
     },
     {
-      "hex": "#B09028",
-      "count": 6529,
-      "role": "neutral",
-      "source": "pixel-sample"
+      "hex": "#221F1F",
+      "count": 36,
+      "role": "neutral"
     },
     {
-      "hex": "#F8C000",
-      "count": 6250,
-      "role": "neutral",
-      "source": "pixel-sample"
+      "hex": "#FFFFFF",
+      "count": 31,
+      "role": "neutral"
     },
     {
-      "hex": "#F8E0B0",
-      "count": 5969,
-      "role": "neutral",
-      "source": "pixel-sample"
+      "hex": "#404040",
+      "count": 26,
+      "role": "neutral"
     },
     {
-      "hex": "#F0B800",
-      "count": 4888,
-      "role": "neutral",
-      "source": "pixel-sample"
+      "hex": "#FFC000",
+      "count": 24,
+      "role": "neutral"
     }
   ],
   "fonts": [
@@ -192,10 +175,28 @@
         "italic": false
       }
     },
+    "palette_ordered": [
+      "#BBBDC0",
+      "#FCB912",
+      "#4D4D4F",
+      "#000000",
+      "#221F1F",
+      "#FFFFFF",
+      "#404040",
+      "#FFC000",
+      "#FFCD04",
+      "#7E7F7E",
+      "#0D0D0D",
+      "#BEBFBE",
+      "#D2D2D3",
+      "#929497",
+      "#F9BA2A",
+      "#4E4E4E"
+    ],
     "primary_font": "BCDFEE+Arial Nova Cond",
     "sample_element_count": 881,
     "sample_doc_count": 1,
-    "extracted_at": 1778558086
+    "extracted_at": 1778558976
   },
   "instructions_md": "",
   "items": [
@@ -207,117 +208,117 @@
         "member_count": 30,
         "members": [
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 2,
             "element_id": "12"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 3,
             "element_id": "359"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 3,
             "element_id": "360"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 4,
             "element_id": "14"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 6,
             "element_id": "32"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 6,
             "element_id": "33"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 7,
             "element_id": "24"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 7,
             "element_id": "25"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 8,
             "element_id": "16"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 8,
             "element_id": "17"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 9,
             "element_id": "21"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 10,
             "element_id": "20"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 10,
             "element_id": "21"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 11,
             "element_id": "7"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 11,
             "element_id": "8"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 11,
             "element_id": "9"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 11,
             "element_id": "15"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 11,
             "element_id": "16"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 11,
             "element_id": "17"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 13,
             "element_id": "14"
           }
         ]
       },
       "template": {
-        "id": "dbb18a9ecbb14e6eb6e1630e82882b7b",
+        "id": "e5640ff0904648f2a9b3ecc01e3786fe",
         "name": "Element pattern 9",
         "description": "Seen 30\u00d7 across 1 refs",
         "category": "Induced:caterpillar",
         "slide_script": null,
         "preview_image": null,
         "is_builtin": false,
-        "created_at": 1778558086.4886847,
-        "updated_at": 1778558086.4886851,
+        "created_at": 1778558976.4593306,
+        "updated_at": 1778558976.459331,
         "tags": [
           "induced",
           "text"
@@ -351,117 +352,117 @@
         "member_count": 23,
         "members": [
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 1,
             "element_id": "25"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 2,
             "element_id": "6"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 3,
             "element_id": "356"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 4,
             "element_id": "10"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 5,
             "element_id": "24"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 6,
             "element_id": "29"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 7,
             "element_id": "21"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 8,
             "element_id": "13"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 9,
             "element_id": "17"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 9,
             "element_id": "22"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 9,
             "element_id": "23"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 10,
             "element_id": "17"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 11,
             "element_id": "4"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 12,
             "element_id": "24"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 13,
             "element_id": "11"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 14,
             "element_id": "10"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 15,
             "element_id": "13"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 16,
             "element_id": "12"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 17,
             "element_id": "12"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 17,
             "element_id": "20"
           }
         ]
       },
       "template": {
-        "id": "1212d0dec95747bbb1af634788703797",
+        "id": "bca1bd9cf7064f4f9b1a9221ee275ef5",
         "name": "Element pattern 10",
         "description": "Seen 23\u00d7 across 1 refs",
         "category": "Induced:caterpillar",
         "slide_script": null,
         "preview_image": null,
         "is_builtin": false,
-        "created_at": 1778558086.4952443,
-        "updated_at": 1778558086.4952447,
+        "created_at": 1778558976.4659379,
+        "updated_at": 1778558976.465938,
         "tags": [
           "induced",
           "text"
@@ -495,62 +496,62 @@
         "member_count": 9,
         "members": [
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 11,
             "element_id": "10"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 11,
             "element_id": "11"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 11,
             "element_id": "12"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 11,
             "element_id": "18"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 11,
             "element_id": "19"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 11,
             "element_id": "20"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 11,
             "element_id": "21"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 19,
             "element_id": "19"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 19,
             "element_id": "20"
           }
         ]
       },
       "template": {
-        "id": "36873f9f07b54772b4f5131097991776",
+        "id": "1eeb3e746a4d4a838773cea12e16a093",
         "name": "Element pattern 11",
         "description": "Seen 9\u00d7 across 1 refs",
         "category": "Induced:caterpillar",
         "slide_script": null,
         "preview_image": null,
         "is_builtin": false,
-        "created_at": 1778558086.5030673,
-        "updated_at": 1778558086.5030675,
+        "created_at": 1778558976.4726102,
+        "updated_at": 1778558976.4726105,
         "tags": [
           "induced",
           "text"
@@ -584,47 +585,47 @@
         "member_count": 6,
         "members": [
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 2,
             "element_id": "11"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 11,
             "element_id": "13"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 11,
             "element_id": "14"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 17,
             "element_id": "16"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 17,
             "element_id": "17"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 17,
             "element_id": "19"
           }
         ]
       },
       "template": {
-        "id": "d35744f7ed3547fdb8633252678fbda3",
+        "id": "d91baacb7f624ef2bf76fff6b0454814",
         "name": "Element pattern 12",
         "description": "Seen 6\u00d7 across 1 refs",
         "category": "Induced:caterpillar",
         "slide_script": null,
         "preview_image": null,
         "is_builtin": false,
-        "created_at": 1778558086.5106149,
-        "updated_at": 1778558086.510615,
+        "created_at": 1778558976.4794185,
+        "updated_at": 1778558976.4794185,
         "tags": [
           "induced",
           "text"
@@ -658,42 +659,42 @@
         "member_count": 5,
         "members": [
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 2,
             "element_id": "9"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 4,
             "element_id": "13"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 9,
             "element_id": "20"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 18,
             "element_id": "10"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 19,
             "element_id": "21"
           }
         ]
       },
       "template": {
-        "id": "87e8ac1cf834412096d1d4744e23bc1c",
+        "id": "0475da6143ab42938b1336c8384627f2",
         "name": "Element pattern 13",
         "description": "Seen 5\u00d7 across 1 refs",
         "category": "Induced:caterpillar",
         "slide_script": null,
         "preview_image": null,
         "is_builtin": false,
-        "created_at": 1778558086.517867,
-        "updated_at": 1778558086.5178676,
+        "created_at": 1778558976.4860513,
+        "updated_at": 1778558976.4860513,
         "tags": [
           "induced",
           "text"
@@ -727,32 +728,32 @@
         "member_count": 3,
         "members": [
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 1,
             "element_id": "28"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 5,
             "element_id": "29"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 12,
             "element_id": "27"
           }
         ]
       },
       "template": {
-        "id": "498cbe059e2e48cdb9b0ffd88d629da1",
+        "id": "744167daa3ae43b0b1d90416f80ade03",
         "name": "Element pattern 14",
         "description": "Seen 3\u00d7 across 1 refs",
         "category": "Induced:caterpillar",
         "slide_script": null,
         "preview_image": null,
         "is_builtin": false,
-        "created_at": 1778558086.5252712,
-        "updated_at": 1778558086.5252712,
+        "created_at": 1778558976.4943519,
+        "updated_at": 1778558976.494352,
         "tags": [
           "induced",
           "text"
@@ -782,36 +783,96 @@
       "kind": "element",
       "order_index": 0,
       "provenance": {
-        "fingerprint": "('BridgeConnector', 'mid-mid', 'unknown', False, 'none', None)",
+        "fingerprint": "('BridgeShape', 'bot-left', 'xs', False, 'solid', None)",
         "member_count": 3,
         "members": [
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
+            "slide_n": 2,
+            "element_id": "1"
+          },
+          {
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
             "slide_n": 3,
-            "element_id": "2"
+            "element_id": "352"
           },
           {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
-            "slide_n": 19,
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
+            "slide_n": 8,
             "element_id": "2"
-          },
-          {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
-            "slide_n": 19,
-            "element_id": "3"
           }
         ]
       },
       "template": {
-        "id": "9b638fcfecaf49fd8ce88dc4a2868758",
+        "id": "bae2818f2cf44dfcb75dbb3fe9c7002a",
         "name": "Element pattern 15",
         "description": "Seen 3\u00d7 across 1 refs",
         "category": "Induced:caterpillar",
         "slide_script": null,
         "preview_image": null,
         "is_builtin": false,
-        "created_at": 1778558086.5325465,
-        "updated_at": 1778558086.5325465,
+        "created_at": 1778558976.500869,
+        "updated_at": 1778558976.500869,
+        "tags": [
+          "induced",
+          "shape"
+        ],
+        "inputs_schema": {},
+        "sample_inputs": {},
+        "layout": [
+          {
+            "kind": "shape",
+            "alias": "shape_1",
+            "body": {
+              "geometry_preset": "rect",
+              "position": {
+                "left_in": 0.8472,
+                "top_in": 6.3967,
+                "width_in": 1.9467,
+                "height_in": 0.0083
+              },
+              "name": "Shape_1",
+              "fill_color": "#4371C0"
+            }
+          }
+        ],
+        "connects": {}
+      }
+    },
+    {
+      "kind": "element",
+      "order_index": 0,
+      "provenance": {
+        "fingerprint": "('BridgeConnector', 'mid-mid', 'unknown', False, 'none', None)",
+        "member_count": 3,
+        "members": [
+          {
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
+            "slide_n": 3,
+            "element_id": "2"
+          },
+          {
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
+            "slide_n": 19,
+            "element_id": "2"
+          },
+          {
+            "ref_id": "ref_hgUrSqtNUi0CI1MN",
+            "slide_n": 19,
+            "element_id": "3"
+          }
+        ]
+      },
+      "template": {
+        "id": "fa9017b482b340daa56163100240e17f",
+        "name": "Element pattern 16",
+        "description": "Seen 3\u00d7 across 1 refs",
+        "category": "Induced:caterpillar",
+        "slide_script": null,
+        "preview_image": null,
+        "is_builtin": false,
+        "created_at": 1778558976.5072336,
+        "updated_at": 1778558976.5072339,
         "tags": [
           "induced",
           "connector"
@@ -838,64 +899,8 @@
         ],
         "connects": {}
       }
-    },
-    {
-      "kind": "element",
-      "order_index": 0,
-      "provenance": {
-        "fingerprint": "('BridgeConnector', 'mid-left', 'xs', False, 'none', None)",
-        "member_count": 2,
-        "members": [
-          {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
-            "slide_n": 9,
-            "element_id": "11"
-          },
-          {
-            "ref_id": "ref_3V2xkxUwKu3fVMue",
-            "slide_n": 9,
-            "element_id": "12"
-          }
-        ]
-      },
-      "template": {
-        "id": "a74944ccd95b48d984302e99c3a216ec",
-        "name": "Element pattern 16",
-        "description": "Seen 2\u00d7 across 1 refs",
-        "category": "Induced:caterpillar",
-        "slide_script": null,
-        "preview_image": null,
-        "is_builtin": false,
-        "created_at": 1778558086.5405004,
-        "updated_at": 1778558086.5405004,
-        "tags": [
-          "induced",
-          "connector"
-        ],
-        "inputs_schema": {},
-        "sample_inputs": {},
-        "layout": [
-          {
-            "kind": "connector",
-            "alias": "line_11",
-            "body": {
-              "connector_type": "straight",
-              "start": {
-                "x_in": 0.7221,
-                "y_in": 3.6247
-              },
-              "end": {
-                "x_in": 5.5221,
-                "y_in": 3.6422
-              },
-              "name": "Line_11"
-            }
-          }
-        ],
-        "connects": {}
-      }
     }
   ],
   "snapshot_version": 1,
-  "snapshot_created_at": 1778558086
+  "snapshot_created_at": 1778558976
 }

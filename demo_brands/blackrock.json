@@ -1,59 +1,51 @@
 {
   "slug": "blackrock",
   "display_name": "BlackRock",
-  "description": "Investment management brand mined from BlackRock's Bridging the Gap report.",
+  "description": "Brand mined from BlackRock's investor document.",
   "source_doc": "blackrock-bridging-the-gap-report.pdf",
   "source_doc_slides": 12,
   "source_doc_elements": 675,
   "brand": {
     "proposed_palette": [
       {
-        "hex": "#F8D000",
-        "count": 27732,
-        "role": "primary",
-        "source": "pixel-sample"
+        "hex": "#221F1F",
+        "count": 72,
+        "role": "primary"
       },
       {
-        "hex": "#F06830",
-        "count": 12794,
-        "role": "accent",
-        "source": "pixel-sample"
+        "hex": "#F59EB4",
+        "count": 67,
+        "role": "accent"
       },
       {
-        "hex": "#D08058",
-        "count": 7485,
-        "role": "accent",
-        "source": "pixel-sample"
+        "hex": "#F26932",
+        "count": 63,
+        "role": "accent"
       },
       {
-        "hex": "#E09860",
-        "count": 6235,
-        "role": "accent",
-        "source": "pixel-sample"
+        "hex": "#FFD705",
+        "count": 47,
+        "role": "accent"
       },
       {
-        "hex": "#986850",
-        "count": 5056,
-        "role": "neutral",
-        "source": "pixel-sample"
+        "hex": "#FFFFFF",
+        "count": 27,
+        "role": "neutral"
       },
       {
-        "hex": "#F8D800",
-        "count": 4872,
-        "role": "neutral",
-        "source": "pixel-sample"
+        "hex": "#D1D2D4",
+        "count": 6,
+        "role": "neutral"
       },
       {
-        "hex": "#283880",
-        "count": 4510,
-        "role": "neutral",
-        "source": "pixel-sample"
+        "hex": "#F16A32",
+        "count": 4,
+        "role": "neutral"
       },
       {
-        "hex": "#603830",
-        "count": 3954,
-        "role": "neutral",
-        "source": "pixel-sample"
+        "hex": "#000000",
+        "count": 4,
+        "role": "neutral"
       }
     ],
     "proposed_fonts": [
@@ -89,57 +81,48 @@
       "avg_body_size": 9.4
     },
     "docs_scanned": 1,
-    "extracted_at": 1778558142,
-    "pixel_sampled": true
+    "extracted_at": 1778558963
   },
   "palette": [
     {
-      "hex": "#F8D000",
-      "count": 27732,
-      "role": "primary",
-      "source": "pixel-sample"
+      "hex": "#221F1F",
+      "count": 72,
+      "role": "primary"
     },
     {
-      "hex": "#F06830",
-      "count": 12794,
-      "role": "accent",
-      "source": "pixel-sample"
+      "hex": "#F59EB4",
+      "count": 67,
+      "role": "accent"
     },
     {
-      "hex": "#D08058",
-      "count": 7485,
-      "role": "accent",
-      "source": "pixel-sample"
+      "hex": "#F26932",
+      "count": 63,
+      "role": "accent"
     },
     {
-      "hex": "#E09860",
-      "count": 6235,
-      "role": "accent",
-      "source": "pixel-sample"
+      "hex": "#FFD705",
+      "count": 47,
+      "role": "accent"
     },
     {
-      "hex": "#986850",
-      "count": 5056,
-      "role": "neutral",
-      "source": "pixel-sample"
+      "hex": "#FFFFFF",
+      "count": 27,
+      "role": "neutral"
     },
     {
-      "hex": "#F8D800",
-      "count": 4872,
-      "role": "neutral",
-      "source": "pixel-sample"
+      "hex": "#D1D2D4",
+      "count": 6,
+      "role": "neutral"
     },
     {
-      "hex": "#283880",
-      "count": 4510,
-      "role": "neutral",
-      "source": "pixel-sample"
+      "hex": "#F16A32",
+      "count": 4,
+      "role": "neutral"
     },
     {
-      "hex": "#603830",
-      "count": 3954,
-      "role": "neutral",
-      "source": "pixel-sample"
+      "hex": "#000000",
+      "count": 4,
+      "role": "neutral"
     }
   ],
   "fonts": [
@@ -192,10 +175,27 @@
         "italic": false
       }
     },
+    "palette_ordered": [
+      "#221F1F",
+      "#F59EB4",
+      "#F26932",
+      "#FFD705",
+      "#FFFFFF",
+      "#D1D2D4",
+      "#F16A32",
+      "#000000",
+      "#FCD726",
+      "#149775",
+      "#F8AE9B",
+      "#A61C33",
+      "#FC9BB4",
+      "#FFDE51",
+      "#FFE581"
+    ],
     "primary_font": "NWDKGX+BLKFort-Book",
     "sample_element_count": 675,
     "sample_doc_count": 1,
-    "extracted_at": 1778558142
+    "extracted_at": 1778558963
   },
   "instructions_md": "",
   "items": [
@@ -207,117 +207,117 @@
         "member_count": 114,
         "members": [
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 2,
             "element_id": "5"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 2,
             "element_id": "9"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 2,
             "element_id": "10"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 2,
             "element_id": "11"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 2,
             "element_id": "12"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "34"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "35"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "37"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "38"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "39"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "40"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "41"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "42"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "43"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "44"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "56"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "58"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "32"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "33"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "35"
           }
         ]
       },
       "template": {
-        "id": "92593ce1ebd74b79a145ba7950c47bd7",
+        "id": "10cd024ead564d59b7d59902e0bca539",
         "name": "Element pattern 5",
         "description": "Seen 114\u00d7 across 1 refs",
         "category": "Induced:blackrock",
         "slide_script": null,
         "preview_image": null,
         "is_builtin": false,
-        "created_at": 1778558142.7138305,
-        "updated_at": 1778558142.713831,
+        "created_at": 1778558963.6974173,
+        "updated_at": 1778558963.6974177,
         "tags": [
           "induced",
           "text"
@@ -351,117 +351,117 @@
         "member_count": 57,
         "members": [
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "47"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "51"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "52"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "53"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "54"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "55"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "56"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "57"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "58"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 5,
             "element_id": "32"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 5,
             "element_id": "63"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 5,
             "element_id": "64"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 5,
             "element_id": "66"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 5,
             "element_id": "69"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "47"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "89"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "90"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "91"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "93"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "96"
           }
         ]
       },
       "template": {
-        "id": "5a7838817cbd4a1f817e13db3a997d0c",
+        "id": "adb10257853b40f0b56827d77190b3d1",
         "name": "Element pattern 6",
         "description": "Seen 57\u00d7 across 1 refs",
         "category": "Induced:blackrock",
         "slide_script": null,
         "preview_image": null,
         "is_builtin": false,
-        "created_at": 1778558142.720235,
-        "updated_at": 1778558142.7202356,
+        "created_at": 1778558963.7043056,
+        "updated_at": 1778558963.704306,
         "tags": [
           "induced",
           "text"
@@ -495,117 +495,117 @@
         "member_count": 41,
         "members": [
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "1"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "5"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "6"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "7"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "1"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "2"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "9"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "26"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "6"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "7"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "9"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "10"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "12"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "13"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "15"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "16"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "18"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "19"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "27"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "28"
           }
         ]
       },
       "template": {
-        "id": "08a940a308b34b05ab3f24a4e938a047",
+        "id": "bd9ba8dd5ddf43639fbc5c092f79b707",
         "name": "Element pattern 7",
         "description": "Seen 41\u00d7 across 1 refs",
         "category": "Induced:blackrock",
         "slide_script": null,
         "preview_image": null,
         "is_builtin": false,
-        "created_at": 1778558142.7281806,
-        "updated_at": 1778558142.7281806,
+        "created_at": 1778558963.711485,
+        "updated_at": 1778558963.711485,
         "tags": [
           "induced",
           "connector"
@@ -641,117 +641,117 @@
         "member_count": 38,
         "members": [
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 1,
             "element_id": "7"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 2,
             "element_id": "13"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "49"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "59"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "41"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "45"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "46"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "51"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "61"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 5,
             "element_id": "35"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 5,
             "element_id": "39"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 5,
             "element_id": "41"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 5,
             "element_id": "44"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 5,
             "element_id": "50"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 5,
             "element_id": "52"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 5,
             "element_id": "55"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 5,
             "element_id": "61"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 5,
             "element_id": "72"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "51"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "52"
           }
         ]
       },
       "template": {
-        "id": "d53e850864bc4a299792498e7507b0c3",
+        "id": "e7c4fef4df3143dd8131c0e32dc1ed60",
         "name": "Element pattern 8",
         "description": "Seen 38\u00d7 across 1 refs",
         "category": "Induced:blackrock",
         "slide_script": null,
         "preview_image": null,
         "is_builtin": false,
-        "created_at": 1778558142.736223,
-        "updated_at": 1778558142.736223,
+        "created_at": 1778558963.7181559,
+        "updated_at": 1778558963.7181559,
         "tags": [
           "induced",
           "text"
@@ -785,117 +785,117 @@
         "member_count": 29,
         "members": [
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 1,
             "element_id": "6"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 2,
             "element_id": "8"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "36"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "45"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "46"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "57"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "37"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "38"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "39"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 4,
             "element_id": "47"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 5,
             "element_id": "30"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 5,
             "element_id": "31"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 5,
             "element_id": "71"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "88"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 7,
             "element_id": "77"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 7,
             "element_id": "144"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 8,
             "element_id": "31"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 8,
             "element_id": "88"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 9,
             "element_id": "26"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 9,
             "element_id": "39"
           }
         ]
       },
       "template": {
-        "id": "f98bdf39bebc4369adfcf56a63e5b01f",
+        "id": "c92f912784e34ec6baa7951acc7dc9a1",
         "name": "Element pattern 9",
         "description": "Seen 29\u00d7 across 1 refs",
         "category": "Induced:blackrock",
         "slide_script": null,
         "preview_image": null,
         "is_builtin": false,
-        "created_at": 1778558142.7433643,
-        "updated_at": 1778558142.7433646,
+        "created_at": 1778558963.7250338,
+        "updated_at": 1778558963.7250338,
         "tags": [
           "induced",
           "text"
@@ -929,117 +929,117 @@
         "member_count": 20,
         "members": [
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 3,
             "element_id": "48"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 5,
             "element_id": "68"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 5,
             "element_id": "70"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "95"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 6,
             "element_id": "97"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 7,
             "element_id": "79"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 7,
             "element_id": "80"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 7,
             "element_id": "81"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 7,
             "element_id": "82"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 7,
             "element_id": "83"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 8,
             "element_id": "44"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 8,
             "element_id": "45"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 8,
             "element_id": "46"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 8,
             "element_id": "47"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 8,
             "element_id": "48"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 8,
             "element_id": "49"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 9,
             "element_id": "33"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 9,
             "element_id": "34"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 9,
             "element_id": "35"
           },
           {
-            "ref_id": "ref_I8OMm8UMimMt8VIt",
+            "ref_id": "ref_VSVDhFwC0USMchnN",
             "slide_n": 10,
             "element_id": "66"
           }
         ]
       },
       "template": {
-        "id": "7972424b37cd4be78052855eabfd4687",
+        "id": "0fe1a6643cfb4c948f50e2c4df8224da",
         "name": "Element pattern 10",
         "description": "Seen 20\u00d7 across 1 refs",
         "category": "Induced:blackrock",
         "slide_script": null,
         "preview_image": null,
         "is_builtin": false,
-        "created_at": 1778558142.750344,
-        "updated_at": 1778558142.7503443,
+        "created_at": 1778558963.7325022,
+        "updated_at": 1778558963.7325025,
         "tags": [
           "induced",
           "text"
@@ -1067,5 +1067,5 @@
     }
   ],
   "snapshot_version": 1,
-  "snapshot_created_at": 1778558142
+  "snapshot_created_at": 1778558963
 }
