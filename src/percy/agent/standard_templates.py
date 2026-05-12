@@ -56,6 +56,31 @@ def _pos(left: float, top: float, width: float, height: float) -> dict:
     return {"left_in": left, "top_in": top, "width_in": width, "height_in": height}
 
 
+# Shared accent-color input used by every "storytelling" template (titles,
+# section dividers, big numbers, quotes, closing). The agent reads this
+# description verbatim — keep the named-hex hints; they're how the agent
+# picks contextually appropriate colors when generating a deck.
+#
+# Pattern: storytelling templates use `{{accent}}` for any rule/eyebrow/bar
+# fill_color. Default is Percy's cobalt — passing a different hex gives the
+# slide a different "mood" without touching the template.
+ACCENT_INPUT = {
+    "accent": {
+        "type": "string",
+        "required": False,
+        "default": _ACCENT,
+        "description": (
+            "Accent color. Percy named hexes: "
+            "cobalt #7DA1CC (default — neutral / corporate), "
+            "sage #6FA17A (technical / good / on-track), "
+            "ochre #C5994A (warning / at-risk), "
+            "brick #B8634F (problem / blocked / urgent), "
+            "cobalt-lt #A4BEDC (soft variant). Any custom hex also works."
+        ),
+    },
+}
+
+
 # Layout helpers used by multi-item templates (defined here so the
 # STANDARD_TEMPLATES literal below can reference them via *(_quadrant(...))).
 
@@ -109,7 +134,7 @@ STANDARD_TEMPLATES: list[Template] = [
     Template(
         id="std.title",
         name="Title",
-        description="Cover slide. Big heading, optional subtitle, accent rule, and presenter line.",
+        description="Cover slide. Big heading, optional subtitle, accent rule, and presenter line. Accent color is parameterized — use it to signal mood (cobalt for default, sage for technical, brick for urgent).",
         category="Percy Standard",
         tags=["title", "cover", "opening", "intro"],
         is_builtin=True,
@@ -118,18 +143,20 @@ STANDARD_TEMPLATES: list[Template] = [
             "subtitle":  {"type": "string", "required": False, "default": "", "description": "Optional second line"},
             "presenter": {"type": "string", "required": False, "default": "", "description": "Presenter or team name"},
             "date":      {"type": "string", "required": False, "default": "", "description": "Date (free-form)"},
+            **ACCENT_INPUT,
         },
         sample_inputs={
             "title": "Q4 board update",
             "subtitle": "Three months, three commitments shipped.",
             "presenter": "Operations team",
             "date": "December 2025",
+            "accent": _ACCENT,
         },
         layout=[
             {"kind": "shape", "alias": "accent_rule", "body": {
                 "geometry_preset": "rect",
                 "position": _pos(0.5, 4.55, 1.0, 0.04),
-                "fill_color": _ACCENT, "line": {"visible": False},
+                "fill_color": "{{accent}}", "line": {"visible": False},
                 "name": "Accent rule",
             }},
             {"kind": "text", "alias": "title", "body": {
@@ -157,7 +184,7 @@ STANDARD_TEMPLATES: list[Template] = [
     Template(
         id="std.section_header",
         name="Section Header",
-        description="Chapter break: oversized number + section title with cream side bar.",
+        description="Chapter break: oversized number + section title with cream side bar. Accent color sets the mood — vary it across sections (cobalt / sage / ochre / brick) for visual rhythm.",
         category="Percy Standard",
         tags=["section", "divider", "chapter"],
         is_builtin=True,
@@ -165,8 +192,9 @@ STANDARD_TEMPLATES: list[Template] = [
             "section_number": {"type": "string", "required": False, "default": "01"},
             "title":          {"type": "string", "required": True, "description": "Section title"},
             "subtitle":       {"type": "string", "required": False, "default": ""},
+            **ACCENT_INPUT,
         },
-        sample_inputs={"section_number": "02", "title": "Financials", "subtitle": "Three quarters of compounding"},
+        sample_inputs={"section_number": "02", "title": "Financials", "subtitle": "Three quarters of compounding", "accent": _ACCENT},
         layout=[
             {"kind": "shape", "alias": "side_bar", "body": {
                 "geometry_preset": "rect",
@@ -178,7 +206,7 @@ STANDARD_TEMPLATES: list[Template] = [
                 "text": "{{section_number}}",
                 "position": _pos(0.5, 0.6, 2.5, 3.5),
                 "font_name": _FONT_MONO, "font_size": 140, "font_bold": True,
-                "text_color": _ACCENT, "text_align": "left", "name": "Section number",
+                "text_color": "{{accent}}", "text_align": "left", "name": "Section number",
             }},
             {"kind": "text", "alias": "title", "body": {
                 "text": "{{title}}",
@@ -401,7 +429,7 @@ STANDARD_TEMPLATES: list[Template] = [
     Template(
         id="std.big_number",
         name="Big Number",
-        description="Single dominant metric. Use sparingly — the slide IS the number.",
+        description="Single dominant metric. Use sparingly — the slide IS the number. Accent color sets the eyebrow tone.",
         category="Percy Standard",
         tags=["kpi", "single", "number", "hero"],
         is_builtin=True,
@@ -410,18 +438,20 @@ STANDARD_TEMPLATES: list[Template] = [
             "value":   {"type": "string", "required": True, "description": "The headline number"},
             "label":   {"type": "string", "required": True, "description": "What it measures"},
             "context": {"type": "string", "required": False, "default": "", "description": "Sentence below for context"},
+            **ACCENT_INPUT,
         },
         sample_inputs={
             "eyebrow": "Q4 ARR ADDED",
             "value": "$2.4M",
             "label": "Net new annual recurring revenue",
             "context": "Largest single quarter in our history. Up 18% QoQ.",
+            "accent": _ACCENT,
         },
         layout=[
             {"kind": "text", "alias": "eyebrow", "body": {
                 "text": "{{eyebrow}}", "position": _pos(0.5, 1.2, 12.33, 0.5),
                 "font_name": _FONT, "font_size": 14, "font_bold": True,
-                "text_color": _ACCENT, "text_align": "center", "name": "Eyebrow",
+                "text_color": "{{accent}}", "text_align": "center", "name": "Eyebrow",
             }},
             {"kind": "text", "alias": "value", "body": {
                 "text": "{{value}}", "position": _pos(0.5, 2.0, 12.33, 3.2),
@@ -445,7 +475,7 @@ STANDARD_TEMPLATES: list[Template] = [
     Template(
         id="std.quote",
         name="Quote",
-        description="Pull quote with attribution. The accent rule above signals 'this is what someone said'.",
+        description="Pull quote with attribution. Accent rule color sets the mood.",
         category="Percy Standard",
         tags=["quote", "testimonial", "pullquote"],
         is_builtin=True,
@@ -453,16 +483,18 @@ STANDARD_TEMPLATES: list[Template] = [
             "quote":       {"type": "string", "required": True},
             "attribution": {"type": "string", "required": False, "default": ""},
             "context":     {"type": "string", "required": False, "default": ""},
+            **ACCENT_INPUT,
         },
         sample_inputs={
             "quote": "We replaced three internal tools with Percy. The team's first decks shipped the next day.",
             "attribution": "VP Operations",
             "context": "Series B SaaS company, 280 employees",
+            "accent": _ACCENT,
         },
         layout=[
             {"kind": "shape", "alias": "rule", "body": {
                 "geometry_preset": "rect", "position": _pos(1.5, 2.0, 0.6, 0.04),
-                "fill_color": _ACCENT, "line": {"visible": False}, "name": "Accent rule",
+                "fill_color": "{{accent}}", "line": {"visible": False}, "name": "Accent rule",
             }},
             {"kind": "text", "alias": "quote", "body": {
                 "text": "“{{quote}}”",
@@ -487,7 +519,7 @@ STANDARD_TEMPLATES: list[Template] = [
     Template(
         id="std.chart_focus",
         name="Chart Focus",
-        description="Headline above, takeaway below, chart in the middle. Caller adds the chart element after applying.",
+        description="Headline above, takeaway below, chart in the middle. Caller adds the chart element after applying. Accent color drives the takeaway rule.",
         category="Percy Standard",
         tags=["chart", "data", "viz"],
         is_builtin=True,
@@ -495,11 +527,13 @@ STANDARD_TEMPLATES: list[Template] = [
             "title":    {"type": "string", "required": True},
             "takeaway": {"type": "string", "required": True, "description": "The key insight in plain English"},
             "source":   {"type": "string", "required": False, "default": ""},
+            **ACCENT_INPUT,
         },
         sample_inputs={
             "title": "Net retention is back above 110%",
             "takeaway": "Expansion in mid-market accounts (red bars) is now outpacing churn for the second straight quarter.",
             "source": "Source: Salesforce, weekly snapshot 2025-12-12",
+            "accent": _ACCENT,
         },
         layout=[
             {"kind": "text", "alias": "title", "body": {
@@ -515,7 +549,7 @@ STANDARD_TEMPLATES: list[Template] = [
             }},
             {"kind": "shape", "alias": "takeaway_rule", "body": {
                 "geometry_preset": "rect", "position": _pos(0.5, 6.3, 0.04, 0.5),
-                "fill_color": _ACCENT, "line": {"visible": False}, "name": "Takeaway rule",
+                "fill_color": "{{accent}}", "line": {"visible": False}, "name": "Takeaway rule",
             }},
             {"kind": "text", "alias": "takeaway", "body": {
                 "text": "{{takeaway}}", "position": _pos(0.75, 6.25, 11.0, 0.6),
@@ -809,7 +843,7 @@ STANDARD_TEMPLATES: list[Template] = [
     Template(
         id="std.closing",
         name="Closing",
-        description="End slide. Big thank-you, contact info, and a final accent rule.",
+        description="End slide. Big thank-you, contact info, and a final accent rule. Match the closing accent to the deck's tone (cobalt for default, sage for a positive close).",
         category="Percy Standard",
         tags=["closing", "thanks", "final"],
         is_builtin=True,
@@ -817,16 +851,18 @@ STANDARD_TEMPLATES: list[Template] = [
             "headline": {"type": "string", "required": False, "default": "Thank you."},
             "contact":  {"type": "string", "required": False, "default": ""},
             "next":     {"type": "string", "required": False, "default": ""},
+            **ACCENT_INPUT,
         },
         sample_inputs={
             "headline": "Thank you.",
             "contact": "hello@percy.so",
             "next": "Office hours Thursdays at 11am.",
+            "accent": _ACCENT,
         },
         layout=[
             {"kind": "shape", "alias": "rule", "body": {
                 "geometry_preset": "rect", "position": _pos(0.5, 4.05, 1.0, 0.04),
-                "fill_color": _ACCENT, "line": {"visible": False}, "name": "Accent rule",
+                "fill_color": "{{accent}}", "line": {"visible": False}, "name": "Accent rule",
             }},
             {"kind": "text", "alias": "headline", "body": {
                 "text": "{{headline}}", "position": _pos(0.5, 2.4, 12.33, 1.6),
@@ -836,7 +872,7 @@ STANDARD_TEMPLATES: list[Template] = [
             {"kind": "text", "alias": "contact", "body": {
                 "text": "{{contact}}", "position": _pos(0.5, 4.2, 12.33, 0.6),
                 "font_name": _FONT_MONO, "font_size": 20,
-                "text_color": _ACCENT, "name": "Contact",
+                "text_color": "{{accent}}", "name": "Contact",
             }},
             {"kind": "text", "alias": "next", "body": {
                 "text": "{{next}}", "position": _pos(0.5, 5.0, 12.33, 0.5),
@@ -848,7 +884,181 @@ STANDARD_TEMPLATES: list[Template] = [
 
     # ────────────────────────────────────────────────────────────────────────
     # ELEMENT TEMPLATES — single-element building blocks
+    #
+    # The "structural" elements at the top of this list (slide_title, eyebrow,
+    # slide_subtitle, bottom_note, source_line, confidentiality_stamp) are
+    # the canonical Percy versions of pieces every slide tends to need. Drop
+    # them on any layout to inherit the brand's typography + position rhythm
+    # without recomputing it per-slide.
     # ────────────────────────────────────────────────────────────────────────
+
+    # E0a. THE canonical slide title block
+    Template(
+        id="std.el.slide_title",
+        name="Slide Title",
+        description=(
+            "Canonical Percy slide title — 32pt Inter Bold, warm slate, "
+            "top-left aligned at the standard rhythm (0.5\" left margin, "
+            "1.0\" top). Use this on any slide that needs a heading instead "
+            "of recomputing the position + font from scratch."
+        ),
+        category="Percy Standard",
+        tags=["element", "title", "heading", "essential", "structural"],
+        is_builtin=True,
+        inputs_schema={
+            "text":     {"type": "string", "required": True, "description": "Title text. Sentence case per brand."},
+            "left_in":  {"type": "float",  "required": False, "default": 0.5},
+            "top_in":   {"type": "float",  "required": False, "default": 1.0},
+            "width_in": {"type": "float",  "required": False, "default": 12.33},
+            "height_in":{"type": "float",  "required": False, "default": 1.0},
+        },
+        sample_inputs={"text": "Net retention is back above 110%"},
+        layout=[
+            {"kind": "text", "alias": "title", "body": {
+                "text": "{{text}}",
+                "position": _pos(0.5, 1.0, 12.33, 1.0),
+                "font_name": _FONT, "font_size": 32, "font_bold": True,
+                "text_color": _PAPER, "text_align": "left", "name": "Slide title",
+            }},
+        ],
+    ),
+
+    # E0b. Eyebrow / kicker label (small caps cobalt above a title)
+    Template(
+        id="std.el.eyebrow",
+        name="Eyebrow Label",
+        description=(
+            "Small-caps tracking-out label that sits above a slide title — "
+            "10pt Inter Bold, cobalt by default. Title Case in the source; "
+            "the brand instructions say title-case eyebrows + sentence-case titles."
+        ),
+        category="Percy Standard",
+        tags=["element", "eyebrow", "kicker", "label", "structural"],
+        is_builtin=True,
+        inputs_schema={
+            "text":     {"type": "string", "required": True, "description": "Eyebrow text. TITLE CASE."},
+            "left_in":  {"type": "float",  "required": False, "default": 0.5},
+            "top_in":   {"type": "float",  "required": False, "default": 0.55},
+            "width_in": {"type": "float",  "required": False, "default": 12.33},
+            **ACCENT_INPUT,
+        },
+        sample_inputs={"text": "Q4 RETENTION", "accent": _ACCENT},
+        layout=[
+            {"kind": "text", "alias": "eyebrow", "body": {
+                "text": "{{text}}",
+                "position": _pos(0.5, 0.55, 12.33, 0.3),
+                "font_name": _FONT, "font_size": 10, "font_bold": True,
+                "text_color": "{{accent}}", "text_align": "left", "name": "Eyebrow",
+            }},
+        ],
+    ),
+
+    # E0c. Slide subtitle — title's pairing partner
+    Template(
+        id="std.el.slide_subtitle",
+        name="Slide Subtitle",
+        description="Supporting subtitle below a slide title — 18pt Inter Regular, muted gray.",
+        category="Percy Standard",
+        tags=["element", "subtitle", "structural"],
+        is_builtin=True,
+        inputs_schema={
+            "text":     {"type": "string", "required": True},
+            "left_in":  {"type": "float",  "required": False, "default": 0.5},
+            "top_in":   {"type": "float",  "required": False, "default": 2.1},
+            "width_in": {"type": "float",  "required": False, "default": 12.33},
+        },
+        sample_inputs={"text": "Mid-market expansion led the quarter for the second straight period."},
+        layout=[
+            {"kind": "text", "alias": "subtitle", "body": {
+                "text": "{{text}}",
+                "position": _pos(0.5, 2.1, 12.33, 0.6),
+                "font_name": _FONT, "font_size": 18,
+                "text_color": _MUTED, "text_align": "left", "name": "Slide subtitle",
+            }},
+        ],
+    ),
+
+    # E0d. Bottom note — gray italic text above the footer rule (the requested element)
+    Template(
+        id="std.el.bottom_note",
+        name="Bottom Note",
+        description=(
+            "Gray italic note pinned just above the footer rule. For "
+            "methodology, disclaimers, caveats, or 'see appendix' notes that "
+            "deserve more weight than a source citation but less than body."
+        ),
+        category="Percy Standard",
+        tags=["element", "note", "footnote", "caveat", "structural"],
+        is_builtin=True,
+        inputs_schema={
+            "text":     {"type": "string", "required": True},
+            "left_in":  {"type": "float",  "required": False, "default": 0.5},
+            "top_in":   {"type": "float",  "required": False, "default": 6.5},
+            "width_in": {"type": "float",  "required": False, "default": 12.33},
+        },
+        sample_inputs={"text": "Excludes one-time professional services revenue (~$120K in Q4)."},
+        layout=[
+            {"kind": "text", "alias": "note", "body": {
+                "text": "{{text}}",
+                "position": _pos(0.5, 6.5, 12.33, 0.4),
+                "font_name": _FONT, "font_size": 11, "font_italic": True,
+                "text_color": _MUTED, "text_align": "left", "name": "Bottom note",
+            }},
+        ],
+    ),
+
+    # E0e. Source citation — fine print
+    Template(
+        id="std.el.source_line",
+        name="Source Citation",
+        description="Bottom-left fine-print source line — 9pt muted. Always lead with 'Source:'.",
+        category="Percy Standard",
+        tags=["element", "source", "citation", "structural"],
+        is_builtin=True,
+        inputs_schema={
+            "text":     {"type": "string", "required": True, "description": "Citation text. Should start with 'Source:'."},
+            "left_in":  {"type": "float",  "required": False, "default": 0.5},
+            "top_in":   {"type": "float",  "required": False, "default": 6.85},
+            "width_in": {"type": "float",  "required": False, "default": 12.33},
+        },
+        sample_inputs={"text": "Source: Salesforce snapshot 2025-12-12, internal data warehouse."},
+        layout=[
+            {"kind": "text", "alias": "source", "body": {
+                "text": "{{text}}",
+                "position": _pos(0.5, 6.85, 12.33, 0.3),
+                "font_name": _FONT, "font_size": 9,
+                "text_color": _MUTED, "text_align": "left", "name": "Source",
+            }},
+        ],
+    ),
+
+    # E0f. Confidentiality stamp — top-right corner
+    Template(
+        id="std.el.confidentiality_stamp",
+        name="Confidentiality Stamp",
+        description="Small-caps stamp pinned to the upper-right corner — 9pt Inter Bold, muted. For internal/confidential decks.",
+        category="Percy Standard",
+        tags=["element", "stamp", "confidential", "structural"],
+        is_builtin=True,
+        inputs_schema={
+            "text":     {"type": "string", "required": False, "default": "CONFIDENTIAL"},
+            "left_in":  {"type": "float",  "required": False, "default": 10.5},
+            "top_in":   {"type": "float",  "required": False, "default": 0.3},
+            "width_in": {"type": "float",  "required": False, "default": 2.5},
+        },
+        sample_inputs={"text": "CONFIDENTIAL · DO NOT FORWARD"},
+        layout=[
+            {"kind": "text", "alias": "stamp", "body": {
+                "text": "{{text}}",
+                "position": _pos(10.5, 0.3, 2.5, 0.3),
+                "font_name": _FONT, "font_size": 9, "font_bold": True,
+                "text_color": _MUTED, "text_align": "right", "name": "Confidentiality stamp",
+            }},
+        ],
+    ),
+
+    # ── existing element templates (chart_title, footer_group, kpi_tile, etc.)
+    #    continue below
 
     # E1. Chart title text box
     Template(
