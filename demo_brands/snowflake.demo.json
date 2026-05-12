@@ -1,0 +1,141 @@
+{
+  "slug": "snowflake",
+  "set_id": "tpl_demo_snowflake",
+  "set_name": "Snowflake",
+  "prompt_id": "demo.showcase",
+  "summary": {
+    "demo_id": "demo.showcase",
+    "demo_name": "Showcase brief (7 slides)",
+    "slides_applied": 7,
+    "errors": [],
+    "ok": true,
+    "elapsed_seconds": 9.5
+  },
+  "demo_slides_json": [
+    {
+      "slide_n": 6,
+      "width_in": 13.333,
+      "height_in": 7.5,
+      "elements": [
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 0.5,
+            "top_in": 0.55,
+            "width_in": 12.33,
+            "height_in": 0.35
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
+          "text_runs": [
+            {
+              "text": "{{eyebrow}}",
+              "font_name": "Inter",
+              "font_size": 10,
+              "font_bold": true,
+              "font_italic": null,
+              "color": "#7DA1CC"
+            }
+          ],
+          "text_align": "left",
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 0.5,
+            "top_in": 1.0,
+            "width_in": 12.33,
+            "height_in": 1.2
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
+          "text_runs": [
+            {
+              "text": "What shipped this quarter",
+              "font_name": "Inter",
+              "font_size": 32,
+              "font_bold": true,
+              "font_italic": null,
+              "color": "#2A2F3A"
+            }
+          ],
+          "text_align": "left",
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 0.5,
+            "top_in": 2.4,
+            "width_in": 12.33,
+            "height_in": 4.0
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
+          "text_runs": [
+            {
+              "text": "\u2014 Aurora migration finished Nov 12 \u2014 read latency down 38%.\n\u2014 Self-serve onboarding launched. 14% of new logos used it.\n\u2014 Mobile app v2 in public beta. 2,100 users, 4.6 stars.",
+              "font_name": "Inter",
+              "font_size": 16,
+              "font_bold": null,
+              "font_italic": null,
+              "color": "#2A2F3A"
+            }
+          ],
+          "text_align": "left",
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        },
+        {
+          "type": "BridgeShape",
+          "position": {
+            "left_in": 0.5,
+            "top_in": 7.0,
+            "width_in": 12.33,
+            "height_in": 0.3
+          },
+          "fill": {
+            "type": "none",
+            "color": null
+          },
+          "text_runs": [
+            {
+              "text": "{{footer}}",
+              "font_name": "Inter",
+              "font_size": 10,
+              "font_bold": null,
+              "font_italic": null,
+              "color": "#6A6F7A"
+            }
+          ],
+          "text_align": "left",
+          "line": {
+            "visible": false,
+            "color": null,
+            "width": null
+          }
+        }
+      ]
+    }
+  ],
+  "snapshot_version": 1,
+  "generated_at": 1778565532
+}

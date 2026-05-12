@@ -58,7 +58,6 @@ export default function ShowcaseSection() {
   const [data, setData] = useState<ShowcaseResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [activeSlug, setActiveSlug] = useState<string>("")
-  const [demoTriggered, setDemoTriggered] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     fetch("/api/showcase", { credentials: "include" })
@@ -70,30 +69,10 @@ export default function ShowcaseSection() {
       .catch((e) => setError(String(e)))
   }, [])
 
-  // Lazy-trigger demo generation when the active brand has no demo yet.
-  // (Once we pre-bake demos at deploy time this will be a no-op for
-  // production traffic — kept as a safety net.)
-  useEffect(() => {
-    if (!data || !activeSlug) return
-    const brand = data.brands.find((b) => b.slug === activeSlug)
-    if (!brand) return
-    if (brand.demo && brand.demo.slides_applied > 0) return
-    if (demoTriggered.has(activeSlug)) return
-
-    setDemoTriggered((prev) => { const n = new Set(prev); n.add(activeSlug); return n })
-
-    fetch("/api/demo-decks", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ template_set_id: brand.set_id }),
-    })
-      .then((r) => r.ok ? r.json() : null)
-      .then(() => fetch("/api/showcase", { credentials: "include" }))
-      .then((r) => r?.ok ? r.json() : null)
-      .then((d) => { if (d) setData(d) })
-      .catch(() => {})
-  }, [data, activeSlug, demoTriggered])
+  // Demo decks are pre-generated offline via scripts/generate_showcase_demos.py
+  // and persisted to studio_templates.demo_slides_json. The app never
+  // generates at runtime — we just render what's in the DB. Brands
+  // without a persisted demo show an empty state.
 
   if (error) {
     return <div className="px-8 py-16 text-center text-[12px] text-muted">Showcase unavailable ({error}).</div>
@@ -166,7 +145,7 @@ export default function ShowcaseSection() {
 
 
 function BrandPanel({
-  brand, promptText, promptName,
+  brand, promptText,
 }: {
   brand: ShowcaseBrand
   promptText: string
@@ -177,111 +156,106 @@ function BrandPanel({
   const slides = demo?.slides || []
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[34%_66%] gap-8">
-      {/* ─── LEFT: brand metadata + prompt (sticky) ───────────── */}
-      <aside className="lg:sticky lg:top-8 self-start space-y-6">
-        {/* Brand header */}
+    <div
+      key={brand.slug}                   // remount on switch → CSS transitions re-fire, sells the wow
+      className="grid grid-cols-1 lg:grid-cols-[34%_66%] gap-8 splash-brand-enter"
+    >
+      {/* ─── LEFT: brand context + brief (sticky) ─────────────── */}
+      <aside className="lg:sticky lg:top-8 self-start space-y-7">
+        {/* Brand name only — no source-kind label */}
         <div>
-          <div className="text-[10px] tracking-[0.18em] uppercase text-muted mb-1">
-            {brand.source_kind}
-          </div>
-          <h3 className="text-[26px] font-semibold text-paper mb-1 leading-tight">
+          <h3 className="text-[34px] font-semibold text-paper leading-[1.05] tracking-[-0.01em]">
             {brand.name}
           </h3>
-          <p className="text-[12px] text-muted leading-relaxed">
+          <p className="text-[12px] text-muted leading-[1.6] mt-2">
             {brand.tagline}
           </p>
         </div>
 
-        {/* Palette */}
-        <div>
-          <div className="text-[10px] tracking-[0.18em] uppercase text-muted mb-2">
-            Palette · mined
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {brand.palette.slice(0, 12).map((c, i) => (
-              <div
-                key={i}
-                className="w-8 h-8 border border-edge"
-                style={{ backgroundColor: c.hex }}
-                title={c.hex}
-              />
-            ))}
-          </div>
+        {/* Big swatch strip — no label, just the colors */}
+        <div className="flex gap-0">
+          {brand.palette.slice(0, 8).map((c, i) => (
+            <div
+              key={i}
+              className="h-12 flex-1 border-r border-edge last:border-r-0"
+              style={{ backgroundColor: c.hex }}
+              title={c.hex}
+            />
+          ))}
         </div>
 
-        {/* Fonts */}
-        <div>
-          <div className="text-[10px] tracking-[0.18em] uppercase text-muted mb-2">
-            Fonts
-          </div>
-          <div className="space-y-0.5">
-            {brand.fonts.slice(0, 4).map((f, i) => (
-              <div key={i} className="text-[12px] text-paper">
-                {f.name}
-                {f.role && <span className="text-muted text-[10px] ml-2 uppercase tracking-wider">{f.role}</span>}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* The prompt */}
-        <div>
-          <div className="flex items-baseline justify-between mb-2">
-            <div className="text-[10px] tracking-[0.18em] uppercase text-muted">
-              The brief
+        {/* Font specimens — let the typeface itself be the proof */}
+        <div className="space-y-1">
+          {brand.fonts.slice(0, 2).map((f, i) => (
+            <div
+              key={i}
+              className="text-[20px] text-paper leading-tight"
+              style={{ fontFamily: `"${f.name}", ${(f.fallbacks || []).join(", ") || "system-ui"}, sans-serif` }}
+            >
+              {f.name}
             </div>
-            <div className="text-[9px] text-muted font-mono">{promptName}</div>
+          ))}
+        </div>
+
+        {/* The brief — minimal frame */}
+        <div>
+          <div className="text-[10px] tracking-[0.22em] uppercase text-muted mb-2">
+            — The brief —
           </div>
-          <pre className="border border-edge bg-surface/30 p-3 text-[10px] text-paper leading-[1.5] font-mono whitespace-pre-wrap max-h-[420px] overflow-auto">
+          <pre className="border-l-2 border-accent pl-4 text-[11px] text-paper leading-[1.6] whitespace-pre-wrap max-h-[420px] overflow-auto"
+                style={{ fontFamily: "Inter, system-ui, sans-serif" }}>
             {promptText || "(prompt unavailable)"}
           </pre>
         </div>
       </aside>
 
-      {/* ─── RIGHT: the generated demo deck ───────────────────── */}
+      {/* ─── RIGHT: just the deck ─────────────────────────────── */}
       <div>
-        <div className="flex items-center justify-between mb-3">
-          <div className="text-[10px] tracking-[0.18em] uppercase text-muted">
-            Generated deck {demo?.slides_applied ? `· ${demo.slides_applied} slides` : ""}
-          </div>
-          {demo?.generated_at && (
-            <div className="text-[10px] text-muted font-mono">
-              {new Date(demo.generated_at * 1000).toLocaleDateString(undefined, {
-                month: "short", day: "numeric",
-              })}
-            </div>
-          )}
-        </div>
-
         {slides.length > 0 ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {slides.map((s, i) => (
               <div
                 key={i}
-                className="border border-edge bg-surface/30 overflow-hidden"
+                className="border border-edge bg-surface/30 overflow-hidden splash-slide-enter"
+                style={{ animationDelay: `${i * 60}ms` }}
               >
                 <SlideSvg
                   slideData={s as never}
-                  width={520}
+                  width={560}
                   background={bgColor}
                 />
-                <div className="px-3 py-1.5 text-[10px] text-muted font-mono">
-                  Slide {s.slide_n || i + 1}
-                </div>
               </div>
             ))}
           </div>
         ) : (
           <div className="border border-dashed border-edge p-12 text-center">
-            <div className="inline-block w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin mb-3" />
-            <div className="text-[12px] text-paper mb-1">Generating demo deck…</div>
-            <div className="text-[10px] text-muted">
-              First load fires off generation. Refresh in 30-60 seconds.
+            <div className="text-[12px] text-muted">
+              Demo for <span className="text-paper">{brand.name}</span> hasn't been generated yet.
             </div>
           </div>
         )}
       </div>
+
+      {/* Page-scoped CSS for the wow-factor transitions */}
+      <style>{`
+        @keyframes splash-brand-enter {
+          0%   { opacity: 0; transform: translateY(6px); }
+          100% { opacity: 1; transform: translateY(0); }
+        }
+        .splash-brand-enter {
+          animation: splash-brand-enter 380ms ease-out both;
+        }
+        @keyframes splash-slide-enter {
+          0%   { opacity: 0; transform: scale(0.985) translateY(8px); }
+          100% { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        .splash-slide-enter {
+          animation: splash-slide-enter 520ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .splash-brand-enter, .splash-slide-enter { animation: none; }
+        }
+      `}</style>
     </div>
   )
 }
