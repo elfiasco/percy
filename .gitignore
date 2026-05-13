@@ -49,11 +49,16 @@ tags
 /.local-data/
 /.studio-cache/
 
-# Local SQLite databases
+# Local SQLite databases (match at root AND in subdirs — these accumulate
+# wherever the backend gets launched from)
 percy_app.db
 percy_app.db-journal
 percy_app.db-shm
 percy_app.db-wal
+percy.db
+percy.db-journal
+**/percy.db
+**/percy_app.db
 *.db-shm
 *.db-wal
 
@@ -65,6 +70,33 @@ percy_app.db-wal
 /slide*_test.png
 /test_*.png
 /reg_*.png
+/_screen.png
+
+# Ad-hoc debugging scripts (never check these in — they accumulate
+# everywhere the backend / frontend / tests get launched from)
+**/debug_*.py
+**/debug_*.mjs
+**/debug[0-9]*.mjs
+**/check_*.py
+/gen_preview.py
+/trace_*.py
+/trace_*.png
+/title_region.png
+/preview_*.png
+/preview_*.html
+/diff_amp.png
+/debug_*.png
+/fidelity_latest.txt
+/percy_loader_preview.html
+/percy_server_err.txt
+/percy_server_out.txt
+frontend/snap.cjs
+frontend/splash_*.png
+frontend/debug_*.png
+frontend/tests/debug-*.mjs
+frontend/tests/out/
+tests/out/
+tests/results/
 
 # Downloaded or rebuilt external artifacts
 /outreach/dump_pptx/
