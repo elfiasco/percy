@@ -243,7 +243,7 @@ def main() -> int:
                 {ref["id"]: doc}, llm_call=llm_call,
                 max_wants_per_doc=args.max_candidates,
             )
-    else:
+    elif args.induction_mode not in ("v3", "agentic"):
         from percy.agent import template_induction
         candidates = template_induction.induce_templates(
             {ref["id"]: doc}, llm_call=llm_call,

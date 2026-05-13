@@ -388,6 +388,30 @@ async def create_freeform_path(doc_id: str, n: int, request: Request):
     return _finalize(doc, slide, doc_id, n, el, warnings)
 
 
+@router.post("/api/docs/{doc_id}/slides/{n}/elements/bridge-raw")
+async def create_bridge_raw(doc_id: str, n: int, request: Request):
+    """Insert a fully-formed BridgeElement from a raw bridge dict.
+
+    Bypasses the intent → builder translation layer; the body is expected to
+    be the exact output of ``percy.bridge.bridge_codec.bridge_to_dict`` (i.e.
+    a dict carrying ``__type__`` plus every BridgeElement field verbatim).
+    Used by the v3 template induction pipeline to reproduce source elements
+    1:1 with every attribute (rotation, z_index, shadows, run formatting,
+    image cropping, etc.) preserved.
+    """
+    from percy.bridge.bridge_codec import bridge_from_dict
+    body = await _parse_json(request)
+    helpers = _main()
+    helpers["snapshot"](doc_id)
+    doc, slide, _, _ = _resolve_slide(doc_id, n)
+    try:
+        el = bridge_from_dict(body)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, f"bridge_from_dict failed: {exc}")
+    log.info("create_bridge_raw: added %s on slide %d of %s", type(el).__name__, n, doc_id)
+    return _finalize(doc, slide, doc_id, n, el, warnings=[])
+
+
 @router.post("/api/docs/{doc_id}/slides/{n}/elements/image-typed")
 async def create_image_typed(
     doc_id: str,

@@ -44,7 +44,81 @@ from collections import defaultdict
 from dataclasses import dataclass, field, asdict
 from typing import Any, Callable, Iterable
 
+from percy.bridge.bridge_codec import bridge_to_dict, diff_axes, axis_type_hint
+
 log = logging.getLogger(__name__)
+
+
+# ── Path helpers for threading {{var}} placeholders into bridge dicts ────
+
+
+_PATH_TOKEN_RE = re.compile(r"([^.\[\]]+)|\[(\d+)\]")
+
+
+def _split_path(path: str) -> list[tuple[str, bool]]:
+    """Split 'paragraphs[0].runs[0].font_color.value' into typed tokens.
+
+    Returns: ``[("paragraphs", False), ("0", True), ("runs", False),
+                ("0", True), ("font_color", False), ("value", False)]``
+    The bool is True iff the token is a list index.
+    """
+    out: list[tuple[str, bool]] = []
+    for m in _PATH_TOKEN_RE.finditer(path):
+        name, idx = m.group(1), m.group(2)
+        if name is not None:
+            out.append((name, False))
+        else:
+            out.append((idx, True))
+    return out
+
+
+def _set_at_path(d: Any, path: str, value: Any) -> bool:
+    """Set a leaf value at a dotted-bracket path inside a nested dict/list.
+
+    Returns True iff the target existed and was set. Missing intermediate
+    nodes cause a no-op return False — we never auto-create.
+    """
+    tokens = _split_path(path)
+    if not tokens:
+        return False
+    cur = d
+    for tok, is_idx in tokens[:-1]:
+        if is_idx:
+            i = int(tok)
+            if not isinstance(cur, list) or i >= len(cur):
+                return False
+            cur = cur[i]
+        else:
+            if not isinstance(cur, dict) or tok not in cur:
+                return False
+            cur = cur[tok]
+    last_tok, last_is_idx = tokens[-1]
+    if last_is_idx:
+        i = int(last_tok)
+        if not isinstance(cur, list) or i >= len(cur):
+            return False
+        cur[i] = value
+    else:
+        if not isinstance(cur, dict):
+            return False
+        cur[last_tok] = value
+    return True
+
+
+def _get_at_path(d: Any, path: str) -> Any:
+    """Read a leaf value at a dotted-bracket path; returns None if missing."""
+    cur = d
+    for tok, is_idx in _split_path(path):
+        if is_idx:
+            i = int(tok)
+            if not isinstance(cur, list) or i >= len(cur):
+                return None
+            cur = cur[i]
+        else:
+            if not isinstance(cur, dict) or tok not in cur:
+                return None
+            cur = cur[tok]
+    return cur
 
 
 # ── Standard inputs schema ────────────────────────────────────────────────
@@ -545,13 +619,23 @@ class ElementRoleMap:
 
 @dataclass(slots=True)
 class VariableSpec:
-    """Phase B4 output, one per candidate variable."""
+    """Phase B4 output, one per candidate variable.
+
+    Text-content variables (the historical case) have ``bridge_path=None``
+    and are threaded into the element's first run at codegen time.
+
+    Cosmetic-axis variables (new — from ``bridge_codec.diff_axes`` across
+    cluster members) carry the exact attribute path the placeholder should
+    be threaded at (e.g. ``paragraphs[0].runs[0].font_color.value``) plus
+    the enum of observed values in ``samples``.
+    """
     element_idx: int
     varies: bool
-    input_name: str            # e.g. "hero_number" — derived from role
-    input_type: str            # "string" | "number" | "list" | ...
-    samples: list[str] = field(default_factory=list)
+    input_name: str            # e.g. "hero_number" — semantic, snake_case
+    input_type: str            # "string" | "number" | "list" | "color" | "bool" | "enum"
+    samples: list[Any] = field(default_factory=list)
     reasoning: str = ""
+    bridge_path: str | None = None  # set for cosmetic-axis variables only
 
 
 @dataclass(slots=True)
@@ -1341,24 +1425,32 @@ def phase_b_03_element_roles(
 
 
 _B4_VARIABLE_SYSTEM = """\
-Across N members of the same template cluster, this element appears
-with these text values. Decide:
+You see a list of cosmetic-axis candidates from a single element across
+N members of the same template cluster. Each candidate is one attribute
+path that VARIED between members (e.g. font color, fill color, font
+size, a bool flag). For each, decide:
 
-  * Does the text vary across members? If all members have the same
-    text, it's brand-fixed (e.g. a recurring footer).
-  * If it varies, what's the underlying input it represents?
-    Prefer a concrete, descriptive name (e.g. `hero_number`,
-    `quarter_label`, `kpi_value`) over generic ones.
-  * Type: string / number / list / bool.
+  * Worth exposing as a user input? Skip if it's noise (e.g. slight
+    geometry jitter, identification fields, fields that vary for
+    structural reasons rather than aesthetic choice).
+  * If yes, give a short snake_case name a designer would recognize
+    (e.g. `title_color`, `accent_color`, `is_bold`, `title_size`).
+  * Type: "string" | "number" | "color" | "bool" | "enum".
 
 Respond with one JSON object, no prose, no fences:
 
 {
-  "varies": true | false,
-  "input_name": "<short snake_case>",
-  "input_type": "string" | "number" | "list" | "bool",
-  "reasoning": "<one short clause>"
+  "axes": [
+    {"path": "<exact path from input>",
+     "expose": true,
+     "input_name": "<short snake_case>",
+     "input_type": "color" | "number" | "bool" | "enum" | "string",
+     "reasoning": "<one short clause>"},
+    ...
+  ]
 }
+
+Drop axes that aren't worth exposing rather than including expose:false.
 """
 
 
@@ -1366,68 +1458,155 @@ def phase_b_04_variables(
     *, cluster: SlideCluster, roles: ElementRoleMap, intent: SemanticIntent,
     llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
 ) -> list[VariableSpec]:
-    """One LLM call per element WITH text that's role-content. Background /
-    decorative / logo elements skipped — they're brand-fixed by definition."""
+    """Two-track variable inference:
+
+      * **Track 1 (programmatic) — cosmetic-axis discovery.** Walk every
+        element across cluster members, run ``bridge_codec.diff_axes`` to
+        find every attribute path that varies, then a single LLM call
+        per cluster filters the candidate axes down to ones worth
+        exposing (with names). Output: VariableSpec entries with
+        ``bridge_path`` set.
+
+      * **Track 2 (text content) — first-run text inference.** For
+        content-bearing roles (title/subtitle/body/...), grab the text
+        sample across members; the codegen step collapses the run to a
+        single ``{{input}}`` placeholder. No per-element LLM call needed
+        (the input_name is derived from the role; the LLM filter pass
+        above already handles cosmetic axes on the same element).
+    """
     proto = cluster.prototype.slide
     members = cluster.members
+    proto_elements = list(getattr(proto, "elements", None) or [])
 
     content_roles = {"title", "subtitle", "kicker", "hero_number",
-                     "body", "bullet_item", "caption", "source_citation"}
+                     "body", "bullet_item", "caption", "footer",
+                     "source_citation"}
 
     out: list[VariableSpec] = []
-    for i, el in enumerate(getattr(proto, "elements", None) or []):
+
+    # ── Track 1: programmatic axis discovery across all elements ────
+    # Build member-aligned bridge dicts: for each element index, collect the
+    # corresponding element on each cluster member (matched by index).
+    member_bridges_by_idx: dict[int, list[dict]] = defaultdict(list)
+    for m in members[:8]:  # cap at 8 members for cost/perf
+        m_els = list(getattr(m.slide, "elements", None) or [])
+        for i in range(min(len(proto_elements), len(m_els))):
+            try:
+                member_bridges_by_idx[i].append(bridge_to_dict(m_els[i]))
+            except Exception as exc:
+                log.debug("bridge_to_dict failed for member el %d: %s", i, exc)
+
+    # Discover candidate axes per element.
+    candidate_axes_by_idx: dict[int, dict[str, list[Any]]] = {}
+    for i, member_dicts in member_bridges_by_idx.items():
+        if len(member_dicts) < 2:
+            continue
+        axes = diff_axes(member_dicts)
+        # Filter out paths we never want to expose: position (already
+        # handled as geometry inputs), accessibility, custom_properties,
+        # text-content paths (handled by track 2), and identification.
+        SKIP_PREFIXES = (
+            "position.", "accessibility.", "custom_properties.",
+            "identification.", "stacking.", "__type__",
+        )
+        # Text content (the run's `text` field) is track-2's job:
+        TEXT_LEAF_RE = re.compile(r"paragraphs\[\d+\]\.runs\[\d+\]\.text$")
+        filtered = {
+            p: vals for p, vals in axes.items()
+            if not any(p.startswith(prefix) for prefix in SKIP_PREFIXES)
+            and not TEXT_LEAF_RE.search(p)
+        }
+        if filtered:
+            candidate_axes_by_idx[i] = filtered
+
+    # One LLM call per element with axis candidates — filters + names.
+    for i, axes in candidate_axes_by_idx.items():
+        role = roles.roles.get(i, "decorative")
+        candidates = [
+            {"path": p, "values": [_jsonable(v) for v in vals[:5]],
+             "type_hint": axis_type_hint(vals)}
+            for p, vals in list(axes.items())[:30]  # cap per element
+        ]
+        user = json.dumps({
+            "intent": intent.intent, "role": role,
+            "element_index": i, "candidate_axes": candidates,
+        }, ensure_ascii=False, default=str)[:8000]
+
+        def _parse(d: dict, _i: int = i, _axes: dict[str, list[Any]] = axes) -> list[VariableSpec]:
+            specs: list[VariableSpec] = []
+            seen_names: set[str] = set()
+            for entry in (d.get("axes") or [])[:10]:
+                if not isinstance(entry, dict):
+                    continue
+                if not entry.get("expose", True):
+                    continue
+                path = str(entry.get("path") or "")
+                if path not in _axes:
+                    continue  # hallucinated path
+                raw_name = re.sub(r"\W+", "_", str(entry.get("input_name") or ""))[:40].lower()
+                if not raw_name:
+                    continue
+                name = raw_name
+                k = 2
+                while name in seen_names:
+                    name = f"{raw_name}_{k}"
+                    k += 1
+                seen_names.add(name)
+                specs.append(VariableSpec(
+                    element_idx=_i, varies=True,
+                    input_name=name,
+                    input_type=str(entry.get("input_type") or axis_type_hint(_axes[path])),
+                    samples=list(_axes[path])[:6],
+                    reasoning=str(entry.get("reasoning") or "")[:160],
+                    bridge_path=path,
+                ))
+            return specs
+
+        try:
+            specs = _call_llm_typed(
+                system=_B4_VARIABLE_SYSTEM, user=user,
+                llm_call=llm_call, provenance=provenance,
+                phase=f"B4.axes[el={i}]", parse=_parse,
+            )
+            out.extend(specs)
+        except Exception as exc:
+            log.warning("B4 axis filter failed for el %d: %s", i, exc)
+
+    # ── Track 2: text-content variable for each content-bearing element ──
+    for i, el in enumerate(proto_elements):
         role = roles.roles.get(i, "decorative")
         if role not in content_roles:
             continue
-
-        # Sample this element's text across all members. Match by index
-        # which is reasonable for same-fingerprint slides.
         samples: list[str] = []
         for m in members[:8]:
             els = getattr(m.slide, "elements", None) or []
             if i < len(els):
                 t = _first_text(els[i])
-                if t: samples.append(t[:200])
-
-        # If all samples are identical, no LLM call needed — it's fixed.
+                if t:
+                    samples.append(t[:200])
         unique = set(samples)
-        if len(unique) <= 1 and len(samples) >= 2:
-            out.append(VariableSpec(
-                element_idx=i, varies=False,
-                input_name=f"{role}_text", input_type="string",
-                samples=samples[:3], reasoning="constant across cluster members",
-            ))
-            continue
+        varies = not (len(unique) <= 1 and len(samples) >= 2)
+        out.append(VariableSpec(
+            element_idx=i, varies=varies,
+            input_name=f"{role}_text" if role not in ("title", "subtitle") else role,
+            input_type="string",
+            samples=samples[:5],
+            reasoning="text content (track 2 programmatic)",
+            bridge_path=None,
+        ))
 
-        user = json.dumps({
-            "intent": intent.intent, "role": role,
-            "samples": samples[:8],
-        }, ensure_ascii=False, default=str)[:6000]
-        try:
-            spec = _call_llm_typed(
-                system=_B4_VARIABLE_SYSTEM, user=user,
-                llm_call=llm_call, provenance=provenance,
-                phase=f"B4.variable[el={i}]",
-                parse=lambda d: VariableSpec(
-                    element_idx=i,
-                    varies=bool(d.get("varies", True)),
-                    input_name=str(d.get("input_name") or f"{role}_text")[:40],
-                    input_type=str(d.get("input_type") or "string"),
-                    samples=samples[:5],
-                    reasoning=str(d.get("reasoning") or "")[:160],
-                ),
-            )
-            out.append(spec)
-        except Exception as exc:
-            # On LLM failure, fall back to role-based defaults — better
-            # to have a workable input than skip the element entirely.
-            log.warning("B4 fallback for element %d (%s): %s", i, role, exc)
-            out.append(VariableSpec(
-                element_idx=i, varies=True,
-                input_name=f"{role}_text", input_type="string",
-                samples=samples[:3], reasoning="LLM call failed; using role default",
-            ))
     return out
+
+
+def _jsonable(v: Any) -> Any:
+    """Coerce a value (possibly a dict/tuple from diff_axes) into a JSON-safe form."""
+    if isinstance(v, (str, int, float, bool)) or v is None:
+        return v
+    if isinstance(v, (list, tuple)):
+        return [_jsonable(x) for x in v]
+    if isinstance(v, dict):
+        return {str(k): _jsonable(val) for k, val in v.items()}
+    return str(v)[:200]
 
 
 # ── B5. Naming — three candidates, pick best ────
@@ -2357,16 +2536,25 @@ def phase_d_validate_template(
 
 
 def enriched_cluster_to_template(ec: EnrichedCluster) -> dict:
-    """Convert a Phase B EnrichedCluster into a template dict that Phase D
-    can validate + that templates.apply_template can render.
+    """Convert a Phase B EnrichedCluster into a template dict.
 
-    Uses the STANDARD_*_INPUTS naming conventions. Geometry comes from
-    the prototype's positions; text content comes from each variable's
-    sample / default.
+    NEW architecture (1:1 Bridge fidelity):
+      * Each layout entry carries kind="bridge-raw" + the full
+        ``bridge_to_dict()`` snapshot of the prototype element. Every nested
+        attribute (rotation, z_index, shadows, run formatting, image
+        cropping, gradient stops, etc.) is preserved verbatim.
+      * Placeholders (``{{var}}``) are threaded at specific attribute paths,
+        not in a parallel intent dict. Position uses
+        ``bridge["position"]["left"|"top"|"width"|"height"]``. Text content
+        collapses ``paragraphs[0].runs`` to a single run carrying the input.
+      * Cosmetic-axis variables (from B4's programmatic diff) have an
+        explicit ``bridge_path`` and the placeholder is set at that exact
+        leaf — color, size, bool, whatever the diff found.
 
-    The element_idx-keyed roles determine which inputs each element
-    gets (text + geometry for content; geometry-only for decorative)."""
-    import re as _re
+    Geometry inputs are emitted but optional; the prototype's positions are
+    the defaults so a template invoked with no inputs renders identically
+    to the source slide.
+    """
     proto = ec.cluster.prototype.slide
     proto_elements = list(getattr(proto, "elements", None) or [])
     slide_w = float(getattr(proto, "width", 13.333))
@@ -2374,117 +2562,98 @@ def enriched_cluster_to_template(ec: EnrichedCluster) -> dict:
 
     layout: list[dict] = []
     inputs_schema: dict[str, dict] = {}
+    var_by_idx: dict[int, list[VariableSpec]] = defaultdict(list)
+    for v in ec.variables:
+        var_by_idx[v.element_idx].append(v)
 
-    # Variable specs keyed by element index for quick lookup
-    var_by_idx: dict[int, VariableSpec] = {v.element_idx: v for v in ec.variables}
+    content_roles = {"title", "subtitle", "kicker", "hero_number",
+                     "body", "bullet_item", "caption", "footer",
+                     "source_citation"}
+    headline_collapse_roles = {"title", "subtitle", "kicker", "hero_number",
+                               "caption", "footer", "source_citation"}
+
+    used_aliases: dict[str, int] = {}
 
     for i, el in enumerate(proto_elements):
         pos = getattr(el, "position", None)
-        if not pos: continue
+        if not pos:
+            continue
         et = getattr(el, "element_type", el.__class__.__name__)
         role = ec.roles.roles.get(i, "decorative")
 
-        # Generate alias from role + idx so the agent sees readable names
-        # (preferred over the prototype's raw shape name)
-        alias_base = _re.sub(r"\W+", "_", role).lower() or "el"
-        # Disambiguate when multiple elements share a role (KPI tiles)
-        existing = sum(1 for x in layout if x["alias"].startswith(alias_base))
-        alias = f"{alias_base}_{existing+1}" if existing > 0 else alias_base
+        alias_base = re.sub(r"\W+", "_", role).lower() or "el"
+        used_aliases[alias_base] = used_aliases.get(alias_base, 0) + 1
+        alias = alias_base if used_aliases[alias_base] == 1 else f"{alias_base}_{used_aliases[alias_base]}"
 
-        # Geometry inputs — every element
-        for axis, var, friendly in (
-            ("left_in",   "left",   "Left edge (inches)"),
-            ("top_in",    "top",    "Top edge (inches)"),
-            ("width_in",  "width",  "Width (inches)"),
-            ("height_in", "height", "Height (inches)"),
-        ):
-            default_val = round(float(getattr(pos, var, 0) or 0), 3)
-            inputs_schema[f"{alias}_{var}"] = {
+        # Full bridge snapshot — every attribute preserved.
+        bridge_dict = bridge_to_dict(el)
+
+        # Geometry inputs + placeholders.
+        for axis_name in ("left", "top", "width", "height"):
+            default_val = round(float(getattr(pos, axis_name, 0) or 0), 3)
+            inp = f"{alias}_{axis_name}"
+            inputs_schema[inp] = {
                 "type": "number", "required": False,
                 "default": default_val,
-                "description": f"{alias}: {friendly}",
+                "description": f"{alias}: {axis_name} (inches)",
             }
+            _set_at_path(bridge_dict, f"position.{axis_name}", "{{" + inp + "}}")
 
-        body: dict[str, Any] = {
-            "position": {
-                "left_in":   "{{" + alias + "_left}}",
-                "top_in":    "{{" + alias + "_top}}",
-                "width_in":  "{{" + alias + "_width}}",
-                "height_in": "{{" + alias + "_height}}",
-            },
-            "name": alias.replace("_", " ").title(),
-        }
-
-        # Type-specific body content
-        kind_map = {
-            "BridgeShape": "shape", "BridgeText": "text",
-            "BridgeChart": "chart", "BridgeTable": "table",
-            "BridgeFreeform": "freeform", "BridgeConnector": "connector",
-            "BridgeImage": "image-typed", "BridgeGroup": "live-group",
-        }
-        kind = kind_map.get(et, "shape")
-
-        # Shape preset + fill
-        if et == "BridgeShape":
-            shape_id = getattr(el, "shape_identification", None)
-            body["geometry_preset"] = (shape_id.geometry_preset if shape_id else None) or "rect"
-            fill = getattr(el, "fill", None)
-            if fill:
-                col = getattr(fill, "color", None)
-                hex_val = _hex(col)
-                if hex_val:
-                    inputs_schema[f"{alias}_fill_color"] = {
-                        "type": "string", "required": False,
-                        "default": hex_val,
-                        "description": f"{alias}: fill color (hex)",
-                    }
-                    body["fill_color"] = "{{" + alias + "_fill_color}}"
-
-        # Text content for content-bearing roles
-        content_roles = {"title", "subtitle", "kicker", "hero_number",
-                         "body", "bullet_item", "caption", "footer",
-                         "source_citation"}
-        if role in content_roles:
-            var = var_by_idx.get(i)
+        # Text content placeholder for content-bearing BridgeText/BridgeShape.
+        if role in content_roles and et in ("BridgeText", "BridgeShape"):
+            text_var = next((v for v in var_by_idx[i] if v.bridge_path is None), None)
             sample_text = ""
-            if var and var.samples: sample_text = var.samples[0]
-            else: sample_text = _first_text(el)
-            # Use the variable's INPUT NAME (semantic) when it's role-derived,
-            # else generic <alias>_text. Prefer semantic.
-            txt_input = var.input_name if var and var.input_name else f"{alias}_text"
-            txt_input = _re.sub(r"\W+", "_", txt_input).lower()[:40]
+            if text_var and text_var.samples:
+                sample_text = str(text_var.samples[0])
+            else:
+                sample_text = _first_text(el)
+            txt_input = (text_var.input_name if text_var and text_var.input_name
+                         else f"{alias}_text")
+            txt_input = re.sub(r"\W+", "_", txt_input).lower()[:40]
             inputs_schema[txt_input] = {
                 "type": "string", "required": False,
                 "default": sample_text[:300],
                 "description": f"{alias}: text content",
             }
-            if kind == "shape":
-                body["text_box"] = True
-            body["text"] = "{{" + txt_input + "}}"
+            paragraphs = bridge_dict.get("paragraphs") or []
+            if role in headline_collapse_roles and paragraphs and paragraphs[0].get("runs"):
+                # Collapse to a single run carrying the input — inherit
+                # formatting from run 0 so the user sees consistent styling
+                # regardless of how the source slide was authored.
+                run0 = dict(paragraphs[0]["runs"][0])
+                run0["text"] = "{{" + txt_input + "}}"
+                paragraphs[0]["runs"] = [run0]
+                bridge_dict["paragraphs"] = [paragraphs[0]]
+            elif paragraphs and paragraphs[0].get("runs"):
+                # Body/bullets: thread placeholder into run 0 only; keep
+                # the rest of the run structure so multi-paragraph layouts
+                # survive at least at the prototype's text. Callers wanting
+                # full multi-line control should use the `runs`/`paragraphs`
+                # override path in apply_template.
+                _set_at_path(bridge_dict, "paragraphs[0].runs[0].text",
+                             "{{" + txt_input + "}}")
 
-            # Font size — from the prototype's first run
-            for run in _iter_runs(el):
-                fs = getattr(run, "font_size", None)
-                if fs:
-                    fs_input = f"{alias}_font_size"
-                    inputs_schema[fs_input] = {
-                        "type": "number", "required": False,
-                        "default": round(float(fs), 1),
-                        "description": f"{alias}: font size (pt)",
-                    }
-                    # Note: we don't reference this in the body — the
-                    # studio create_* endpoints derive it from the runs
-                    # that the apply step constructs. Keeping the input
-                    # available so the agent can override at apply.
-                    break
-
-        # Chart-specific inputs (from STANDARD_CHART_INPUTS)
-        if et == "BridgeChart":
-            inputs_schema[f"{alias}_categories"] = {
-                "type": "list", "required": False,
-                "default": list(getattr(el.categories, "categories", []) or [])[:12],
+        # Cosmetic-axis placeholders (from B4 diff_axes).
+        for v in var_by_idx[i]:
+            if not v.bridge_path or not v.varies:
+                continue
+            sample = (v.samples or [""])[0]
+            inputs_schema[v.input_name] = {
+                "type": v.input_type, "required": False,
+                "default": sample,
+                "description": f"{alias}: {v.input_name.replace('_', ' ')}",
+                "enum": list(v.samples) if v.input_type in ("enum", "color", "bool") and len(v.samples) <= 8 else None,
             }
-            body["categories"] = "{{" + alias + "_categories}}"
+            _set_at_path(bridge_dict, v.bridge_path, "{{" + v.input_name + "}}")
+
+        # Chart data input — special because charts have rich nested data
+        # and the user-facing knob is "give me a dataframe-shaped thing."
+        if et == "BridgeChart":
+            cats_default = list(getattr(getattr(el, "categories", None), "categories", []) or [])[:12]
+            inputs_schema[f"{alias}_categories"] = {
+                "type": "list", "required": False, "default": cats_default,
+                "description": f"{alias}: category labels (list of strings)",
+            }
             ser_default = []
             for s in (getattr(el, "series", None) or []):
                 ser_default.append({
@@ -2493,24 +2662,19 @@ def enriched_cluster_to_template(ec: EnrichedCluster) -> dict:
                 })
             inputs_schema[f"{alias}_series"] = {
                 "type": "list", "required": False, "default": ser_default,
+                "description": f"{alias}: list of {{name, values}} dicts (one per series)",
             }
-            body["series"] = "{{" + alias + "_series}}"
-            body["chart_type"] = getattr(el, "chart_type", "column_clustered")
 
-        # Table-specific inputs
+        # Table data input — same idea.
         if et == "BridgeTable":
             data = getattr(el, "data", None) or []
             inputs_schema[f"{alias}_data"] = {
                 "type": "list", "required": False,
                 "default": [[str(c) for c in row] for row in data[:10]],
+                "description": f"{alias}: 2D list of cell values (rows of strings)",
             }
-            body["data"] = "{{" + alias + "_data}}"
-            tp = getattr(el, "table_properties", None)
-            if tp:
-                body["first_row_header"] = bool(getattr(tp, "first_row_header", False))
-                body["banded_rows"] = bool(getattr(tp, "banded_rows", False))
 
-        layout.append({"kind": kind, "alias": alias, "body": body})
+        layout.append({"kind": "bridge-raw", "alias": alias, "bridge": bridge_dict})
 
     return {
         "name": ec.name.chosen,
@@ -2541,86 +2705,289 @@ def enriched_cluster_to_template(ec: EnrichedCluster) -> dict:
 
 
 _E1_DEDUP_SYSTEM = """\
-You see a list of templates with name + short/long descriptions +
-use_when + avoid_when + slot + tags. Identify groups of 2+ templates
-that are NEAR-DUPLICATES — same intent, same structural layout,
-differing only in COSMETIC details (accent color, accent direction,
-small enum choices that could become a single input).
+You're shown a group of templates that share an identical structural
+skeleton (same element types in the same positions). For each group,
+the only differences between members are listed as a set of axes (e.g.
+title color, fill color, font size). Decide:
 
-STRONG BIAS toward NOT merging. Different intents stay separate.
-Different structural layouts stay separate. Different element counts
-stay separate. A brand can legitimately have multiple templates that
-share the same slot category (e.g. two cover designs, two divider
-designs, three chart layouts) — these are NOT merge candidates unless
-the only difference between them is a single cosmetic variable like
-accent color.
+  * Should these be MERGED into one template that exposes the
+    varying axes as user inputs? This is the right call when the
+    differences are purely aesthetic — color schemes, font weights,
+    minor sizing — and a user would naturally want to flip a knob
+    rather than pick between near-identical templates.
+  * Or kept SEPARATE? Only when the differences carry distinct
+    semantic intent the brand wants users to choose between
+    deliberately (rare — if you're not sure, merge).
 
-Examples of CORRECT merges:
-  * "Sage Cover" + "Cobalt Cover" — same layout, only accent differs
-  * "Left-Image Comparison" + "Right-Image Comparison" — direction flip
+Bias: when in doubt, merge. The brand keeps options through inputs.
 
-Examples of WRONG merges:
-  * "Cover Photo" + "Cover Text-Only" — structurally different
-  * "Hero Metric" + "KPI Grid" — different intents (one vs three KPIs)
-  * "3-Column Compare" + "2-Column Compare" — different column counts
+For each merge you propose, name the input(s) in plain snake_case
+(`title_palette`, `accent_color`, `headline_weight`) — what a designer
+would call the knob. One input per varying axis path.
 
 Respond with one JSON object, no prose, no fences:
 
 {
-  "merge_groups": [
+  "merge_decisions": [
     {
-      "members": ["tpl_id_a", "tpl_id_b"],
-      "variance_description": "Different accent color",
-      "proposed_input": "accent_color",
-      "proposed_input_values": ["#7DA1CC", "#6FA17A"]
-    }
+      "group_id": "<echo back from input>",
+      "merge": true,
+      "axis_inputs": [
+        {"path": "<exact path from input>",
+         "input_name": "<short snake_case>",
+         "values": ["#FFFFFF", "#262626"]},
+        ...
+      ]
+    },
+    {"group_id": "<id>", "merge": false, "reasoning": "..."}
   ]
 }
-
-If no clean cosmetic-only merge candidates exist, return
-{"merge_groups": []}.
 """
+
+
+def _skeleton_hash(tpl: dict, *, quantize_in: float = 0.5) -> str:
+    """Lightweight structural fingerprint: element-type sequence + quantized
+    positions. Templates with the same hash are merge CANDIDATES; further
+    cosmetic-axis analysis decides whether to actually merge."""
+    parts: list[tuple] = []
+    for entry in (tpl.get("layout") or []):
+        bridge = entry.get("bridge") or {}
+        et = bridge.get("__type__") or entry.get("kind") or "?"
+        pos = bridge.get("position") or {}
+        # position values may be {{var}} placeholders; we want defaults
+        # for skeleton hashing, so look up the input default.
+        def _resolve(v):
+            if isinstance(v, str) and v.startswith("{{") and v.endswith("}}"):
+                key = v[2:-2]
+                default = ((tpl.get("inputs_schema") or {}).get(key) or {}).get("default")
+                return default if isinstance(default, (int, float)) else 0.0
+            return v if isinstance(v, (int, float)) else 0.0
+        x = _resolve(pos.get("left")) or 0.0
+        y = _resolve(pos.get("top")) or 0.0
+        w = _resolve(pos.get("width")) or 0.0
+        h = _resolve(pos.get("height")) or 0.0
+        q = quantize_in
+        parts.append((et, round(x / q), round(y / q), round(w / q), round(h / q)))
+    return "|".join(f"{et}@{x},{y}#{w}x{h}" for et, x, y, w, h in parts)
+
+
+def _resolve_defaults(bridge_with_placeholders: dict, inputs_schema: dict) -> dict:
+    """Walk a bridge dict that may contain ``{{var}}`` placeholders and
+    return a copy with each placeholder replaced by the input's default
+    value. Used so we can compare two templates' actual cosmetic values
+    rather than comparing placeholder strings."""
+    schema = inputs_schema or {}
+
+    def _walk(v: Any) -> Any:
+        if isinstance(v, str) and v.startswith("{{") and v.endswith("}}"):
+            key = v[2:-2]
+            return (schema.get(key) or {}).get("default")
+        if isinstance(v, dict):
+            return {k: _walk(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [_walk(x) for x in v]
+        return v
+    return _walk(bridge_with_placeholders)
+
+
+def _execute_merge(
+    base: dict, others: list[dict],
+    axis_inputs: list[dict],
+) -> dict:
+    """Mutate ``base`` to absorb the variance from ``others`` along the
+    given axis paths. Each axis becomes a new input on ``base`` and
+    ``{{input_name}}`` placeholders are threaded at the matching paths.
+
+    The set of distinct values seen across base + others (resolved to
+    defaults) becomes the enum.
+    """
+    schema = base.setdefault("inputs_schema", {})
+    base_layout = base.get("layout") or []
+
+    for axis in axis_inputs:
+        path = axis.get("path") or ""
+        input_name = re.sub(r"\W+", "_", str(axis.get("input_name") or "variant")).lower()[:40]
+        if not path or not input_name:
+            continue
+        # Figure out which layout entry (element index) the path belongs to
+        # by inspecting other templates' layouts in parallel — paths are
+        # relative to a single element so we need the right one.
+        for el_idx, entry in enumerate(base_layout):
+            base_bridge = entry.get("bridge") or {}
+            base_val = _get_at_path(base_bridge, path)
+            if base_val is None:
+                continue
+            # Collect values from this element across all merge members.
+            seen: list[Any] = []
+            for v in [base_val] + [
+                _get_at_path((o.get("layout") or [el_idx and None or {}])[el_idx].get("bridge") or {}, path)
+                if el_idx < len(o.get("layout") or []) else None
+                for o in others
+            ]:
+                # Resolve placeholders to defaults so we collect real values.
+                if isinstance(v, str) and v.startswith("{{") and v.endswith("}}"):
+                    key = v[2:-2]
+                    v = (schema.get(key) or {}).get("default")
+                    if v is None:
+                        # also check others' schemas
+                        for o in others:
+                            v = ((o.get("inputs_schema") or {}).get(key) or {}).get("default")
+                            if v is not None:
+                                break
+                if v is not None and v not in seen:
+                    seen.append(v)
+            if len(seen) < 2:
+                continue  # not actually varying once defaults resolved
+            # Determine input type from the values.
+            type_hint = axis_type_hint(seen) if seen else (axis.get("type_hint") or "string")
+            schema[input_name] = {
+                "type": type_hint,
+                "required": False,
+                "default": seen[0],
+                "description": f"Cosmetic axis at {path}",
+                "enum": seen if len(seen) <= 8 else None,
+            }
+            _set_at_path(base_bridge, path, "{{" + input_name + "}}")
+            break  # only thread into the first matching element
+
+    # Record provenance of the merge.
+    prov = base.setdefault("provenance", {})
+    merged_from = prov.setdefault("merged_from", [])
+    for o in others:
+        merged_from.append(o.get("name", ""))
+
+    return base
 
 
 def phase_e_01_dedup(
     *, templates: list[dict],
     llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
-) -> list[MergeGroup]:
-    compact = [
-        {"id": f"tpl_{i}",
-         "name": t.get("name", ""),
-         "short_description": (t.get("short_description") or t.get("description") or "")[:200],
-         "long_description": (t.get("long_description") or "")[:600],
-         "use_when": (t.get("use_when") or "")[:200],
-         "avoid_when": (t.get("avoid_when") or "")[:200],
-         "slot": (t.get("provenance") or {}).get("slot", ""),
-         "tags": t.get("tags", []),
-         "element_count": len(t.get("layout") or [])}
-        for i, t in enumerate(templates)
+) -> list[dict]:
+    """Aggressive merge of structural twins. Returns the CONSOLIDATED
+    template list — not just a list of proposed groups. Templates whose
+    structural skeleton matches another's are bundled, their cosmetic
+    diffs are surfaced to the LLM for naming, and merge execution is
+    performed in-place: differing values become new inputs on the
+    surviving (highest-confidence) template; the others are dropped.
+    """
+    if len(templates) < 2:
+        return templates
+
+    # 1. Group templates by skeleton hash.
+    groups: dict[str, list[int]] = defaultdict(list)
+    for i, tpl in enumerate(templates):
+        groups[_skeleton_hash(tpl)].append(i)
+
+    # 2. For each multi-member group, diff bridge dicts across templates
+    #    pairwise and collect the axes that vary.
+    candidate_groups: list[dict] = []
+    for h, idxs in groups.items():
+        if len(idxs) < 2:
+            continue
+        # Resolve placeholders to defaults so we compare real values.
+        resolved_layouts = []
+        for i in idxs:
+            tpl = templates[i]
+            resolved = []
+            for entry in (tpl.get("layout") or []):
+                b = entry.get("bridge") or {}
+                resolved.append(_resolve_defaults(b, tpl.get("inputs_schema") or {}))
+            resolved_layouts.append(resolved)
+        # For each element index in the skeleton, diff across templates.
+        n_elements = min(len(rl) for rl in resolved_layouts)
+        per_element_axes: list[dict[str, list[Any]]] = []
+        for el_idx in range(n_elements):
+            members = [rl[el_idx] for rl in resolved_layouts]
+            ax = diff_axes(members)
+            # Drop position axes (geometry already exposed) and identification.
+            SKIP_PREFIXES = ("position.", "identification.", "accessibility.",
+                             "custom_properties.", "stacking.", "__type__")
+            TEXT_LEAF_RE = re.compile(r"paragraphs\[\d+\]\.runs\[\d+\]\.text$")
+            ax = {p: v for p, v in ax.items()
+                  if not any(p.startswith(pre) for pre in SKIP_PREFIXES)
+                  and not TEXT_LEAF_RE.search(p)}
+            per_element_axes.append(ax)
+        total_axes = sum(len(a) for a in per_element_axes)
+        # Skip groups with too many axes (probably not actually twins).
+        if total_axes == 0 or total_axes > 12:
+            continue
+        candidate_groups.append({
+            "group_id": f"grp_{len(candidate_groups)}",
+            "skeleton_hash": h,
+            "template_indices": idxs,
+            "template_names": [templates[i].get("name", f"tpl_{i}") for i in idxs],
+            "per_element_axes": per_element_axes,
+        })
+
+    if not candidate_groups:
+        return templates
+
+    # 3. Ask LLM to decide merge + name inputs per group.
+    compact_groups = [
+        {"group_id": g["group_id"],
+         "members": [
+             {"name": n, "short_description": (templates[i].get("short_description") or templates[i].get("description") or "")[:160]}
+             for n, i in zip(g["template_names"], g["template_indices"])
+         ],
+         "varying_axes": [
+             {"element_index": el_idx,
+              "axes": [{"path": p, "values": [_jsonable(v) for v in vals[:5]],
+                        "type_hint": axis_type_hint(vals)}
+                       for p, vals in ax.items()]}
+             for el_idx, ax in enumerate(g["per_element_axes"]) if ax
+         ]}
+        for g in candidate_groups
     ]
-    user = json.dumps({"templates": compact}, ensure_ascii=False, default=str)[:18000]
-    def _parse(d: dict) -> list[MergeGroup]:
-        groups: list[MergeGroup] = []
-        for g in (d.get("merge_groups") or [])[:8]:
-            if not isinstance(g, dict): continue
-            members = [str(m) for m in (g.get("members") or [])]
-            if len(members) < 2: continue
-            groups.append(MergeGroup(
-                member_ids=members,
-                variance_description=str(g.get("variance_description") or "")[:160],
-                proposed_input=str(g.get("proposed_input") or "variant")[:30],
-                proposed_input_values=[str(v)[:40] for v in (g.get("proposed_input_values") or [])[:6]],
-            ))
-        return groups
+    user = json.dumps({"groups": compact_groups}, ensure_ascii=False, default=str)[:18000]
+
+    def _parse(d: dict) -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        for dec in (d.get("merge_decisions") or [])[:20]:
+            if not isinstance(dec, dict):
+                continue
+            gid = str(dec.get("group_id") or "")
+            if not gid:
+                continue
+            out[gid] = dec
+        return out
+
     try:
-        return _call_llm_typed(
+        decisions = _call_llm_typed(
             system=_E1_DEDUP_SYSTEM, user=user,
             llm_call=llm_call, provenance=provenance,
-            phase="E1.dedup", parse=_parse,
+            phase="E1.dedup_merge", parse=_parse,
         )
     except Exception as exc:
         log.warning("E1 dedup failed (no merges this run): %s", exc)
-        return []
+        return templates
+
+    # 4. Execute merges. Drop merged-away templates.
+    drop_indices: set[int] = set()
+    for grp in candidate_groups:
+        dec = decisions.get(grp["group_id"])
+        if not dec or not dec.get("merge"):
+            continue
+        idxs = grp["template_indices"]
+        # Pick highest-confidence template as base; others get folded in.
+        idxs_sorted = sorted(
+            idxs,
+            key=lambda i: (templates[i].get("provenance") or {}).get("validation_confidence", 0),
+            reverse=True,
+        )
+        base_idx = idxs_sorted[0]
+        other_idxs = idxs_sorted[1:]
+        axis_inputs = dec.get("axis_inputs") or []
+        _execute_merge(
+            templates[base_idx],
+            [templates[i] for i in other_idxs],
+            axis_inputs,
+        )
+        log.info("  Phase E — merged %d templates → %r (axes: %s)",
+                 len(idxs), templates[base_idx].get("name"),
+                 [ax.get("input_name") for ax in axis_inputs])
+        drop_indices.update(other_idxs)
+
+    return [t for i, t in enumerate(templates) if i not in drop_indices]
 
 
 _E3_RENAME_SYSTEM = """\
@@ -3324,12 +3691,13 @@ def induce_templates_v3(
             validated.append(tpl)
 
     # ── Phase E — cross-template consolidation ──
-    merge_groups = phase_e_01_dedup(
+    pre_merge_count = len(validated)
+    validated = phase_e_01_dedup(
         templates=validated, llm_call=llm_call, provenance=prov,
     )
-    if merge_groups:
-        log.info("  Phase E — %d merge group(s) proposed (informational only this pass)",
-                 len(merge_groups))
+    if len(validated) < pre_merge_count:
+        log.info("  Phase E — merged %d templates into %d (cosmetic-axis collapse)",
+                 pre_merge_count, len(validated))
     rename_map = phase_e_03_rename_distinctness(
         templates=validated, llm_call=llm_call, provenance=prov,
     )

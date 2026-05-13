@@ -300,9 +300,26 @@ def apply_template(
     for entry in materialized_layout:
         kind = entry.get("kind")
         alias = entry.get("alias")
-        body = entry.get("body") or {}
         if not kind:
             continue
+        # Full-fidelity bridge insertion path (v3 induction emits these).
+        if kind == "bridge-raw":
+            bridge_dict = entry.get("bridge") or {}
+            bridge_dict = _strip_none_recursive(bridge_dict)
+            try:
+                resp = studio.insert_bridge_raw(slide_n, bridge_dict)
+            except Exception as exc:
+                errors2.append(f"insert_bridge_raw{f'/{alias}' if alias else ''} failed: {exc}")
+                continue
+            eid = resp.get("element_id") or resp.get("id")
+            if alias:
+                alias_to_id[alias] = eid
+            created_elements.append({"alias": alias, "element_id": eid,
+                                     "kind": bridge_dict.get("__type__", "bridge-raw"),
+                                     "name": resp.get("name")})
+            continue
+        # Legacy intent-JSON path (kept for non-v3 templates).
+        body = entry.get("body") or {}
         try:
             resp = studio.create_element(slide_n, kind, body)
         except Exception as exc:
@@ -440,6 +457,22 @@ def _autoshrink_text_overflow(layout: list[dict]) -> None:
 
 
 _LONE_VAR_RE = None  # lazy-compiled below
+
+
+def _strip_none_recursive(obj: Any) -> Any:
+    """Drop keys whose values are None at every level of a nested dict/list.
+
+    Used right before insert_bridge_raw so that optional inputs the caller
+    didn't fill (the placeholder substituted to None) don't sneak through
+    as literal None values into the BridgeElement reconstruction. The codec
+    is happy with a missing key (default applies); it would choke on None
+    for a typed field like an int.
+    """
+    if isinstance(obj, dict):
+        return {k: _strip_none_recursive(v) for k, v in obj.items() if v is not None}
+    if isinstance(obj, list):
+        return [_strip_none_recursive(v) for v in obj]
+    return obj
 
 
 def _substitute(obj: Any, inputs: dict) -> Any:

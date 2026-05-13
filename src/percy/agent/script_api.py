@@ -94,6 +94,21 @@ class Studio:
                          "element_id": result.get("id"), "name": result.get("name")})
         return result
 
+    def insert_bridge_raw(self, slide_n: int, bridge_dict: dict) -> dict:
+        """Insert a fully-formed BridgeElement (from bridge_to_dict) onto a slide.
+
+        Preserves every nested attribute exactly — used by the v3 template
+        induction pipeline's 1:1 fidelity path.
+        """
+        path = f"/api/docs/{self.doc_id}/slides/{slide_n}/elements/bridge-raw"
+        result = self._post(path, bridge_dict)
+        self.ops.append({"op": "insert_bridge_raw",
+                         "kind": bridge_dict.get("__type__"),
+                         "slide_n": slide_n,
+                         "element_id": result.get("id"),
+                         "name": result.get("name")})
+        return result
+
     # ── Element edit ────────────────────────────────────────────────────
 
     def patch_element(self, slide_n: int, element_id: str, body: dict) -> dict:
