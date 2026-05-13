@@ -429,6 +429,157 @@ That's expected.
 
 ---
 
+## Reference: regenerating the outreach / training data
+
+The repo intentionally **does not** commit `outreach/dump_pptx/` (1.8 GB
+of third-party investor decks scraped from public IR pages, plus
+copyright concerns about redistributing). What IS committed is enough
+to regenerate everything:
+
+- `outreach/scraper.py` — DuckDuckGo + BeautifulSoup pipeline that
+  hits each company's IR page and downloads the first valid PPTX/PDF
+- `outreach/analyzer.py` — vision-LLM quality check, rejects
+  non-branded or template-only files
+- `outreach/metadata.json` — the 100-company target list (names + IR
+  URLs + scrape status)
+- `outreach/expand_companies.py` — adds more targets to the list
+
+### Step 1: install scraper deps
+
+```bash
+cd outreach
+python -m pip install -r requirements.txt
+# Selenium drives a headless Chrome for JS-heavy IR pages — installs
+# the matching chromedriver via webdriver-manager on first run.
+```
+
+### Step 2: set up vision-LLM access for the analyzer
+
+The analyzer uses **LM Studio** running locally with a Gemma-3-27b
+vision model to verify each scraped deck is genuinely from the
+target company (not a tutorial, template, or random file with the
+right company name in the URL).
+
+1. Install [LM Studio](https://lmstudio.ai/) (free, runs on Mac /
+   Windows / Linux with a discrete GPU).
+2. Download `google/gemma-3-27b` from the LM Studio model browser
+   (~16 GB; needs ~20 GB VRAM with vision enabled, or 24 GB system
+   RAM with CPU offload).
+3. In LM Studio → Local Server → "Start Server" on `localhost:1234`.
+4. Confirm: `curl http://localhost:1234/v1/models` should list
+   `google/gemma-3-27b`.
+
+The analyzer reads `OPENAI_BASE_URL` (defaults to
+`http://localhost:1234/v1`) and `OPENAI_API_KEY` (any non-empty
+string; LM Studio ignores it).
+
+### Step 3: scrape
+
+```bash
+cd outreach
+
+# First 10 companies (good smoke test)
+python scraper.py --limit 10
+
+# Specific company IDs (see metadata.json for the index)
+python scraper.py --ids 1 10 12 26 27
+
+# Whole list — takes ~3 hours on a typical connection
+python scraper.py
+
+# Headed browser (handy when a specific IR page fails)
+python scraper.py --ids 47 --no-headless
+```
+
+Output lands in `outreach/dump_pptx/<company>_<date>_<filename>.{pdf,pptx}`.
+
+### Step 4: quality-check + auto-reject bad scrapes
+
+```bash
+cd outreach
+python analyzer.py             # analyzes only files not yet checked
+python analyzer.py --dry-run   # show verdicts without moving anything
+python analyzer.py --recheck   # re-verify everything from scratch
+```
+
+Files that fail the vision check ("this slide doesn't look like a
+genuine corporate deck") get moved to
+`outreach/dump_pptx/rejected/`. Results are merged into
+`metadata.json` under each company's record.
+
+### Step 5: mine templates for the demo brands
+
+Once you have source decks, build Template Sets so the splash demos
+have material to render. The `seed_demo_brand.py` script does the
+full pipeline (onboard → brand extraction → template induction →
+accept top N → write snapshot):
+
+```bash
+# Snowflake (deepest brand fidelity test — 57-slide source PPTX)
+PERCY_LLM_PROVIDER=bedrock \
+PERCY_BEDROCK_MODEL=us.anthropic.claude-sonnet-4-6 \
+AWS_PROFILE=percy-prod \
+PYTHONPATH=. python scripts/seed_demo_brand.py \
+  --doc outreach/dump_pptx/snowflake_20260502_Snowflake_Template_light-2019.pptx \
+  --slug snowflake \
+  --display-name "Snowflake" \
+  --description "Cloud data platform · Snowflake cyan · 57-slide source PPTX" \
+  --induction-mode cluster --accept-count 10 --max-candidates 20
+
+# Other brands (BlackRock, Caterpillar, Salesforce) — same pattern,
+# pick the strongest deck from outreach/dump_pptx/ for each
+```
+
+Output: `demo_brands/<slug>.json` (the mined Template Set snapshot).
+These ARE committed to the repo so deploys seed them on boot.
+
+### Step 6: generate the splash demo decks
+
+After mining, run the demo generator to produce the pre-baked decks
+the splash renders:
+
+```bash
+PERCY_LLM_PROVIDER=bedrock \
+PERCY_BEDROCK_MODEL=us.anthropic.claude-opus-4-5-20251101-v1:0 \
+AWS_PROFILE=percy-prod \
+PYTHONPATH=. python scripts/generate_showcase_demos.py --force
+```
+
+Writes `demo_brands/<slug>.demo.json` snapshots. Also committed —
+the splash never re-runs LLMs at runtime, it just renders these
+persisted snapshots.
+
+### Step 7: (optional) generate PowerPoint reference renders for fidelity testing
+
+The fidelity test (`frontend/tests/roundtrip/fidelity.mjs`) compares
+Bridge-model renders to actual PowerPoint output. Generating the
+PowerPoint refs requires Windows + Microsoft Office installed:
+
+```bash
+# Renders each slide of each PPTX as a PNG via PowerPoint COM
+python scripts/render_pptx_powerpoint.py outreach/dump_pptx/*.pptx
+# Output: outreach/dump_pptx/<deck>__powerpoint/slide-NNN.png
+```
+
+These reference renders are NOT committed (multi-GB, copyright,
+regeneratable). On a non-Windows host you can fall back to the
+matplotlib-based Bridge renderer with `--ref=matplotlib` on the
+fidelity test, at the cost of some pixel parity.
+
+### What lives in the repo vs what you regenerate
+
+| | Committed? | How to regenerate |
+|---|---|---|
+| Scraper + analyzer code | ✓ `outreach/*.py` | n/a |
+| Company target list (100 IR URLs) | ✓ `outreach/metadata.json` | scraper.py extends it |
+| Scraped source decks (~2 GB) | ✗ `.gitignore`d | `python outreach/scraper.py` |
+| PowerPoint reference renders | ✗ `.gitignore`d | `scripts/render_pptx_powerpoint.py` (Windows + Office) |
+| Mined Template Sets (`demo_brands/*.json`) | ✓ | `scripts/seed_demo_brand.py` |
+| Splash demo decks (`*.demo.json`) | ✓ | `scripts/generate_showcase_demos.py` |
+| User uploads at runtime | ✗ `.gitignore`d (runtime data) | n/a — created by users |
+
+---
+
 ## Reference: stack outputs
 
 After deploy you can always re-fetch the URLs:
