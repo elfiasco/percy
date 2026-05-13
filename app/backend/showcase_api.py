@@ -42,13 +42,12 @@ router = APIRouter(tags=["showcase"])
 # explain WHY each brand is in the showcase, which is "they look totally
 # different from each other."
 
-# Two-brand showcase for v1 of the marketing splash:
+# Three-brand showcase for the marketing splash:
 #   - Percy Standard (our own hand-crafted brand) acts as the anchor
 #   - Snowflake (mined from their real template PPTX) is the customer demo
-# Both share the same underlying agent + the same demo prompt — the visual
-# difference is entirely driven by mined brand data. We'll add Caterpillar /
-# BlackRock / Salesforce back later once their source documents yield
-# richer template extractions.
+#   - BlackRock (mined from BLK-Global-Outlook-in-Charts PDF) — chart-rich
+# All share the same underlying agent + the same demo prompt — the visual
+# difference is entirely driven by mined brand data.
 SHOWCASE_BRANDS: list[dict[str, str]] = [
     {
         "slug": "percy_standard",
@@ -60,6 +59,11 @@ SHOWCASE_BRANDS: list[dict[str, str]] = [
         "slug": "snowflake",
         "tagline": "Cloud data platform · Snowflake cyan · 57-slide source PPTX",
         "source_kind": "PPTX",
+    },
+    {
+        "slug": "blackrock",
+        "tagline": "Asset management · BlackRock orange + BLKFort · 24-page chart-rich PDF",
+        "source_kind": "PDF",
     },
 ]
 
