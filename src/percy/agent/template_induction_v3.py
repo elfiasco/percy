@@ -1138,6 +1138,1606 @@ def _build_table_style(el: Any, ref_id: str, slide_n: int) -> RawTableStyle | No
     return style
 
 
+# ── Phase B — semantic enrichment (7 LLM calls per cluster) ──────────────
+
+
+def _serialize_cluster_for_llm(cluster: SlideCluster, max_members: int = 5) -> dict[str, Any]:
+    """Compact slide summary the LLM sees. Strips images, big blobs."""
+    proto = cluster.prototype.slide
+    proto_elements = []
+    for i, el in enumerate(getattr(proto, "elements", None) or []):
+        pos = getattr(el, "position", None)
+        text = _first_text(el)[:120]
+        et = getattr(el, "element_type", el.__class__.__name__)
+        proto_elements.append({
+            "idx": i,
+            "type": et,
+            "pos": [round(pos.left, 2), round(pos.top, 2),
+                    round(pos.width, 2), round(pos.height, 2)] if pos else None,
+            "text": text or None,
+            "has_fill": bool(getattr(getattr(el, "fill", None), "color", None) and
+                             getattr(getattr(getattr(el, "fill", None), "color", None), "value", None)),
+            "chart_type": getattr(el, "chart_type", None),
+        })
+    member_text_samples: list[list[str]] = []
+    for m in cluster.members[:max_members]:
+        sample = []
+        for el in (getattr(m.slide, "elements", None) or [])[:8]:
+            t = _first_text(el)
+            if t: sample.append(t[:120])
+        member_text_samples.append(sample)
+    return {
+        "cluster_size": cluster.size,
+        "element_count": cluster.fingerprint.element_count,
+        "prototype": proto_elements,
+        "member_text_samples": member_text_samples,
+    }
+
+
+# ── B1. Intent — one sentence ────
+
+
+_B1_INTENT_SYSTEM = """\
+You see a slide layout that appears N times across one or more decks.
+What is this slide DOING in the deck? Answer in ONE sentence, using
+the verb of the action (showcases / introduces / compares / closes /
+divides / lists / explains / quotes / etc.).
+
+Respond with one JSON object, no prose, no fences:
+
+{
+  "intent": "<one sentence>",
+  "confidence": 0.0 to 1.0
+}
+"""
+
+
+def phase_b_01_intent(
+    *, cluster: SlideCluster,
+    llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
+) -> SemanticIntent:
+    summary = _serialize_cluster_for_llm(cluster)
+    user = json.dumps(summary, ensure_ascii=False, default=str)[:12000]
+    return _call_llm_typed(
+        system=_B1_INTENT_SYSTEM, user=user,
+        llm_call=llm_call, provenance=provenance,
+        phase="B1.intent",
+        parse=lambda d: SemanticIntent(
+            intent=str(d.get("intent") or "")[:300],
+            confidence=float(d.get("confidence") or 0.7),
+        ),
+    )
+
+
+# ── B2. Slot taxonomy ────
+
+
+_B2_SLOT_SYSTEM = f"""\
+Given the slide's intent (one sentence), pick the canonical slot type
+from this fixed vocabulary:
+
+  cover           — title page / brand intro
+  divider         — section break
+  hero_metric     — single big number, focused
+  kpi_grid        — multiple KPIs side-by-side
+  chart           — chart-led slide
+  table           — table-led slide
+  narrative       — paragraphs of explanatory text
+  comparison      — two- or three-column compare
+  bulleted_list   — list of items / takeaways
+  quote           — pull quote with attribution
+  image_lead      — image dominant
+  agenda          — agenda / sections list
+  close           — thank you / contact / closing
+
+Respond with one JSON object, no prose, no fences:
+
+{{
+  "slot": "one of {', '.join(SLOT_TAXONOMY)}",
+  "rationale": "<one short clause>"
+}}
+"""
+
+
+def phase_b_02_slot(
+    *, intent: SemanticIntent,
+    llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
+) -> SlotAssignment:
+    user = json.dumps({"intent": intent.intent}, ensure_ascii=False)
+    def _parse(d: dict) -> SlotAssignment:
+        slot = str(d.get("slot") or "").lower().strip()
+        if slot not in SLOT_TAXONOMY:
+            slot = "narrative"  # safe fallback
+        return SlotAssignment(slot=slot, rationale=str(d.get("rationale") or "")[:140])
+    return _call_llm_typed(
+        system=_B2_SLOT_SYSTEM, user=user,
+        llm_call=llm_call, provenance=provenance,
+        phase="B2.slot", parse=_parse,
+    )
+
+
+# ── B3. Element role assignment ────
+
+
+_B3_ROLES_SYSTEM = f"""\
+You see the prototype slide's elements (numbered by index). Assign
+ONE role to each from this fixed vocabulary:
+
+  title             — primary headline
+  subtitle          — secondary headline below the title
+  kicker            — small eyebrow label above the title
+  hero_number       — the dominant number on a hero_metric slide
+  body              — paragraph text
+  bullet_item       — one entry in a bulleted list
+  caption           — short explanatory text next to a chart/image
+  footer            — slide footer (page numbers, recurring text)
+  source_citation   — "Source: ..." attribution
+  logo              — brand mark (often top-left or top-right)
+  decorative        — visual flourish (lines, accents)
+  background        — full-slide background rect
+  chart             — chart element
+  table             — table element
+  image             — image element
+
+Notes:
+  * Each element gets exactly one role. Default to `decorative` for
+    pure visuals with no content semantic.
+  * Same role can repeat (3 KPI tiles will each have a hero_number).
+  * Slide's intent is provided for context.
+
+Respond with one JSON object, no prose, no fences:
+
+{{
+  "roles": {{ "0": "title", "1": "kicker", ... }},
+  "rationale": "<one short clause>"
+}}
+"""
+
+
+def phase_b_03_element_roles(
+    *, cluster: SlideCluster, intent: SemanticIntent, slot: SlotAssignment,
+    llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
+) -> ElementRoleMap:
+    summary = _serialize_cluster_for_llm(cluster)
+    user = json.dumps({
+        "intent": intent.intent, "slot": slot.slot,
+        "elements": summary["prototype"],
+    }, ensure_ascii=False, default=str)[:12000]
+    def _parse(d: dict) -> ElementRoleMap:
+        raw = d.get("roles") or {}
+        roles: dict[int, str] = {}
+        for k, v in raw.items():
+            try:
+                idx = int(k)
+            except (ValueError, TypeError):
+                continue
+            role = str(v or "").lower().strip()
+            if role in ELEMENT_ROLES:
+                roles[idx] = role
+        return ElementRoleMap(roles=roles, rationale=str(d.get("rationale") or "")[:160])
+    return _call_llm_typed(
+        system=_B3_ROLES_SYSTEM, user=user,
+        llm_call=llm_call, provenance=provenance,
+        phase="B3.element_roles", parse=_parse,
+    )
+
+
+# ── B4. Variable identification (one call per content-bearing element) ────
+
+
+_B4_VARIABLE_SYSTEM = """\
+Across N members of the same template cluster, this element appears
+with these text values. Decide:
+
+  * Does the text vary across members? If all members have the same
+    text, it's brand-fixed (e.g. a recurring footer).
+  * If it varies, what's the underlying input it represents?
+    Prefer a concrete, descriptive name (e.g. `hero_number`,
+    `quarter_label`, `kpi_value`) over generic ones.
+  * Type: string / number / list / bool.
+
+Respond with one JSON object, no prose, no fences:
+
+{
+  "varies": true | false,
+  "input_name": "<short snake_case>",
+  "input_type": "string" | "number" | "list" | "bool",
+  "reasoning": "<one short clause>"
+}
+"""
+
+
+def phase_b_04_variables(
+    *, cluster: SlideCluster, roles: ElementRoleMap, intent: SemanticIntent,
+    llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
+) -> list[VariableSpec]:
+    """One LLM call per element WITH text that's role-content. Background /
+    decorative / logo elements skipped — they're brand-fixed by definition."""
+    proto = cluster.prototype.slide
+    members = cluster.members
+
+    content_roles = {"title", "subtitle", "kicker", "hero_number",
+                     "body", "bullet_item", "caption", "source_citation"}
+
+    out: list[VariableSpec] = []
+    for i, el in enumerate(getattr(proto, "elements", None) or []):
+        role = roles.roles.get(i, "decorative")
+        if role not in content_roles:
+            continue
+
+        # Sample this element's text across all members. Match by index
+        # which is reasonable for same-fingerprint slides.
+        samples: list[str] = []
+        for m in members[:8]:
+            els = getattr(m.slide, "elements", None) or []
+            if i < len(els):
+                t = _first_text(els[i])
+                if t: samples.append(t[:200])
+
+        # If all samples are identical, no LLM call needed — it's fixed.
+        unique = set(samples)
+        if len(unique) <= 1 and len(samples) >= 2:
+            out.append(VariableSpec(
+                element_idx=i, varies=False,
+                input_name=f"{role}_text", input_type="string",
+                samples=samples[:3], reasoning="constant across cluster members",
+            ))
+            continue
+
+        user = json.dumps({
+            "intent": intent.intent, "role": role,
+            "samples": samples[:8],
+        }, ensure_ascii=False, default=str)[:6000]
+        try:
+            spec = _call_llm_typed(
+                system=_B4_VARIABLE_SYSTEM, user=user,
+                llm_call=llm_call, provenance=provenance,
+                phase=f"B4.variable[el={i}]",
+                parse=lambda d: VariableSpec(
+                    element_idx=i,
+                    varies=bool(d.get("varies", True)),
+                    input_name=str(d.get("input_name") or f"{role}_text")[:40],
+                    input_type=str(d.get("input_type") or "string"),
+                    samples=samples[:5],
+                    reasoning=str(d.get("reasoning") or "")[:160],
+                ),
+            )
+            out.append(spec)
+        except Exception as exc:
+            # On LLM failure, fall back to role-based defaults — better
+            # to have a workable input than skip the element entirely.
+            log.warning("B4 fallback for element %d (%s): %s", i, role, exc)
+            out.append(VariableSpec(
+                element_idx=i, varies=True,
+                input_name=f"{role}_text", input_type="string",
+                samples=samples[:3], reasoning="LLM call failed; using role default",
+            ))
+    return out
+
+
+# ── B5. Naming — three candidates, pick best ────
+
+
+_B5_NAMES_SYSTEM = """\
+Suggest three short names for this template. Each:
+  * ≤ 5 words
+  * Action-oriented (a designer would say "use the X template to ...")
+  * Distinct from each other in nuance
+  * Title Case
+
+Respond with one JSON object, no prose, no fences:
+
+{
+  "candidates": ["Name One", "Name Two", "Name Three"],
+  "chosen": "<the best of the three>",
+  "rationale": "<why the chosen one wins, one short clause>"
+}
+"""
+
+
+def phase_b_05_name(
+    *, intent: SemanticIntent, slot: SlotAssignment, roles: ElementRoleMap,
+    llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
+) -> NameCandidates:
+    user = json.dumps({
+        "intent": intent.intent, "slot": slot.slot,
+        "role_summary": {r: 1 for r in roles.roles.values()},
+    }, ensure_ascii=False)
+    def _parse(d: dict) -> NameCandidates:
+        candidates = [str(c)[:80] for c in (d.get("candidates") or [])[:3]]
+        chosen = str(d.get("chosen") or (candidates[0] if candidates else "Slide Layout"))[:80]
+        if chosen not in candidates and candidates:
+            chosen = candidates[0]
+        return NameCandidates(candidates=candidates, chosen=chosen)
+    return _call_llm_typed(
+        system=_B5_NAMES_SYSTEM, user=user,
+        llm_call=llm_call, provenance=provenance,
+        phase="B5.names", parse=_parse,
+    )
+
+
+# ── B6. Description ────
+
+
+_B6_DESCRIPTION_SYSTEM = """\
+Write a one-sentence description for a designer browsing template
+cards. ≤ 140 characters. Plain language. Describe what the template
+DOES, not what it LOOKS like. Skip filler ("This template is...").
+
+Respond with one JSON object, no prose, no fences:
+
+{
+  "description": "<one sentence ≤ 140 chars>"
+}
+"""
+
+
+def phase_b_06_description(
+    *, name: NameCandidates, intent: SemanticIntent,
+    variables: list[VariableSpec],
+    llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
+) -> TemplateDescription:
+    user = json.dumps({
+        "name": name.chosen, "intent": intent.intent,
+        "varying_inputs": [v.input_name for v in variables if v.varies][:8],
+    }, ensure_ascii=False)
+    return _call_llm_typed(
+        system=_B6_DESCRIPTION_SYSTEM, user=user,
+        llm_call=llm_call, provenance=provenance,
+        phase="B6.description",
+        parse=lambda d: TemplateDescription(
+            description=str(d.get("description") or "")[:200],
+        ),
+    )
+
+
+# ── B7. Tag assignment from controlled vocab ────
+
+
+_B7_TAGS_SYSTEM = f"""\
+Pick 3-6 tags from this fixed vocabulary that best describe this
+template:
+
+  {", ".join(TAG_VOCAB)}
+
+Respond with one JSON object, no prose, no fences:
+
+{{
+  "tags": ["tag1", "tag2", "tag3"]
+}}
+"""
+
+
+def phase_b_07_tags(
+    *, slot: SlotAssignment, intent: SemanticIntent,
+    llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
+) -> TagAssignment:
+    user = json.dumps({"slot": slot.slot, "intent": intent.intent},
+                       ensure_ascii=False)
+    def _parse(d: dict) -> TagAssignment:
+        raw = d.get("tags") or []
+        tags = []
+        for t in raw:
+            t = str(t or "").lower().strip()
+            if t in TAG_VOCAB and t not in tags:
+                tags.append(t)
+            if len(tags) >= 6: break
+        return TagAssignment(tags=tags)
+    return _call_llm_typed(
+        system=_B7_TAGS_SYSTEM, user=user,
+        llm_call=llm_call, provenance=provenance,
+        phase="B7.tags", parse=_parse,
+    )
+
+
+# ── Phase B orchestrator ─────────────────────────────────────────────────
+
+
+def phase_b_enrich_cluster(
+    cluster: SlideCluster,
+    *,
+    llm_call: Callable[[str, str], str],
+    provenance: ProvenanceLogger,
+) -> EnrichedCluster | None:
+    """Run all 7 Phase B calls for one cluster. Each call's output feeds
+    the next. Returns None if a critical call fails (B1, B2, or B3)."""
+    try:
+        intent = phase_b_01_intent(
+            cluster=cluster, llm_call=llm_call, provenance=provenance,
+        )
+    except Exception as exc:
+        log.warning("Phase B aborted for cluster: B1 failed: %s", exc)
+        return None
+    try:
+        slot = phase_b_02_slot(
+            intent=intent, llm_call=llm_call, provenance=provenance,
+        )
+    except Exception:
+        slot = SlotAssignment(slot="narrative", rationale="B2 fallback")
+    try:
+        roles = phase_b_03_element_roles(
+            cluster=cluster, intent=intent, slot=slot,
+            llm_call=llm_call, provenance=provenance,
+        )
+    except Exception as exc:
+        log.warning("Phase B aborted for cluster: B3 failed: %s", exc)
+        return None
+    # Variable identification (one LLM call PER content element — can be
+    # several calls per cluster).
+    variables = phase_b_04_variables(
+        cluster=cluster, roles=roles, intent=intent,
+        llm_call=llm_call, provenance=provenance,
+    )
+    try:
+        name = phase_b_05_name(
+            intent=intent, slot=slot, roles=roles,
+            llm_call=llm_call, provenance=provenance,
+        )
+    except Exception:
+        name = NameCandidates(candidates=["Slide Layout"], chosen="Slide Layout")
+    try:
+        description = phase_b_06_description(
+            name=name, intent=intent, variables=variables,
+            llm_call=llm_call, provenance=provenance,
+        )
+    except Exception:
+        description = TemplateDescription(description="")
+    try:
+        tags = phase_b_07_tags(
+            slot=slot, intent=intent,
+            llm_call=llm_call, provenance=provenance,
+        )
+    except Exception:
+        tags = TagAssignment(tags=[slot.slot])
+    return EnrichedCluster(
+        cluster=cluster, intent=intent, slot=slot, roles=roles,
+        variables=variables, name=name, description=description, tags=tags,
+    )
+
+
+# ── Phase C — style fragment characterization + cross-type base templates
+
+
+# Chart types we'll synthesize base templates for. Each brand gets all of
+# these, even if their source deck only had column charts.
+CROSS_POLLINATION_CHART_TYPES = (
+    "column_clustered", "bar_clustered", "line", "area_stacked",
+    "pie", "doughnut",
+)
+
+# Table use patterns we'll synthesize. Differ in:
+#   - row count + density
+#   - which row/col is header
+#   - column ratios
+CROSS_POLLINATION_TABLE_USES = (
+    "agenda",         # vertical list: agenda item + description per row
+    "kpi_grid",       # numbers in cells; first row labels each KPI
+    "comparison",     # two-or-three column compare; first col is label
+    "data_dump",      # 6+ col data table with full header row
+)
+
+
+# ── C1. Characterize a chart style ────
+
+
+_C1_CHART_CHARACTERIZE_SYSTEM = """\
+You see a chart's visual style — gridlines, legend, palette, axis
+typography, data labels. Describe it as a designer would in one
+sentence. Mention what makes it distinctive (e.g. "light cyan series
+on near-invisible gridlines, no chart title").
+
+Also tag the design signals — short adjectives a downstream agent
+can use to match the style to chart-type stubs.
+
+Respond with one JSON object, no prose, no fences:
+
+{
+  "summary": "<one sentence>",
+  "design_signals": ["minimal", "data-forward", "cool palette", ...]
+}
+"""
+
+
+def phase_c_01_characterize_chart_style(
+    *, raw: RawChartStyle,
+    llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
+) -> StyleFragmentCharacterization:
+    user = json.dumps({
+        "series_palette": raw.series_palette,
+        "gridlines_major": asdict(raw.gridlines_major),
+        "legend": asdict(raw.legend),
+        "title_typography": asdict(raw.title_typography),
+        "axis_typography": asdict(raw.axis_typography),
+        "data_labels": asdict(raw.data_labels),
+        "plot_area": asdict(raw.plot_area),
+        "source_chart_type": raw.chart_type,
+    }, ensure_ascii=False, default=str)[:6000]
+    def _parse(d: dict) -> StyleFragmentCharacterization:
+        return StyleFragmentCharacterization(
+            summary=str(d.get("summary") or "")[:300],
+            design_signals=[str(s)[:40] for s in (d.get("design_signals") or [])[:8]],
+        )
+    return _call_llm_typed(
+        system=_C1_CHART_CHARACTERIZE_SYSTEM, user=user,
+        llm_call=llm_call, provenance=provenance,
+        phase="C1.chart_characterize", parse=_parse,
+    )
+
+
+def phase_c_01_characterize_table_style(
+    *, raw: RawTableStyle,
+    llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
+) -> StyleFragmentCharacterization:
+    user = json.dumps({
+        "header_row_style": asdict(raw.header_row_style),
+        "banded_rows": raw.banded_rows,
+        "band_a": raw.band_a, "band_b": raw.band_b,
+        "border_style": asdict(raw.border_style),
+        "default_font": asdict(raw.default_font),
+        "header_text_align": raw.header_text_align,
+        "first_col_header": raw.first_col_header,
+    }, ensure_ascii=False, default=str)[:4000]
+    return _call_llm_typed(
+        system=_C1_CHART_CHARACTERIZE_SYSTEM.replace("chart", "table"),
+        user=user, llm_call=llm_call, provenance=provenance,
+        phase="C1.table_characterize",
+        parse=lambda d: StyleFragmentCharacterization(
+            summary=str(d.get("summary") or "")[:300],
+            design_signals=[str(s)[:40] for s in (d.get("design_signals") or [])[:8]],
+        ),
+    )
+
+
+# ── C3. Build base templates per chart type, applying the style ────
+# These are programmatic — no LLM. Each base is a hand-crafted layout
+# skeleton for its chart type, and we MERGE the style's portable fields
+# into it.
+
+
+def _base_chart_template(
+    chart_type: str, style: RawChartStyle, style_summary: str,
+    width_in: float = 13.333, height_in: float = 7.5,
+) -> dict:
+    """Hand-crafted layout for a chart of `chart_type` styled with the
+    brand's portable formatting. Position uses ~80% of the slide,
+    centered. Title above, chart below — same as Percy Standard."""
+    alias = "chart"
+    margin = 0.5
+    title_h = 0.9
+    chart_top = margin + title_h + 0.1
+    chart_h = height_in - chart_top - margin
+    chart_w = width_in - 2 * margin
+
+    chart_body: dict[str, Any] = {
+        "chart_type": chart_type,
+        "categories": "{{" + alias + "_categories}}",
+        "series": "{{" + alias + "_series}}",
+        "position": {
+            "left_in":   "{{" + alias + "_left}}",
+            "top_in":    "{{" + alias + "_top}}",
+            "width_in":  "{{" + alias + "_width}}",
+            "height_in": "{{" + alias + "_height}}",
+        },
+        "name": f"{chart_type} chart",
+    }
+    # Portable style — baked in (NOT parameterized) so the brand stays
+    # on-brand regardless of what the agent provides at apply time.
+    if style.legend.visible is not None:
+        chart_body["legend"] = {
+            "visible": style.legend.visible,
+            "position": (style.legend.position or "BOTTOM").lower(),
+        }
+    if style.gridlines_major.show is not None:
+        chart_body["category_axis"] = {
+            "gridlines": bool(style.gridlines_major.show),
+            "gridline_color": style.gridlines_major.color,
+        }
+        chart_body["value_axis"] = {
+            "gridlines": bool(style.gridlines_major.show),
+            "gridline_color": style.gridlines_major.color,
+        }
+    # Type-specific extras
+    if chart_type == "doughnut":
+        chart_body["hole_size"] = style.hole_size if style.hole_size else 50
+    if chart_type == "bar_clustered":
+        chart_body["bar_width_ratio"] = style.bar_width_ratio if style.bar_width_ratio else 0.75
+    if chart_type in ("pie", "doughnut"):
+        chart_body["vary_colors"] = True
+
+    layout = [
+        # Title shape
+        {
+            "kind": "shape", "alias": "title",
+            "body": {
+                "geometry_preset": "rect",
+                "text_box": True,
+                "text": "{{title_text}}",
+                "position": {
+                    "left_in":   "{{title_left}}",
+                    "top_in":    "{{title_top}}",
+                    "width_in":  "{{title_width}}",
+                    "height_in": "{{title_height}}",
+                },
+                "name": "Title",
+            },
+        },
+        {
+            "kind": "chart", "alias": alias,
+            "body": chart_body,
+        },
+    ]
+    # Inputs schema — uses the standard naming conventions.
+    inputs_schema = {
+        # Title
+        "title_text":        {"type": "string",  "required": False, "default": "Chart title", "description": "Slide title"},
+        "title_left":        {"type": "number",  "required": False, "default": margin, "description": "Title left (in)"},
+        "title_top":         {"type": "number",  "required": False, "default": margin, "description": "Title top (in)"},
+        "title_width":       {"type": "number",  "required": False, "default": width_in - 2 * margin, "description": "Title width (in)"},
+        "title_height":      {"type": "number",  "required": False, "default": title_h, "description": "Title height (in)"},
+        # Chart
+        f"{alias}_categories": {"type": "list",  "required": False, "default": ["A", "B", "C", "D"],
+                                "description": "X-axis labels"},
+        f"{alias}_series":     {"type": "list",  "required": False, "default": [{"name": "Series 1", "values": [1, 2, 3, 4]}],
+                                "description": "Chart series — list of {name, values, color?}"},
+        f"{alias}_left":       {"type": "number","required": False, "default": margin},
+        f"{alias}_top":        {"type": "number","required": False, "default": chart_top},
+        f"{alias}_width":      {"type": "number","required": False, "default": chart_w},
+        f"{alias}_height":     {"type": "number","required": False, "default": chart_h},
+    }
+    return {
+        "name": f"{chart_type.replace('_', ' ').title()} Chart",
+        "description": (style_summary or "Cross-pollinated chart template")[:200],
+        "tags": ["chart", "data", "cross_pollinated"],
+        "inputs_schema": inputs_schema,
+        "layout": layout,
+        "provenance": {
+            "synthesized": True,
+            "source_chart_type": style.chart_type,
+            "source_ref": style.source_ref,
+            "portable_hash": style.portable_hash(),
+            "intended_aspect": ASPECT_LANDSCAPE_16_9,
+            "compatible_aspects": [ASPECT_LANDSCAPE_16_9, ASPECT_LANDSCAPE_4_3],
+            "transform_strategy": "proportional_scale",
+        },
+    }
+
+
+def _base_table_template(
+    use: str, style: RawTableStyle, style_summary: str,
+    width_in: float = 13.333, height_in: float = 7.5,
+) -> dict:
+    """Hand-crafted base layouts for the 4 canonical table uses."""
+    alias = "table"
+    margin = 0.5
+    title_h = 0.9
+
+    # Sane default data + dimensions per use
+    if use == "agenda":
+        default_data = [
+            ["Agenda Item", "Description"],
+            ["Item one", "Description for the first agenda item"],
+            ["Item two", "Description for the second agenda item"],
+            ["Item three", "Description for the third agenda item"],
+            ["Item four", "Description for the fourth agenda item"],
+        ]
+        col_widths = [4.0, 8.0]
+    elif use == "kpi_grid":
+        default_data = [
+            ["KPI",        "Value", "Δ"],
+            ["Revenue",    "$2.4M", "+18%"],
+            ["Margin",     "42%",   "+3 pts"],
+            ["NPS",        "62",    "+5"],
+        ]
+        col_widths = [4.0, 4.0, 4.0]
+    elif use == "comparison":
+        default_data = [
+            ["Aspect",  "Before",     "After"],
+            ["Metric 1", "$1.0M",     "$2.4M"],
+            ["Metric 2", "30%",       "42%"],
+            ["Metric 3", "Slow",      "Fast"],
+        ]
+        col_widths = [4.0, 4.0, 4.0]
+    else:  # data_dump
+        default_data = [
+            ["Date", "Region", "Product", "Units", "Revenue", "Margin"],
+            ["2025-01", "NA", "A", "1200", "$240k", "38%"],
+            ["2025-01", "EU", "A", "850",  "$170k", "41%"],
+            ["2025-02", "NA", "A", "1340", "$268k", "39%"],
+            ["2025-02", "EU", "B", "720",  "$144k", "37%"],
+            ["2025-03", "NA", "B", "1100", "$220k", "40%"],
+        ]
+        col_widths = [2.0, 1.5, 1.5, 1.5, 2.5, 2.5]
+
+    table_h = height_in - margin * 2 - title_h - 0.2
+
+    layout = [
+        # Title shape
+        {
+            "kind": "shape", "alias": "title",
+            "body": {
+                "geometry_preset": "rect", "text_box": True,
+                "text": "{{title_text}}",
+                "position": {
+                    "left_in":   "{{title_left}}",
+                    "top_in":    "{{title_top}}",
+                    "width_in":  "{{title_width}}",
+                    "height_in": "{{title_height}}",
+                },
+                "name": "Title",
+            },
+        },
+        {
+            "kind": "table", "alias": alias,
+            "body": {
+                "data": "{{" + alias + "_data}}",
+                "first_row_header": "{{" + alias + "_first_row_header}}",
+                "first_col_header": "{{" + alias + "_first_col_header}}",
+                "banded_rows": "{{" + alias + "_banded_rows}}",
+                "column_widths": col_widths,
+                "position": {
+                    "left_in":   "{{" + alias + "_left}}",
+                    "top_in":    "{{" + alias + "_top}}",
+                    "width_in":  "{{" + alias + "_width}}",
+                    "height_in": "{{" + alias + "_height}}",
+                },
+                "name": f"{use} table",
+            },
+        },
+    ]
+    inputs_schema = {
+        "title_text":   {"type": "string",  "default": f"{use.replace('_', ' ').title()}"},
+        "title_left":   {"type": "number",  "default": margin},
+        "title_top":    {"type": "number",  "default": margin},
+        "title_width":  {"type": "number",  "default": width_in - 2 * margin},
+        "title_height": {"type": "number",  "default": title_h},
+        f"{alias}_data": {"type": "list", "default": default_data,
+                          "description": "Table cells (rows x cols)"},
+        f"{alias}_first_row_header": {"type": "bool", "default": True},
+        f"{alias}_first_col_header": {"type": "bool", "default": (use == "comparison")},
+        f"{alias}_banded_rows":      {"type": "bool", "default": bool(style.banded_rows)},
+        f"{alias}_left":   {"type": "number", "default": margin},
+        f"{alias}_top":    {"type": "number", "default": margin + title_h + 0.2},
+        f"{alias}_width":  {"type": "number", "default": width_in - 2 * margin},
+        f"{alias}_height": {"type": "number", "default": table_h},
+    }
+    return {
+        "name": f"{use.replace('_', ' ').title()} Table",
+        "description": (style_summary or f"Cross-pollinated {use} table template")[:200],
+        "tags": ["table", "data", "cross_pollinated", use],
+        "inputs_schema": inputs_schema,
+        "layout": layout,
+        "provenance": {
+            "synthesized": True,
+            "table_use": use,
+            "source_ref": style.source_ref,
+            "portable_hash": style.portable_hash(),
+            "intended_aspect": ASPECT_LANDSCAPE_16_9,
+            "compatible_aspects": [ASPECT_LANDSCAPE_16_9, ASPECT_LANDSCAPE_4_3],
+            "transform_strategy": "proportional_scale",
+        },
+    }
+
+
+def phase_c_cross_pollinate_chart(
+    raw: RawChartStyle,
+    *,
+    llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
+) -> ValidatedChartStyle:
+    """Characterize one chart style, build base templates for every
+    chart type in CROSS_POLLINATION_CHART_TYPES."""
+    try:
+        chars = phase_c_01_characterize_chart_style(
+            raw=raw, llm_call=llm_call, provenance=provenance,
+        )
+    except Exception as exc:
+        log.warning("C1 chart characterize failed: %s — using defaults", exc)
+        chars = StyleFragmentCharacterization(
+            summary="Chart with brand styling",
+            design_signals=[],
+        )
+    base_templates: dict[str, dict] = {}
+    for ct in CROSS_POLLINATION_CHART_TYPES:
+        base_templates[ct] = _base_chart_template(ct, raw, chars.summary)
+    return ValidatedChartStyle(
+        raw=raw, characterization=chars,
+        validation_results=[],   # filled in by Phase D's render+critique loop
+        base_templates=base_templates,
+    )
+
+
+def phase_c_cross_pollinate_table(
+    raw: RawTableStyle,
+    *,
+    llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
+) -> ValidatedTableStyle:
+    try:
+        chars = phase_c_01_characterize_table_style(
+            raw=raw, llm_call=llm_call, provenance=provenance,
+        )
+    except Exception as exc:
+        log.warning("C1 table characterize failed: %s — using defaults", exc)
+        chars = StyleFragmentCharacterization(
+            summary="Table with brand styling", design_signals=[],
+        )
+    base_templates: dict[str, dict] = {}
+    for use in CROSS_POLLINATION_TABLE_USES:
+        base_templates[use] = _base_table_template(use, raw, chars.summary)
+    return ValidatedTableStyle(
+        raw=raw, characterization=chars,
+        validation_results=[], base_templates=base_templates,
+    )
+
+
+# ── Phase D — render + vision-critique + surgical refinement loop ────────
+
+
+def _substitute_inputs(layout: list[dict], inputs: dict[str, Any]) -> list[dict]:
+    """Walk layout, replace {{var}} references with inputs values. Same
+    semantics as the production templates._substitute. Returns a deep
+    copy so the original isn't mutated."""
+    import copy
+    layout = copy.deepcopy(layout)
+    pat_lone = re.compile(r"^\s*\{\{\s*([A-Za-z_]\w*)\s*\}\}\s*$")
+    pat_any = re.compile(r"\{\{\s*([A-Za-z_]\w*)\s*\}\}")
+
+    def sub(v: Any) -> Any:
+        if isinstance(v, str):
+            m = pat_lone.match(v)
+            if m:
+                key = m.group(1)
+                return inputs.get(key, "")
+            return pat_any.sub(lambda mm: str(inputs.get(mm.group(1), "")), v)
+        if isinstance(v, dict):
+            return {k: sub(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [sub(x) for x in v]
+        return v
+    return sub(layout)
+
+
+def _layout_to_render_elements(layout: list[dict]) -> list[dict]:
+    """Convert a substituted layout into the SVG-renderer's element shape
+    (slide_critic.render_slide_to_svg's contract). Just type + position
+    + text_runs + fill, enough for visual critique."""
+    out: list[dict] = []
+    for entry in layout:
+        kind = entry.get("kind") or ""
+        body = entry.get("body") or {}
+        pos  = body.get("position") or {}
+        type_map = {
+            "shape": "BridgeShape", "text": "BridgeText",
+            "chart": "BridgeChart", "table": "BridgeTable",
+            "freeform": "BridgeFreeform", "connector": "BridgeConnector",
+            "image-typed": "BridgeImage",
+        }
+        rec: dict[str, Any] = {
+            "type": type_map.get(kind, "BridgeShape"),
+            "position": {
+                "left_in":   float(pos.get("left_in", 0) or 0),
+                "top_in":    float(pos.get("top_in", 0) or 0),
+                "width_in":  float(pos.get("width_in", 0) or 0),
+                "height_in": float(pos.get("height_in", 0) or 0),
+            },
+        }
+        # Fill
+        fc = body.get("fill_color")
+        if fc: rec["fill"] = {"color": str(fc)}
+        # Text — either body.text (string) or body.text_runs
+        text = body.get("text")
+        runs = body.get("text_runs")
+        if isinstance(runs, list) and runs:
+            rec["text_runs"] = [
+                {"text": str(r.get("text", "")),
+                 "font_size": r.get("font_size"),
+                 "color": r.get("font_color") or r.get("color")}
+                for r in runs if isinstance(r, dict)
+            ]
+        elif isinstance(text, str) and text:
+            rec["text_runs"] = [{"text": text}]
+        # Chart
+        if rec["type"] == "BridgeChart":
+            rec["chart_type"] = body.get("chart_type", "column_clustered")
+            cats = body.get("categories", [])
+            if isinstance(cats, list): rec["chart_categories"] = [str(c) for c in cats][:12]
+            series = body.get("series", [])
+            if isinstance(series, list):
+                rec["chart_series_count"] = len(series)
+        # Table
+        if rec["type"] == "BridgeTable":
+            data = body.get("data", [])
+            if isinstance(data, list):
+                rec["table_dim"] = [len(data), len(data[0]) if data else 0]
+        out.append(rec)
+    return out
+
+
+# Edge-case input generators
+
+
+def _edge_long_text(default_inputs: dict[str, Any]) -> dict[str, Any]:
+    """Replace every string default with a 1.5x-longer version."""
+    out = dict(default_inputs)
+    for k, v in list(out.items()):
+        if isinstance(v, str):
+            # Use the same wording style, just longer to stress-test wrap
+            if "_text" in k or k.endswith("_title") or k == "title_text":
+                out[k] = (v + " " + v + " more context.")[:240]
+    return out
+
+
+def _edge_short_text(default_inputs: dict[str, Any]) -> dict[str, Any]:
+    """One-word substitute for every string default."""
+    out = dict(default_inputs)
+    for k, v in list(out.items()):
+        if isinstance(v, str) and "_text" in k:
+            out[k] = v.split()[0] if v.split() else "Hi"
+    return out
+
+
+def _edge_multi_series(default_inputs: dict[str, Any]) -> dict[str, Any]:
+    """For chart inputs, blow up to 6 series. Catches legend overflow."""
+    out = dict(default_inputs)
+    for k, v in list(out.items()):
+        if k.endswith("_series") and isinstance(v, list):
+            base = v[0] if v else {"name": "Series 1", "values": [1, 2, 3, 4]}
+            out[k] = [
+                {"name": f"Series {i+1}",
+                 "values": [(i + 1) * x for x in range(1, 5)]}
+                for i in range(6)
+            ]
+    return out
+
+
+def _default_inputs(template: dict) -> dict[str, Any]:
+    """Pull `default` from each entry in inputs_schema, with sensible
+    fallbacks for missing defaults."""
+    out: dict[str, Any] = {}
+    for k, spec in (template.get("inputs_schema") or {}).items():
+        if isinstance(spec, dict) and "default" in spec:
+            out[k] = spec["default"]
+        else:
+            out[k] = ""
+    return out
+
+
+# Vision critique — reuses slide_critic.critique_slide
+
+
+def _critique_one_render(
+    template: dict, inputs_label: str, inputs: dict[str, Any],
+    *, llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
+) -> VisionCritique:
+    """Substitute → render → critique. One LLM call (the vision pass)."""
+    from percy.agent.slide_critic import critique_slide
+    substituted = _substitute_inputs(template["layout"], inputs)
+    elements = _layout_to_render_elements(substituted)
+    instruction = (
+        f"Template '{template.get('name','')}': "
+        f"{template.get('description','')}. Inputs: {inputs_label}."
+    )
+    t0 = time.time()
+    try:
+        critique = critique_slide(
+            slide_elements=elements, instruction=instruction,
+            llm_call=llm_call,
+        )
+    except Exception as exc:
+        log.warning("D3 critique failed (%s): %s", inputs_label, exc)
+        critique = None
+    duration = int((time.time() - t0) * 1000)
+    if critique is None:
+        # Record a no-op call so provenance tracks the attempt
+        provenance.record(
+            phase=f"D3.critique[{inputs_label}]",
+            system_prompt="(critique_slide internal prompt)",
+            user_input=instruction, raw_output="", parsed_output={},
+            model="vision", duration_ms=duration, error="critique_slide raised",
+        )
+        return VisionCritique(
+            inputs_label=inputs_label,
+            scores={"overflow": 0, "collision": 0, "readability": 2, "brand": 2},
+            issues=["critique failed"], overall="fair",
+        )
+    # critique_slide doesn't return scored axes; map quality → coarse scores.
+    q = critique.overall_quality
+    score_val = {"good": 3, "fair": 2, "poor": 1}.get(q, 1)
+    issues_strs = [iss.description for iss in (critique.issues or [])]
+    provenance.record(
+        phase=f"D3.critique[{inputs_label}]",
+        system_prompt="(critique_slide internal prompt)",
+        user_input=instruction,
+        raw_output=critique.raw or "",
+        parsed_output=critique.to_dict(),
+        model="vision", duration_ms=duration,
+    )
+    return VisionCritique(
+        inputs_label=inputs_label,
+        scores={"overflow": score_val, "collision": score_val,
+                "readability": score_val, "brand": score_val},
+        issues=issues_strs[:8],
+        overall=("pass" if q == "good" else "fair" if q == "fair" else "fail"),
+    )
+
+
+# D4 — surgical refinement
+
+
+_D4_SURGEON_SYSTEM = """\
+A template was rendered and a vision critic flagged these issues.
+Propose specific, MINIMAL patches to the template's inputs_schema
+defaults or layout values. Don't change the layout STRUCTURE — just
+tune sizes / autofits / paddings / default text lengths.
+
+Each patch:
+  * path: dotted JSON path within the template
+    (e.g. "layout[0].body.position.height_in",
+          "inputs_schema.title_height.default")
+  * new_value: the new value
+
+Only propose patches that directly fix the cited issues. Don't
+guess. If the issues are unfixable without restructuring, return
+an empty patches list.
+
+Respond with one JSON object, no prose, no fences:
+
+{
+  "patches": [
+    {"path": "...", "new_value": ...},
+    ...
+  ]
+}
+"""
+
+
+def phase_d_04_surgeon(
+    *, template: dict, issues: list[str],
+    llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
+) -> list[TemplatePatch]:
+    user = json.dumps({
+        "template_name": template.get("name", ""),
+        "inputs_schema_keys": list((template.get("inputs_schema") or {}).keys()),
+        "layout_element_count": len(template.get("layout") or []),
+        "issues": issues,
+    }, ensure_ascii=False, default=str)[:6000]
+    def _parse(d: dict) -> list[TemplatePatch]:
+        raw = d.get("patches") or []
+        out: list[TemplatePatch] = []
+        for p in raw[:6]:
+            if not isinstance(p, dict): continue
+            path = str(p.get("path") or "").strip()
+            if not path: continue
+            out.append(TemplatePatch(path=path, new_value=p.get("new_value")))
+        return out
+    try:
+        return _call_llm_typed(
+            system=_D4_SURGEON_SYSTEM, user=user,
+            llm_call=llm_call, provenance=provenance,
+            phase="D4.surgeon", parse=_parse,
+        )
+    except Exception as exc:
+        log.warning("D4 surgeon failed: %s", exc)
+        return []
+
+
+def _apply_patch(template: dict, patch: TemplatePatch) -> None:
+    """In-place apply. Supports dotted paths + numeric indices via [n]."""
+    parts = re.findall(r"[^.\[\]]+|\[\d+\]", patch.path)
+    cursor: Any = template
+    for p in parts[:-1]:
+        if p.startswith("[") and p.endswith("]"):
+            idx = int(p[1:-1])
+            cursor = cursor[idx]
+        else:
+            cursor = cursor[p]
+    last = parts[-1]
+    if last.startswith("[") and last.endswith("]"):
+        cursor[int(last[1:-1])] = patch.new_value
+    else:
+        cursor[last] = patch.new_value
+
+
+def phase_d_validate_template(
+    template: dict,
+    *,
+    llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
+    max_iterations: int = 2,
+) -> TemplateValidationResult:
+    """The render → critique → surgical-patch loop. Returns the (possibly
+    patched) template + per-iteration critiques."""
+    import copy
+    tpl = copy.deepcopy(template)
+    all_critiques: list[VisionCritique] = []
+    renders: list[RenderResult] = []
+    final_conf = 1.0
+
+    for iteration in range(max_iterations + 1):
+        # Three input variants
+        defaults = _default_inputs(tpl)
+        long_inputs = _edge_long_text(defaults)
+        # Multi-series only useful for charts
+        is_chart_tpl = any(e.get("kind") == "chart" for e in (tpl.get("layout") or []))
+
+        variants: list[tuple[str, dict[str, Any]]] = [
+            ("default", defaults), ("long_text", long_inputs),
+        ]
+        if is_chart_tpl:
+            variants.append(("multi_series", _edge_multi_series(defaults)))
+
+        critiques: list[VisionCritique] = []
+        for label, inputs in variants:
+            renders.append(RenderResult(
+                inputs_label=label, image_path="(svg-in-memory)",
+                elements_rendered=len(tpl.get("layout") or []),
+            ))
+            c = _critique_one_render(
+                tpl, label, inputs, llm_call=llm_call, provenance=provenance,
+            )
+            critiques.append(c)
+        all_critiques.extend(critiques)
+
+        # If all variants pass, we're done
+        if all(c.overall == "pass" for c in critiques):
+            final_conf = 1.0
+            break
+
+        # Otherwise, run surgeon with the aggregated issues
+        if iteration < max_iterations:
+            agg_issues = []
+            for c in critiques:
+                agg_issues.extend(f"[{c.inputs_label}] {iss}" for iss in c.issues)
+            patches = phase_d_04_surgeon(
+                template=tpl, issues=agg_issues[:12],
+                llm_call=llm_call, provenance=provenance,
+            )
+            for patch in patches:
+                try:
+                    _apply_patch(tpl, patch)
+                except Exception as exc:
+                    log.debug("D4 patch failed %s: %s", patch.path, exc)
+            final_conf *= 0.75
+        else:
+            # Last iteration — accept with lowered confidence
+            final_conf *= 0.5
+
+    return TemplateValidationResult(
+        template=tpl,
+        iterations=iteration + 1,
+        renders=renders,
+        critiques=all_critiques,
+        final_confidence=round(final_conf, 3),
+    )
+
+
+# ── Phase B → template dict ───────────────────────────────────────────────
+
+
+def enriched_cluster_to_template(ec: EnrichedCluster) -> dict:
+    """Convert a Phase B EnrichedCluster into a template dict that Phase D
+    can validate + that templates.apply_template can render.
+
+    Uses the STANDARD_*_INPUTS naming conventions. Geometry comes from
+    the prototype's positions; text content comes from each variable's
+    sample / default.
+
+    The element_idx-keyed roles determine which inputs each element
+    gets (text + geometry for content; geometry-only for decorative)."""
+    import re as _re
+    proto = ec.cluster.prototype.slide
+    proto_elements = list(getattr(proto, "elements", None) or [])
+    slide_w = float(getattr(proto, "width", 13.333))
+    slide_h = float(getattr(proto, "height", 7.5))
+
+    layout: list[dict] = []
+    inputs_schema: dict[str, dict] = {}
+
+    # Variable specs keyed by element index for quick lookup
+    var_by_idx: dict[int, VariableSpec] = {v.element_idx: v for v in ec.variables}
+
+    for i, el in enumerate(proto_elements):
+        pos = getattr(el, "position", None)
+        if not pos: continue
+        et = getattr(el, "element_type", el.__class__.__name__)
+        role = ec.roles.roles.get(i, "decorative")
+
+        # Generate alias from role + idx so the agent sees readable names
+        # (preferred over the prototype's raw shape name)
+        alias_base = _re.sub(r"\W+", "_", role).lower() or "el"
+        # Disambiguate when multiple elements share a role (KPI tiles)
+        existing = sum(1 for x in layout if x["alias"].startswith(alias_base))
+        alias = f"{alias_base}_{existing+1}" if existing > 0 else alias_base
+
+        # Geometry inputs — every element
+        for axis, var, friendly in (
+            ("left_in",   "left",   "Left edge (inches)"),
+            ("top_in",    "top",    "Top edge (inches)"),
+            ("width_in",  "width",  "Width (inches)"),
+            ("height_in", "height", "Height (inches)"),
+        ):
+            default_val = round(float(getattr(pos, var, 0) or 0), 3)
+            inputs_schema[f"{alias}_{var}"] = {
+                "type": "number", "required": False,
+                "default": default_val,
+                "description": f"{alias}: {friendly}",
+            }
+
+        body: dict[str, Any] = {
+            "position": {
+                "left_in":   "{{" + alias + "_left}}",
+                "top_in":    "{{" + alias + "_top}}",
+                "width_in":  "{{" + alias + "_width}}",
+                "height_in": "{{" + alias + "_height}}",
+            },
+            "name": alias.replace("_", " ").title(),
+        }
+
+        # Type-specific body content
+        kind_map = {
+            "BridgeShape": "shape", "BridgeText": "text",
+            "BridgeChart": "chart", "BridgeTable": "table",
+            "BridgeFreeform": "freeform", "BridgeConnector": "connector",
+            "BridgeImage": "image-typed", "BridgeGroup": "live-group",
+        }
+        kind = kind_map.get(et, "shape")
+
+        # Shape preset + fill
+        if et == "BridgeShape":
+            shape_id = getattr(el, "shape_identification", None)
+            body["geometry_preset"] = (shape_id.geometry_preset if shape_id else None) or "rect"
+            fill = getattr(el, "fill", None)
+            if fill:
+                col = getattr(fill, "color", None)
+                hex_val = _hex(col)
+                if hex_val:
+                    inputs_schema[f"{alias}_fill_color"] = {
+                        "type": "string", "required": False,
+                        "default": hex_val,
+                        "description": f"{alias}: fill color (hex)",
+                    }
+                    body["fill_color"] = "{{" + alias + "_fill_color}}"
+
+        # Text content for content-bearing roles
+        content_roles = {"title", "subtitle", "kicker", "hero_number",
+                         "body", "bullet_item", "caption", "footer",
+                         "source_citation"}
+        if role in content_roles:
+            var = var_by_idx.get(i)
+            sample_text = ""
+            if var and var.samples: sample_text = var.samples[0]
+            else: sample_text = _first_text(el)
+            # Use the variable's INPUT NAME (semantic) when it's role-derived,
+            # else generic <alias>_text. Prefer semantic.
+            txt_input = var.input_name if var and var.input_name else f"{alias}_text"
+            txt_input = _re.sub(r"\W+", "_", txt_input).lower()[:40]
+            inputs_schema[txt_input] = {
+                "type": "string", "required": False,
+                "default": sample_text[:300],
+                "description": f"{alias}: text content",
+            }
+            if kind == "shape":
+                body["text_box"] = True
+            body["text"] = "{{" + txt_input + "}}"
+
+            # Font size — from the prototype's first run
+            for run in _iter_runs(el):
+                fs = getattr(run, "font_size", None)
+                if fs:
+                    fs_input = f"{alias}_font_size"
+                    inputs_schema[fs_input] = {
+                        "type": "number", "required": False,
+                        "default": round(float(fs), 1),
+                        "description": f"{alias}: font size (pt)",
+                    }
+                    # Note: we don't reference this in the body — the
+                    # studio create_* endpoints derive it from the runs
+                    # that the apply step constructs. Keeping the input
+                    # available so the agent can override at apply.
+                    break
+
+        # Chart-specific inputs (from STANDARD_CHART_INPUTS)
+        if et == "BridgeChart":
+            inputs_schema[f"{alias}_categories"] = {
+                "type": "list", "required": False,
+                "default": list(getattr(el.categories, "categories", []) or [])[:12],
+            }
+            body["categories"] = "{{" + alias + "_categories}}"
+            ser_default = []
+            for s in (getattr(el, "series", None) or []):
+                ser_default.append({
+                    "name": getattr(s, "name", None) or "Series",
+                    "values": list(getattr(s, "values", None) or [])[:12],
+                })
+            inputs_schema[f"{alias}_series"] = {
+                "type": "list", "required": False, "default": ser_default,
+            }
+            body["series"] = "{{" + alias + "_series}}"
+            body["chart_type"] = getattr(el, "chart_type", "column_clustered")
+
+        # Table-specific inputs
+        if et == "BridgeTable":
+            data = getattr(el, "data", None) or []
+            inputs_schema[f"{alias}_data"] = {
+                "type": "list", "required": False,
+                "default": [[str(c) for c in row] for row in data[:10]],
+            }
+            body["data"] = "{{" + alias + "_data}}"
+            tp = getattr(el, "table_properties", None)
+            if tp:
+                body["first_row_header"] = bool(getattr(tp, "first_row_header", False))
+                body["banded_rows"] = bool(getattr(tp, "banded_rows", False))
+
+        layout.append({"kind": kind, "alias": alias, "body": body})
+
+    return {
+        "name": ec.name.chosen,
+        "description": ec.description.description,
+        "tags": list(ec.tags.tags) or [ec.slot.slot],
+        "inputs_schema": inputs_schema,
+        "layout": layout,
+        "provenance": {
+            "synthesized": False,
+            "slot": ec.slot.slot,
+            "intent": ec.intent.intent,
+            "intended_aspect": classify_aspect(slide_w, slide_h),
+            "intended_width_in": slide_w,
+            "intended_height_in": slide_h,
+            "compatible_aspects": [classify_aspect(slide_w, slide_h)],
+            "transform_strategy": "proportional_scale",
+            "cluster_size": ec.cluster.size,
+            "source_refs": list({m.ref_id for m in ec.cluster.members}),
+        },
+    }
+
+
+# ── Phase E — cross-template consolidation ────────────────────────────────
+
+
+_E1_DEDUP_SYSTEM = """\
+You see a list of templates with name, description, slot taxonomy,
+and tags. Identify groups of 2+ templates that are NEAR-DUPLICATES
+— same intent, slightly different layouts — and should merge into
+ONE parametric template with a new input explaining the variance
+(usually `accent_color`, `direction`, or a small enum).
+
+Bias toward NOT merging. Two templates with the same slot but
+genuinely different layouts (e.g. one with image, one without)
+should stay separate. Only merge when the variance is purely
+cosmetic.
+
+Respond with one JSON object, no prose, no fences:
+
+{
+  "merge_groups": [
+    {
+      "members": ["tpl_id_a", "tpl_id_b"],
+      "variance_description": "Different accent color",
+      "proposed_input": "accent_color",
+      "proposed_input_values": ["#7DA1CC", "#6FA17A"]
+    }
+  ]
+}
+"""
+
+
+def phase_e_01_dedup(
+    *, templates: list[dict],
+    llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
+) -> list[MergeGroup]:
+    compact = [
+        {"id": f"tpl_{i}",
+         "name": t.get("name", ""),
+         "description": t.get("description", "")[:160],
+         "slot": (t.get("provenance") or {}).get("slot", ""),
+         "tags": t.get("tags", []),
+         "element_count": len(t.get("layout") or [])}
+        for i, t in enumerate(templates)
+    ]
+    user = json.dumps({"templates": compact}, ensure_ascii=False, default=str)[:12000]
+    def _parse(d: dict) -> list[MergeGroup]:
+        groups: list[MergeGroup] = []
+        for g in (d.get("merge_groups") or [])[:8]:
+            if not isinstance(g, dict): continue
+            members = [str(m) for m in (g.get("members") or [])]
+            if len(members) < 2: continue
+            groups.append(MergeGroup(
+                member_ids=members,
+                variance_description=str(g.get("variance_description") or "")[:160],
+                proposed_input=str(g.get("proposed_input") or "variant")[:30],
+                proposed_input_values=[str(v)[:40] for v in (g.get("proposed_input_values") or [])[:6]],
+            ))
+        return groups
+    try:
+        return _call_llm_typed(
+            system=_E1_DEDUP_SYSTEM, user=user,
+            llm_call=llm_call, provenance=provenance,
+            phase="E1.dedup", parse=_parse,
+        )
+    except Exception as exc:
+        log.warning("E1 dedup failed (no merges this run): %s", exc)
+        return []
+
+
+_E3_RENAME_SYSTEM = """\
+You see a list of finished templates. Rename any whose names a
+downstream agent might confuse with another (too-similar adjectives,
+overlapping verbs). Each name should be uniquely identifiable in
+one phrase.
+
+Bias toward NOT renaming. Only suggest a rename if two names are
+genuinely confusable in a quick scan.
+
+Respond with one JSON object, no prose, no fences:
+
+{
+  "renames": {
+    "tpl_id_a": "New Distinct Name",
+    "tpl_id_b": "Another Distinct Name"
+  }
+}
+"""
+
+
+def phase_e_03_rename_distinctness(
+    *, templates: list[dict],
+    llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
+) -> RenameMap:
+    compact = [
+        {"id": f"tpl_{i}", "name": t.get("name", ""),
+         "description": t.get("description", "")[:120]}
+        for i, t in enumerate(templates)
+    ]
+    user = json.dumps({"templates": compact}, ensure_ascii=False)[:8000]
+    def _parse(d: dict) -> RenameMap:
+        return RenameMap(renames={k: str(v)[:80] for k, v in
+                                    (d.get("renames") or {}).items()})
+    try:
+        return _call_llm_typed(
+            system=_E3_RENAME_SYSTEM, user=user,
+            llm_call=llm_call, provenance=provenance,
+            phase="E3.rename", parse=_parse,
+        )
+    except Exception as exc:
+        log.warning("E3 rename failed: %s", exc)
+        return RenameMap()
+
+
+def phase_e_04_coverage_audit(templates: list[dict]) -> list[str]:
+    """Programmatic — which canonical slots are NOT covered by any
+    template? Returns the list of missing slot names."""
+    seen = set()
+    for t in templates:
+        slot = (t.get("provenance") or {}).get("slot")
+        if slot: seen.add(slot)
+        tags = t.get("tags") or []
+        for tag in tags:
+            if tag in SLOT_TAXONOMY: seen.add(tag)
+    return [s for s in SLOT_TAXONOMY if s not in seen]
+
+
+# ── Phase F — synthesize stubs for missing slot types ─────────────────────
+
+
+_F1_SYNTHESIZE_SYSTEM = """\
+A brand has no template for the canonical slot type `<slot>`. Given
+their visual style + existing templates (for layout density inspiration),
+synthesize a stub template by writing the inputs_schema and layout
+JSON directly.
+
+Required conventions:
+  * Layout entries: {"kind": "shape"|"text"|..., "alias": "<snake_case>",
+                     "body": {position: {left_in, top_in, width_in, height_in},
+                              text: "{{<alias>_text}}", ...}}
+  * Every element MUST have these geometry inputs:
+      <alias>_left, _top, _width, _height (type: number, default: from your layout)
+  * Text elements MUST also have a `<role>_text` input
+    (e.g. title_text, body_text — use the canonical role name, not the alias)
+  * Slide canvas: 13.333 × 7.5 inches (landscape 16:9)
+  * Use the brand's palette colors verbatim — don't invent new hex values
+
+Respond with one JSON object, no prose, no fences:
+
+{
+  "name": "Short title-case name",
+  "description": "One-sentence description for the template card",
+  "tags": ["tag1", "tag2"],
+  "inputs_schema": { ... full schema, defaults included ... },
+  "layout": [ ... ]
+}
+"""
+
+
+def phase_f_synthesize_slot(
+    *, slot: str, style_profile: StyleProfile,
+    existing_templates: list[dict],
+    llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
+) -> dict | None:
+    """One LLM call → one synthesized template. Returns the template
+    dict (not yet validated; pass to Phase D next)."""
+    # Compact brand context
+    palette_compact = [
+        {"hex": c.hex, "role": c.role} for c in style_profile.palette.colors[:8]
+    ]
+    fonts_compact = [
+        {"name": f.name, "role": f.role} for f in style_profile.fonts[:4]
+    ]
+    sample_existing = [
+        {"name": t.get("name", ""),
+         "slot": (t.get("provenance") or {}).get("slot", ""),
+         "element_count": len(t.get("layout") or [])}
+        for t in existing_templates[:5]
+    ]
+    user = json.dumps({
+        "slot": slot,
+        "palette": palette_compact, "fonts": fonts_compact,
+        "existing_templates_sample": sample_existing,
+    }, ensure_ascii=False, default=str)[:6000]
+    def _parse(d: dict) -> dict:
+        # Stamp provenance
+        d["provenance"] = {
+            "synthesized": True, "slot": slot,
+            "intended_aspect": ASPECT_LANDSCAPE_16_9,
+            "intended_width_in": 13.333, "intended_height_in": 7.5,
+            "compatible_aspects": [ASPECT_LANDSCAPE_16_9],
+            "transform_strategy": "proportional_scale",
+        }
+        return d
+    try:
+        return _call_llm_typed(
+            system=_F1_SYNTHESIZE_SYSTEM, user=user,
+            llm_call=llm_call, provenance=provenance,
+            phase=f"F1.synthesize[{slot}]", parse=_parse,
+        )
+    except Exception as exc:
+        log.warning("F1 synthesize[%s] failed: %s", slot, exc)
+        return None
+
+
+# ── Phase G — final coherence check (lightweight) ─────────────────────────
+
+
+_G1_COHERENCE_SYSTEM = """\
+You see the final set of templates that comprise this brand's
+Template Set. Does it feel like ONE designer made it? Flag any
+template that feels off-brand — different type system, mismatched
+palette, inconsistent spacing — for human review.
+
+Respond with one JSON object, no prose, no fences:
+
+{
+  "coherence_score": 0.0 to 1.0,
+  "off_brand_ids": ["tpl_id_a", ...],
+  "notes": "<one short clause>"
+}
+"""
+
+
+def phase_g_01_coherence(
+    *, templates: list[dict],
+    llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
+) -> dict[str, Any]:
+    compact = [
+        {"id": f"tpl_{i}", "name": t.get("name", ""),
+         "description": t.get("description", "")[:140],
+         "slot": (t.get("provenance") or {}).get("slot", ""),
+         "synthesized": (t.get("provenance") or {}).get("synthesized", False)}
+        for i, t in enumerate(templates)
+    ]
+    user = json.dumps({"templates": compact}, ensure_ascii=False)[:8000]
+    try:
+        return _call_llm_typed(
+            system=_G1_COHERENCE_SYSTEM, user=user,
+            llm_call=llm_call, provenance=provenance,
+            phase="G1.coherence",
+            parse=lambda d: {
+                "coherence_score": float(d.get("coherence_score") or 0.5),
+                "off_brand_ids": [str(x) for x in (d.get("off_brand_ids") or [])][:8],
+                "notes": str(d.get("notes") or "")[:200],
+            },
+        )
+    except Exception as exc:
+        log.warning("G1 coherence failed: %s", exc)
+        return {"coherence_score": 0.5, "off_brand_ids": [], "notes": "G1 call failed"}
+
+
 # ── Top-level orchestrator ────────────────────────────────────────────────
 
 
@@ -1196,20 +2796,138 @@ def induce_templates_v3(
     log.info("  Phase A — chart style fragments: %d, table style fragments: %d",
              len(raw_chart_styles), len(raw_table_styles))
 
-    # ── Phase B-G — STUBS (filled in by subsequent commits) ──
-    enriched: list[EnrichedCluster] = []   # TODO Phase B
-    chart_styles: list[ValidatedChartStyle] = [
-        ValidatedChartStyle(raw=rs,
-                            characterization=StyleFragmentCharacterization(summary=""))
-        for rs in raw_chart_styles
-    ]   # TODO Phase C
-    table_styles: list[ValidatedTableStyle] = [
-        ValidatedTableStyle(raw=rs,
-                            characterization=StyleFragmentCharacterization(summary=""))
-        for rs in raw_table_styles
-    ]   # TODO Phase C
-    final_templates: list[dict] = []   # TODO Phase D + E
-    coverage_gaps: list[CoverageGap] = []   # TODO Phase F
+    # ── Phase B — semantic enrichment per cluster ──
+    enriched: list[EnrichedCluster] = []
+    max_clusters_to_enrich = 20   # cap LLM cost on huge decks
+    for cluster in clusters[:max_clusters_to_enrich]:
+        if cluster.size < 1: continue
+        ec = phase_b_enrich_cluster(
+            cluster, llm_call=llm_call, provenance=prov,
+        )
+        if ec:
+            enriched.append(ec)
+            log.info("  Phase B — %r (slot=%s, %d vars, %d calls so far)",
+                     ec.name.chosen, ec.slot.slot,
+                     len(ec.variables), prov.total_calls)
+    # ── Phase C — style fragment characterization + cross-type bases ──
+    chart_styles: list[ValidatedChartStyle] = []
+    for rcs in raw_chart_styles[:6]:    # cap LLM cost
+        vcs = phase_c_cross_pollinate_chart(
+            rcs, llm_call=llm_call, provenance=prov,
+        )
+        chart_styles.append(vcs)
+        log.info("  Phase C — chart style fragment %s: %d base templates",
+                 rcs.portable_hash(), len(vcs.base_templates))
+    table_styles: list[ValidatedTableStyle] = []
+    for rts in raw_table_styles[:4]:
+        vts = phase_c_cross_pollinate_table(
+            rts, llm_call=llm_call, provenance=prov,
+        )
+        table_styles.append(vts)
+        log.info("  Phase C — table style fragment %s: %d base templates",
+                 rts.portable_hash(), len(vts.base_templates))
+    # ── Convert Phase B clusters → template dicts ──
+    cluster_templates: list[dict] = []
+    for ec in enriched:
+        try:
+            tpl = enriched_cluster_to_template(ec)
+            cluster_templates.append(tpl)
+        except Exception as exc:
+            log.warning("cluster→template failed for %r: %s",
+                         ec.name.chosen, exc)
+
+    # ── Pull in cross-pollinated chart/table base templates ──
+    # We add only the BEST chart style fragment's base templates (the
+    # first one — highest-usage-count by extraction order). Multiple
+    # fragments produce visually inconsistent sets.
+    base_templates: list[dict] = []
+    if chart_styles:
+        for ct, tpl in chart_styles[0].base_templates.items():
+            base_templates.append(tpl)
+    if table_styles:
+        for use, tpl in table_styles[0].base_templates.items():
+            base_templates.append(tpl)
+    log.info("  Phase C — %d cross-pollinated base templates added",
+             len(base_templates))
+
+    # ── Phase D — validation loop ──
+    validated: list[dict] = []
+    candidate_pool = cluster_templates + base_templates
+    for i, tpl in enumerate(candidate_pool):
+        try:
+            result = phase_d_validate_template(
+                tpl, llm_call=llm_call, provenance=prov,
+                max_iterations=1,    # one refinement attempt per template
+            )
+            t_out = result.template
+            t_out.setdefault("provenance", {})["validation_confidence"] = result.final_confidence
+            validated.append(t_out)
+            log.info("  Phase D — %r → confidence %.2f (%d critiques)",
+                     t_out.get("name"), result.final_confidence,
+                     len(result.critiques))
+        except Exception as exc:
+            log.warning("  Phase D — %r failed: %s", tpl.get("name"), exc)
+            validated.append(tpl)
+
+    # ── Phase E — cross-template consolidation ──
+    merge_groups = phase_e_01_dedup(
+        templates=validated, llm_call=llm_call, provenance=prov,
+    )
+    if merge_groups:
+        log.info("  Phase E — %d merge group(s) proposed (informational only this pass)",
+                 len(merge_groups))
+    rename_map = phase_e_03_rename_distinctness(
+        templates=validated, llm_call=llm_call, provenance=prov,
+    )
+    for k, new_name in rename_map.renames.items():
+        try:
+            idx = int(k.replace("tpl_", ""))
+            if 0 <= idx < len(validated):
+                old = validated[idx].get("name")
+                validated[idx]["name"] = new_name
+                log.info("  Phase E — renamed %r → %r", old, new_name)
+        except (ValueError, IndexError):
+            continue
+
+    # Coverage audit (programmatic)
+    missing_slots = phase_e_04_coverage_audit(validated)
+    log.info("  Phase E — %d missing slot types: %s",
+             len(missing_slots), missing_slots[:6])
+
+    # ── Phase F — synthesize stubs for missing slot types ──
+    coverage_gaps: list[CoverageGap] = []
+    priority_slots = (
+        "cover", "hero_metric", "kpi_grid", "narrative", "close",
+        "divider", "chart", "table", "bulleted_list", "comparison",
+    )
+    for slot in missing_slots:
+        if slot not in priority_slots:    # synthesize only the high-value ones
+            coverage_gaps.append(CoverageGap(slot=slot, synthesized=False))
+            continue
+        synth = phase_f_synthesize_slot(
+            slot=slot, style_profile=style_profile,
+            existing_templates=validated,
+            llm_call=llm_call, provenance=prov,
+        )
+        if synth:
+            validated.append(synth)
+            coverage_gaps.append(CoverageGap(
+                slot=slot, synthesized=True, synthesized_template=synth,
+            ))
+            log.info("  Phase F — synthesized stub for slot %r", slot)
+        else:
+            coverage_gaps.append(CoverageGap(slot=slot, synthesized=False))
+
+    # ── Phase G — coherence pass ──
+    coherence = phase_g_01_coherence(
+        templates=validated, llm_call=llm_call, provenance=prov,
+    )
+    log.info("  Phase G — coherence score %.2f, %d off-brand flagged: %s",
+             coherence.get("coherence_score", 0),
+             len(coherence.get("off_brand_ids", [])),
+             coherence.get("notes", "")[:140])
+
+    final_templates = validated
 
     log.info("v3 induction complete (id=%s, calls=%d, cost=$%.4f)",
              prov.induction_id, prov.total_calls, prov.total_cost_usd)

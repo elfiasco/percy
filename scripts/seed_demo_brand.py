@@ -66,10 +66,10 @@ def main() -> int:
                     help="Cap on candidates the inducer asks the LLM about")
     p.add_argument("--no-llm", action="store_true",
                     help="Skip LLM polish during induction (faster + free, lower quality names)")
-    p.add_argument("--induction-mode", choices=["cluster", "agent"], default="cluster",
+    p.add_argument("--induction-mode", choices=["cluster", "agent", "v3"], default="cluster",
                     help=("cluster = v1 (deterministic fingerprint + LLM polish). "
-                          "agent = v2 (two-phase agentic: per-slide discovery + per-want authoring with full Bridge JSON). "
-                          "agent mode produces higher-fidelity templates but uses more LLM tokens."))
+                          "agent   = v2 (two-phase agentic: per-slide discovery + per-want authoring with full Bridge JSON). "
+                          "v3      = maximally decomposed pipeline (~270 LLM calls/brand; see docs/template-induction-v3.md)."))
     args = p.parse_args()
 
     doc_path = Path(args.doc)
@@ -156,7 +156,47 @@ def main() -> int:
         except Exception as exc:
             print(f"   LLM: disabled ({exc})")
 
-    if args.induction_mode == "agent":
+    v3_result = None
+    if args.induction_mode == "v3":
+        if llm_call is None:
+            print("   v3 mode requires LLM — falling back to cluster mode")
+            from percy.agent import template_induction
+            candidates = template_induction.induce_templates(
+                {ref["id"]: doc}, llm_call=None,
+                max_candidates=args.max_candidates,
+            )
+        else:
+            from percy.agent import template_induction_v3 as _v3
+            v3_result = _v3.induce_templates_agentic if False else _v3.induce_templates_v3
+            v3_result = v3_result({ref["id"]: doc}, llm_call=llm_call)
+            # Convert v3's final_templates into the candidate-shape the
+            # downstream accept loop expects (kind/confidence/name/etc.)
+            candidates = []
+            for i, tpl in enumerate(v3_result.final_templates):
+                provenance = tpl.get("provenance") or {}
+                conf = provenance.get("validation_confidence", 0.8)
+                kind = "slide"   # v3 produces full-slide templates
+                # Identify chart/table-only by checking layout content
+                layout = tpl.get("layout") or []
+                if len(layout) == 1 and layout[0].get("kind") in ("chart", "table"):
+                    kind = "element"
+                candidates.append({
+                    "kind": kind, "name": tpl.get("name", ""),
+                    "description": tpl.get("description", ""),
+                    "tags": tpl.get("tags") or [],
+                    "inputs_schema": tpl.get("inputs_schema") or {},
+                    "sample_inputs": {
+                        k: v.get("default") for k, v in (tpl.get("inputs_schema") or {}).items()
+                        if isinstance(v, dict) and "default" in v
+                    },
+                    "layout": layout,
+                    "slide_script": None,
+                    "connects": {},
+                    "provenance": provenance,
+                    "confidence": float(conf),
+                })
+            print(f"   v3 summary: {v3_result.to_dict()}")
+    elif args.induction_mode == "agent":
         if llm_call is None:
             print("   agent mode requires LLM — falling back to cluster mode")
             from percy.agent import template_induction
@@ -184,6 +224,27 @@ def main() -> int:
     banner(f"4. Accepting top {args.accept_count}")
     if args.induction_mode == "agent":
         from percy.agent import template_induction_v2 as _accept_mod
+    elif args.induction_mode == "v3":
+        # v3 candidates are already full Template-shaped dicts; we save
+        # them directly via the agent_templates module.
+        from percy.agent import templates as _tpls_mod
+        class _AcceptShim:
+            @staticmethod
+            def accept_candidate(c: dict, category: str) -> str:
+                t = _tpls_mod.Template(
+                    id="", name=c.get("name", "Unnamed"),
+                    description=c.get("description", ""),
+                    category=category,
+                    tags=list(c.get("tags") or []),
+                    inputs_schema=dict(c.get("inputs_schema") or {}),
+                    sample_inputs=dict(c.get("sample_inputs") or {}),
+                    layout=list(c.get("layout") or []),
+                    slide_script=c.get("slide_script"),
+                    connects=dict(c.get("connects") or {}),
+                    is_builtin=False,
+                )
+                return _tpls_mod.save_template(t)
+        _accept_mod = _AcceptShim()
     else:
         from percy.agent import template_induction as _accept_mod
     accepted = []
