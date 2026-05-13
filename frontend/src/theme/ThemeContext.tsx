@@ -9,12 +9,13 @@ function readInitialTheme(): ThemeMode {
     const v = localStorage.getItem(STORAGE_KEY)
     if (v === "light" || v === "dark") return v
   } catch { /* ignore */ }
-  // No saved preference: respect OS preference, default to dark (Gatsby evening).
+  // No saved preference: default to light so the Powder palette
+  // (warm cream + cobalt) is the first impression.
   if (typeof window !== "undefined" && window.matchMedia) {
-    const prefersLight = window.matchMedia("(prefers-color-scheme: light)").matches
-    return prefersLight ? "light" : "dark"
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches
+    return prefersDark ? "dark" : "light"
   }
-  return "dark"
+  return "light"
 }
 
 function applyTheme(mode: ThemeMode) {

@@ -139,12 +139,12 @@ export default function Dashboard() {
             </div>
             <div className="flex items-center gap-2">
               <Link to="/projects"
-                className="text-[11px] tracking-[0.14em] uppercase text-muted hover:text-paper border border-edge px-3 py-2 hover:bg-paper/5 transition-colors">
+                className="text-[11px] tracking-[0.14em] uppercase text-muted hover:text-paper border border-edge px-3 py-2 hover:bg-paper/5 transition-colors rounded-md">
                 Browse all projects
               </Link>
               <button
                 onClick={() => navigate(`/projects?new=1`)}
-                className="text-[11px] tracking-[0.14em] uppercase bg-paper text-ink hover:bg-paper/90 px-4 py-2 transition-colors font-medium"
+                className="text-[11px] tracking-[0.14em] uppercase bg-champagne text-white hover:brightness-105 px-4 py-2 transition-all font-semibold rounded-md shadow-sm hover:shadow-md hover:-translate-y-0.5"
               >
                 + New project
               </button>
@@ -154,7 +154,7 @@ export default function Dashboard() {
           {error && <div className="text-[11px] text-bad bg-bad/10 border border-bad/30 px-3 py-2">{error}</div>}
 
           {/* ── workspace stats ─────────────────────────────────────────── */}
-          <section className="grid grid-cols-2 md:grid-cols-4 gap-0 border border-edge">
+          <section className="grid grid-cols-2 md:grid-cols-4 gap-0 border border-edge rounded-[10px] overflow-hidden bg-surface shadow-sm">
             <Stat label="Projects"          value={stats.total} />
             <Stat label="With source"        value={stats.onboarded} hint={stats.total > 0 ? `${Math.round(100 * stats.onboarded / Math.max(1, stats.total))}%` : undefined} />
             <Stat label="Edited last 7 days" value={stats.lastWeek} />
@@ -173,7 +173,7 @@ export default function Dashboard() {
               }
             />
             {recent.length === 0 ? (
-              <div className="border border-edge p-8 text-center">
+              <div className="border border-edge p-8 text-center rounded-[10px] bg-surface shadow-sm">
                 <Logo size={36} className="mb-3 mx-auto opacity-40" />
                 <div className="text-[13px] text-muted">No projects yet.</div>
                 <Link to="/projects?new=1" className="inline-block mt-4 text-[11px] tracking-[0.14em] uppercase bg-paper text-ink hover:bg-paper/90 px-4 py-2 transition-colors font-medium">
@@ -317,7 +317,7 @@ function RecentCard({ project }: { project: Project }) {
   return (
     <Link
       to={`/studio/${project.id}`}
-      className="border border-edge hover:border-paper/30 transition-colors block group"
+      className="border border-edge hover:border-champagne/40 transition-all block group rounded-[10px] overflow-hidden bg-surface shadow-sm hover:shadow-md hover:-translate-y-0.5"
     >
       <div className="aspect-video bg-ink flex items-center justify-center text-muted/30 border-b border-edge group-hover:text-muted/60 transition-colors">
         <span className="text-[28px] tracking-widest">{project.doc_source ? "▢" : "○"}</span>
@@ -388,12 +388,12 @@ function DashboardTopBar({
         <WorkspaceSearchTrigger orgId={activeOrg.id} triggerButton />
         <ThemeToggle size="xs" />
         <button onClick={onOpenSettings}
-          className="text-[10px] uppercase tracking-[0.14em] text-muted hover:text-paper px-2.5 py-1 border border-edge hover:bg-paper/5 transition-colors"
+          className="text-[10px] uppercase tracking-[0.14em] text-muted hover:text-paper px-2.5 py-1 border border-edge hover:bg-paper/5 transition-colors rounded-md"
           title="Workspace settings">
           Members
         </button>
         {user.is_admin && (
-          <Link to="/dev" className="text-[10px] uppercase tracking-[0.14em] text-muted hover:text-paper px-2.5 py-1 border border-edge hover:bg-paper/5 transition-colors">
+          <Link to="/dev" className="text-[10px] uppercase tracking-[0.14em] text-muted hover:text-paper px-2.5 py-1 border border-edge hover:bg-paper/5 transition-colors rounded-md">
             /dev
           </Link>
         )}
@@ -443,7 +443,7 @@ function DashboardSidebar({
       <div className="px-4 pt-5 pb-2">
         <button
           onClick={onNewProject}
-          className="w-full text-[10px] tracking-[0.16em] uppercase border border-edge text-muted hover:text-paper hover:bg-paper/5 transition-colors py-2"
+          className="w-full text-[10px] tracking-[0.16em] uppercase border border-edge text-muted hover:text-paper hover:bg-paper/5 transition-colors py-2 rounded-md"
         >+ New project</button>
       </div>
       <SidebarSection title="Recent">
