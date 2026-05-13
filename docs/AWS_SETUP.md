@@ -4,6 +4,11 @@ End-to-end setup for deploying Percy to a fresh AWS account. Takes
 ~45 minutes the first time, mostly waiting on Bedrock model approvals
 and the initial CDK deploy.
 
+> **Moving Percy to a new server / new AWS account?** Walk through this guide,
+> then see **[`docs/MIGRATION.md`](MIGRATION.md)** for the post-deploy
+> checklist that verifies the Sept 2026 refactor's new seams
+> (URL config, color resolution, OOXML access, renderer shell, etc.).
+
 Two infrastructure pieces:
 
 1. **CDK stack** (`infra/`) — App Runner services + RDS Postgres + ECS
