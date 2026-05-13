@@ -45,9 +45,9 @@ JWT_ALGO   = "HS256"
 COOKIE_NAME = "percy_session"
 COOKIE_TTL  = 60 * 60 * 24 * 30  # 30 days
 
+from app.backend.config import GOOGLE_REDIRECT_URI  # noqa: F401 — re-exported for back-compat
 GOOGLE_CLIENT_ID     = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
-GOOGLE_REDIRECT_URI  = os.environ.get("GOOGLE_OAUTH_REDIRECT_URI", "http://localhost:8000/api/auth/google/callback")
 
 # Routes that don't require auth (regex match)
 _PUBLIC_PATTERNS = [

@@ -12,6 +12,7 @@ import { getCollabContext } from "../../../lib/collab/collabContext"
 import { hydrateElementText } from "../../../lib/collab/bridgeYjsSync"
 import { getAwareness, setLocalEditing } from "../../../lib/collab/awareness"
 import { registerRenderer, type NativeRendererProps } from "./RendererRegistry"
+import { RendererShell } from "./RendererShell"
 import { consumePendingAutoEdit } from "../../../lib/pendingAutoEdit"
 import TextBubbleMenu from "../TextBubbleMenu"
 import { yXmlFragmentToProsemirrorJSON } from "y-prosemirror"
@@ -59,19 +60,9 @@ function TiptapTextRendererImpl({
   const payload = useStudioTextStylePayload(docId, slideN, element.id, renderKey)
 
   // Hydrate local editing state from the store-owned payload cache.
+  // Transient payload failures are auto-retried by RendererShell's onRetry below.
   useEffect(() => {
     setError(payload.error)
-    // Transient payload failures (network blip, brief backend stall) shouldn't
-    // leave the element stuck on "! text load failed" — force a re-fetch a
-    // moment later. The store already retries once internally, so this is a
-    // second chance after both attempts fail.
-    if (payload.error) {
-      const t = window.setTimeout(() => {
-        studioStore.loadTextPayload(docId, slideN, element.id, /*force*/ true)
-        studioStore.loadStylePayload(docId, slideN, element.id, /*force*/ true)
-      }, 1200)
-      return () => clearTimeout(t)
-    }
     if (payload.text) setContent(payload.text.kind === "paragraphs" ? payload.text : emptyParagraphs())
     if (payload.style) setStyle(payload.style)
   }, [payload.error, payload.text, payload.style])
@@ -158,8 +149,22 @@ function TiptapTextRendererImpl({
     return () => cancelAnimationFrame(id)
   }, [content, editing, explicitTextZoom, element.width_in, element.height_in])
 
-  if (error)    return <div style={ERR_STYLE} data-percy-error="text">! text load failed</div>
-  if (!content) return <div style={{ width: "100%", height: "100%" }} data-percy-loading="text" />
+  if (error || !content) {
+    return (
+      <RendererShell
+        loading={!error && !content}
+        error={error}
+        kind="text"
+        onRetry={() => {
+          setError(null)
+          void studioStore.loadTextPayload(docId, slideN, element.id, /*force*/ true)
+          void studioStore.loadStylePayload(docId, slideN, element.id, /*force*/ true)
+        }}
+      >
+        {null}
+      </RendererShell>
+    )
+  }
 
   const isEmpty = !content || (content.kind === "paragraphs" && content.paragraphs.every((p) =>
     !p.runs?.length || p.runs.every((run) => !run.text),
@@ -280,12 +285,6 @@ function TiptapTextRendererImpl({
       )}
     </div>
   )
-}
-
-const ERR_STYLE: React.CSSProperties = {
-  width: "100%", height: "100%",
-  display: "flex", alignItems: "center", justifyContent: "center",
-  background: "#fff5f5", color: "#b91c1c", fontSize: 9, fontFamily: "monospace",
 }
 
 function emptyParagraphs(): ParagraphsTextContent {

@@ -325,6 +325,21 @@ async function screenshotSlides(browser, projId, docId, slideNums, outDir) {
       () => !document.querySelector('[data-slide-canvas="true"] [data-percy-loading]'),
       { timeout: 10000 }
     ).catch(() => {})
+    // Wait for any failed renders ("! text load failed" / "! render failed")
+    // to clear — the renderer auto-retries on transient payload/component
+    // errors, and screenshotting through the red placeholder inflates RMS
+    // significantly on slides that had a transient failure during initial load.
+    await page.waitForFunction(
+      () => !document.querySelector('[data-slide-canvas="true"] [data-percy-error]'),
+      { timeout: 8000 }
+    ).catch(() => {})
+    // Wait until ALL web fonts (Roboto, Open Sans, etc. loaded via Google
+    // Fonts in index.html) have actually finished downloading + parsing. Until
+    // this resolves, Chromium renders text in a fallback font (typically
+    // system sans-serif) with completely different metrics — screenshots
+    // captured before this are systematically wrong on any deck whose typeface
+    // isn't installed locally.
+    await page.evaluate(() => document.fonts.ready).catch(() => {})
     // Extra settle time for Recharts to finish drawing SVG bars/paths after data loads.
     await page.waitForTimeout(2000)
     // Also wait until all text-bearing elements (BridgeText/BridgeShape) actually

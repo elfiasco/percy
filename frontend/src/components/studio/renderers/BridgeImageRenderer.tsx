@@ -2,7 +2,7 @@ import { useState, useMemo, useRef } from "react"
 import { elementPngUrl, replaceImage } from "../../../lib/studioApi"
 import { useStudioTextStylePayload } from "../../../lib/studio/payloadHooks"
 import { buildImageFilter, buildDropShadowFilter, hasImageEffects, type RecolorPreset } from "../../../lib/studio/imageFilters"
-import { getMask, MASKS } from "../../../lib/studio/maskShapes"
+import { getMask, maskCssClip, MASKS } from "../../../lib/studio/maskShapes"
 import { studioStore } from "../../../lib/studio/store"
 import { commitElementStyle } from "../../../lib/studio/commands"
 import { registerRenderer, type NativeRendererProps } from "./RendererRegistry"
@@ -57,7 +57,12 @@ function BridgeImageRendererImpl({
   const shadowId = `imgsh-${element.id}`
 
   // Mask
+  // Prefer CSS clip-path (scales with element, no SVG-defs paint-order issue).
+  // Fall back to SVG <clipPath> only for bezier/multi-region shapes (heart,
+  // cloud, math_divide, etc).
   const mask = getMask(style?.mask_shape)
+  const maskAdj = (style as { mask_shape_adj_pct?: number | null })?.mask_shape_adj_pct
+  const cssClip = maskCssClip(mask, maskAdj)
   const maskId = `imgmask-${element.id}`
 
   // Shadow
@@ -137,7 +142,7 @@ function BridgeImageRendererImpl({
         __html:
           (effectsActive ? buildImageFilter(filterId, effectParams) : "") +
           (shadowOn ? buildDropShadowFilter(shadowId, shadowParams) : "") +
-          (mask ? `<clipPath id="${maskId}" clipPathUnits="objectBoundingBox"><svg viewBox="0 0 100 100" preserveAspectRatio="none"><g transform="scale(0.01,0.01)">${mask.svg}</g></svg></clipPath>` : ""),
+          (mask && !cssClip ? `<clipPath id="${maskId}" clipPathUnits="objectBoundingBox"><g transform="scale(0.01,0.01)">${mask.svg}</g></clipPath>` : ""),
       }} />
     </svg>
   )
@@ -150,7 +155,7 @@ function BridgeImageRendererImpl({
       position: "relative",
       overflow: hasCrop ? "hidden" : "visible",
       filter: shadowOn ? `url(#${shadowId})` : undefined,
-      clipPath: mask ? `url(#${maskId})` : undefined,
+      clipPath: cssClip ?? (mask ? `url(#${maskId})` : undefined),
     }}>
       <img src={imgSrc} alt="" draggable={false} style={imgStyle} onError={() => { if (!rawFailed) setRawFailed(true) }} />
     </div>

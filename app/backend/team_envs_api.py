@@ -31,6 +31,8 @@ import shutil
 import subprocess
 import sys
 import threading
+
+from app.backend.config import API_BASE_URL
 import time
 from pathlib import Path
 from typing import Any
@@ -281,7 +283,7 @@ def _local_eval(eval_id: str, payload: dict) -> None:
     merged = os.environ.copy()
     for k, v in (secret.get("env_vars") or {}).items(): merged[str(k)] = str(v)
     for k, v in (payload.get("context") or {}).items(): merged[str(k)] = str(v)
-    merged["PERCY_API_BASE"] = os.environ.get("PERCY_API_BASE", "http://localhost:8000")
+    merged["PERCY_API_BASE"] = API_BASE_URL
     work = TEAM_ENVS_ROOT / "_evals" / eval_id
     work.mkdir(parents=True, exist_ok=True)
     (work / "script.py").write_text(payload.get("script", ""), encoding="utf-8")
@@ -429,7 +431,7 @@ def _local_refresh(run_id: str, job_id: str, payload: dict) -> None:
         for k, v in (payload.get("extra_env") or {}).items(): merged[str(k)] = str(v)
         merged["PERCY_PROJECT_ID"] = payload.get("project_id") or ""
         merged["PERCY_DOC_ID"] = payload.get("doc_id") or ""
-        merged["PERCY_API_BASE"] = os.environ.get("PERCY_API_BASE", "http://localhost:8000")
+        merged["PERCY_API_BASE"] = API_BASE_URL
         work = TEAM_ENVS_ROOT / "_runs" / run_id
         work.mkdir(parents=True, exist_ok=True)
         script_path = work / payload.get("entry_point", "refresh.py")

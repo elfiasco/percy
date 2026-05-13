@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from "
 import { undoHistory } from "../../lib/studio/undoHistory"
 import type { DocInfo } from "../../lib/types"
 import type { StudioElement } from "../../lib/studioTypes"
+import { SLIDE_WIDTH_IN, SLIDE_HEIGHT_IN } from "../../lib/studioTypes"
 import { fetchSlideElements, renderSingleSlide, deleteElement, bulkDeleteElements, duplicateElement as duplicateElementApi, undoDoc, redoDoc, createNewElement, copyElementToSlide, createImageElement, createChartElement, createTableElement, fetchUndoState, alignElements, fetchElementStyle, updateElementStyle, applyLayoutPreset, groupElements, ungroupElement, generateSlideContent, rerenderAllSlides, importSlides, bulkUpdateStyle, generateNotesBulk, addSlide, duplicateSlide, fetchSlidePins, pinSlide, bulkDeleteElementsByName, optimizeSlideLayout, splitElementToSlides, insertSummarySlide, autoDetectSections, fitTextToElements, optimizeImages, expandSlide, mergeElements, generateAltTextBulk, statsExportCsvUrl, statsExportJsonUrl, polishSlideText, insertToc, outlineExportUrl, notesExportUrl, generateConclusionSlide, thumbnailsZipUrl, textExportUrl, fixNumberedLists, cloneSlideTo, duplicateDeck, bulkFontReplace, clearNotes, createFreeformPathElement } from "../../lib/studioApi"
 import type { FreeformPathCmd } from "../../lib/studioApi"
 import type { ElementStyleData } from "../../lib/studioTypes"
@@ -368,8 +369,8 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   const studio = useStudioStore()
   const [selectedSlide, setSelectedSlide]     = useState(1)
   const [selectedElement, setSelectedElement] = useState<StudioElement | null>(null)
-  const [slideWidthIn, setSlideWidthIn]       = useState(13.333)
-  const [slideHeightIn, setSlideHeightIn]     = useState(7.5)
+  const [slideWidthIn, setSlideWidthIn]       = useState(SLIDE_WIDTH_IN)
+  const [slideHeightIn, setSlideHeightIn]     = useState(SLIDE_HEIGHT_IN)
   const [refreshKey, setRefreshKey]           = useState(0)
   const [placingShapeType, setPlacingShapeType] = useState<string | null>(null)
   const [drawMode, setDrawMode]               = useState<"pen" | "polygon" | null>(null)
@@ -1215,7 +1216,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   }, [])
 
   const handleInsertChart = useCallback(async (chartType = "column_clustered") => {
-    const SLIDE_W = slideWidthIn || 13.33, SLIDE_H = slideHeightIn || 7.5
+    const SLIDE_W = slideWidthIn || SLIDE_WIDTH_IN, SLIDE_H = slideHeightIn || SLIDE_HEIGHT_IN
     try {
       const el = await createChartElement(doc.doc_id, selectedSlideRef.current, {
         chart_type: chartType,
@@ -1234,7 +1235,7 @@ export default function Studio({ doc, onRebuild, rebuilding }: Props) {
   }, [doc.doc_id, markDirty, slideWidthIn, slideHeightIn])
 
   const handleInsertTable = useCallback(async (rows = 4, cols = 3) => {
-    const SLIDE_W = slideWidthIn || 13.33, SLIDE_H = slideHeightIn || 7.5
+    const SLIDE_W = slideWidthIn || SLIDE_WIDTH_IN, SLIDE_H = slideHeightIn || SLIDE_HEIGHT_IN
     try {
       const el = await createTableElement(doc.doc_id, selectedSlideRef.current, {
         rows, cols,

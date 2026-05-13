@@ -17,6 +17,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
+from percy.bridge.constants import SLIDE_WIDTH_IN, SLIDE_HEIGHT_IN
+
 # ── Constants ───────────────────────────────────────────────────────────────
 
 
@@ -463,8 +465,8 @@ class ElementIndex:
 
     @classmethod
     def build(cls, doc: Any) -> "ElementIndex":
-        doc_w = float(getattr(getattr(doc, "metadata", None), "slide_width", None) or 13.333)
-        doc_h = float(getattr(getattr(doc, "metadata", None), "slide_height", None) or 7.5)
+        doc_w = float(getattr(getattr(doc, "metadata", None), "slide_width", None) or SLIDE_WIDTH_IN)
+        doc_h = float(getattr(getattr(doc, "metadata", None), "slide_height", None) or SLIDE_HEIGHT_IN)
         digests: list[ElementDigest] = []
         for slide in (getattr(doc, "slides", None) or []):
             digests.extend(build_digest(slide, doc_w, doc_h))

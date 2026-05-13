@@ -11,9 +11,11 @@ import {
 } from "recharts"
 import type { ChartData, ChartSeriesData, ChartLegendData } from "../../../lib/studioTypes"
 import { useStudioChartPayload } from "../../../lib/studio/payloadHooks"
+import { studioStore } from "../../../lib/studio/store"
 import { commitChartData } from "../../../lib/studio/commands"
 import type { NativeRendererProps } from "./RendererRegistry"
 import { registerRenderer } from "./RendererRegistry"
+import { RendererShell } from "./RendererShell"
 
 // Google Charts Material Design palette (matches google.visualization defaults)
 const DEFAULT_PALETTE = [
@@ -221,6 +223,36 @@ function formatNumber(v: number | string, fmt: string): string {
   return String(num)
 }
 
+/** Map PPTX data-label position enum → Recharts LabelList position.
+ *
+ *  PPTX positions: ABOVE, BELOW, LEFT, RIGHT, CENTER, INSIDE_END, INSIDE_BASE,
+ *  OUTSIDE_END, BEST_FIT. visa slide 12 sets INSIDE_BASE on the Profit/EBITDA
+ *  bars (white text near the bottom of each bar); without honoring this the
+ *  labels float above instead, throwing both visual fidelity AND RMS off. */
+function barLabelPosition(pos: string | null | undefined, horizontal: boolean): "top" | "bottom" | "left" | "right" | "center" | "insideTop" | "insideBottom" | "insideLeft" | "insideRight" | "inside" | "outside" {
+  const p = (pos || "").toUpperCase()
+  if (horizontal) {
+    if (p === "INSIDE_BASE") return "insideLeft"
+    if (p === "INSIDE_END")  return "insideRight"
+    if (p === "CENTER")      return "center"
+    if (p === "BELOW")       return "bottom"
+    if (p === "ABOVE")       return "top"
+    return "right"  // OUTSIDE_END / default for horizontal bars
+  }
+  if (p === "INSIDE_BASE") return "insideBottom"
+  if (p === "INSIDE_END")  return "insideTop"
+  if (p === "CENTER")      return "center"
+  if (p === "BELOW")       return "bottom"
+  if (p === "LEFT")        return "left"
+  if (p === "RIGHT")       return "right"
+  return "top"  // OUTSIDE_END / ABOVE / default for vertical bars
+}
+
+function insideLabelPosition(pos: string | null | undefined): boolean {
+  const p = (pos || "").toUpperCase()
+  return p === "INSIDE_BASE" || p === "INSIDE_END" || p === "CENTER"
+}
+
 /** Per-bar / per-point data-label formatter.
  *   1. series-level data_labels.format (PPTX <c:numFmt> on the label)
  *   2. value-axis number_format
@@ -318,10 +350,12 @@ function ColumnOrBarChart({ data, horizontal, stacked, percent, onPointClick, el
               {s.data_labels.show && (
                 <LabelList
                   dataKey={key}
-                  position={horizontal ? "right" : "top"}
+                  position={barLabelPosition(s.data_labels.position, horizontal)}
                   style={{
                     fontSize: s.data_labels.font_size ?? 9,
-                    fill: outsideLabelColor(s.data_labels.font_color),
+                    fill: insideLabelPosition(s.data_labels.position)
+                      ? (s.data_labels.font_color || "#fff")
+                      : outsideLabelColor(s.data_labels.font_color),
                   }}
                   formatter={(v: unknown) => formatDataLabel(v, percent, s.data_labels.format, data.value_axis.number_format)}
                 />
@@ -421,7 +455,12 @@ function PieOrDonutChart({ data, donut, exploded, onPointClick }: {
   const pieData = buildPieData(data)
   const lp = legendProps(data.legend)
   const total = pieData.reduce((s, d) => s + (d.value || 0), 0)
-  const pctLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent }: {
+  // Honor PPTX `<c:dLbls>` flag — only show per-slice labels when the bridge
+  // data says so. Some decks (snowflake "Pie and Donut Charts") explicitly
+  // disable labels so the legend alone identifies slices; without this gate
+  // Studio always showed % labels and diverged from PowerPoint.
+  const showSliceLabels = data.series[0]?.data_labels?.show ?? false
+  const pctLabel = !showSliceLabels ? false : ({ cx, cy, midAngle, innerRadius, outerRadius, percent }: {
     cx: number; cy: number; midAngle: number
     innerRadius: number; outerRadius: number; percent: number
   }) => {
@@ -719,34 +758,18 @@ function ChartRendererImpl({ element, docId, slideN, renderKey, selected }: Nati
     return () => document.removeEventListener("paste", onPaste)
   }, [selected, data, element.id])
 
-  if (error) {
+  if (error || !data) {
     return (
-      <div style={{
-        width: "100%", height: "100%",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        background: "#fff5f5", color: "#b91c1c",
-        fontSize: 10, fontFamily: "monospace", padding: 4, textAlign: "center",
-        boxSizing: "border-box",
-      }}>
-        Chart load failed
-      </div>
-    )
-  }
-  if (!data) {
-    return (
-      <div data-percy-loading="chart" style={{
-        width: "100%", height: "100%",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        background: "#f8f9fa",
-      }}>
-        <div style={{
-          width: 18, height: 18,
-          border: "2px solid #3366CC",
-          borderTopColor: "transparent",
-          borderRadius: "50%",
-          animation: "spin 0.7s linear infinite",
-        }} />
-      </div>
+      <RendererShell
+        loading={!error && !data}
+        error={error}
+        kind="chart"
+        onRetry={() => {
+          void studioStore.loadChartPayload(docId, slideN, element.id, /*force*/ true)
+        }}
+      >
+        {null}
+      </RendererShell>
     )
   }
 

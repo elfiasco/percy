@@ -116,17 +116,16 @@ def _extract_theme_fonts(presentation: Any) -> tuple[str | None, str | None]:
     """Return (major_latin, minor_latin) from the first slide master's theme."""
     try:
         from lxml import etree
-        from pptx.oxml.ns import qn
         sm = presentation.slide_masters[0]
         for rel in sm.part.rels.values():
             if "theme" not in rel.reltype.lower():
                 continue
             el = etree.fromstring(rel.target_part.blob)
-            fs = el.find(".//" + qn("a:fontScheme"))
+            fs = _oxml_find_fontScheme(el)
             if fs is None:
                 continue
-            maj = fs.find(qn("a:majorFont") + "/" + qn("a:latin"))
-            min_ = fs.find(qn("a:minorFont") + "/" + qn("a:latin"))
+            maj = _oxml_find_latin(_oxml_find_majorFont(fs))
+            min_ = _oxml_find_latin(_oxml_find_minorFont(fs))
             return (
                 maj.get("typeface") if maj is not None else None,
                 min_.get("typeface") if min_ is not None else None,
@@ -170,13 +169,12 @@ def _extract_theme_colors(presentation: Any) -> dict[str, str]:
     }
     try:
         from lxml import etree
-        from pptx.oxml.ns import qn
         sm = presentation.slide_masters[0]
         for rel in sm.part.rels.values():
             if "theme" not in rel.reltype.lower():
                 continue
             el = etree.fromstring(rel.target_part.blob)
-            cs = el.find(".//" + qn("a:clrScheme"))
+            cs = _oxml_find_clrScheme(el)
             if cs is None:
                 continue
             for child in cs:
@@ -184,11 +182,11 @@ def _extract_theme_colors(presentation: Any) -> dict[str, str]:
                 normalized = _XML_SCHEME_NAME.get(xml_name, xml_name.upper())
                 # Try srgbClr first, then sysClr lastClr
                 hex_val = None
-                rgb_el = child.find(qn("a:srgbClr"))
+                rgb_el = _oxml_find_srgbClr(child)
                 if rgb_el is not None:
                     hex_val = rgb_el.get("val")
                 if hex_val is None:
-                    sys_el = child.find(qn("a:sysClr"))
+                    sys_el = _oxml_find_sysClr(child)
                     if sys_el is not None:
                         hex_val = sys_el.get("lastClr")
                 if hex_val:
@@ -316,10 +314,9 @@ def _resolve_bg_color(slide: Any, theme_colors: dict[str, str]) -> str | None:
     def _gradient_first_stop_hex(fill: Any) -> str | None:
         """Extract dominant (first) stop of a gradient fill as an approximate solid color."""
         try:
-            from pptx.oxml.ns import qn
-            gs_lst = fill._fill.find(qn("a:gradFill") + "/" + qn("a:gsLst"))
+            gs_lst = _oxml_find_gsLst(_oxml_find_gradFill(fill._fill))
             if gs_lst is None:
-                gs_lst = fill._fill.find(".//" + qn("a:gsLst"))
+                gs_lst = _oxml_find_gsLst_descendant(fill._fill)
             if gs_lst is None:
                 return None
             stops = list(gs_lst)
@@ -327,13 +324,13 @@ def _resolve_bg_color(slide: Any, theme_colors: dict[str, str]) -> str | None:
                 return None
             # Use first stop (position=0) to get the "top" color
             first = stops[0]
-            rgb_el = first.find(".//" + qn("a:srgbClr"))
+            rgb_el = _oxml_find_descendant_a(first, "srgbClr")
             if rgb_el is not None:
                 return "#" + rgb_el.get("val", "")
-            sys_el = first.find(".//" + qn("a:sysClr"))
+            sys_el = _oxml_find_descendant_a(first, "sysClr")
             if sys_el is not None:
                 return "#" + sys_el.get("lastClr", "")
-            scheme_el = first.find(".//" + qn("a:schemeClr"))
+            scheme_el = _oxml_find_descendant_a(first, "schemeClr")
             if scheme_el is not None:
                 key = scheme_el.get("val", "")
                 normalized = _XML_SCHEME_NAME.get(key, key.upper())
@@ -391,14 +388,13 @@ def _resolve_bg_color(slide: Any, theme_colors: dict[str, str]) -> str | None:
 def _resolve_bg_gradient(slide: Any, theme_colors: dict[str, str]) -> tuple[list, float]:
     """Return (gradient_stops, angle_deg) for a gradient slide background, or ([], 0.0)."""
     try:
-        from pptx.oxml.ns import qn
         for source in (slide, slide.slide_layout, slide.slide_layout.slide_master):
             try:
                 fill = source.background.fill
                 if int(fill.type) != 3:  # not gradient
                     continue
                 fill_el = fill._fill
-                gs_lst = fill_el.find(".//" + qn("a:gsLst"))
+                gs_lst = _oxml_find_gsLst_descendant(fill_el)
                 if gs_lst is None:
                     continue
                 stops = []
@@ -409,7 +405,7 @@ def _resolve_bg_gradient(slide: Any, theme_colors: dict[str, str]) -> tuple[list
                         stops.append(GradientStop(position=pos, color=cs))
                 # Extract angle from <a:lin>
                 angle_deg = 0.0
-                lin_el = fill_el.find(".//" + qn("a:lin"))
+                lin_el = _oxml_find_descendant_a(fill_el, "lin")
                 if lin_el is not None:
                     ang_raw = int(lin_el.get("ang", "0"))
                     # OOXML: angle in 60000ths of a degree, measured from 3-o'clock CW
@@ -436,8 +432,6 @@ def _layout_default_text_color(slide: Any, theme_colors: dict[str, str]) -> str 
     level that covers the common dark-bg / light-text pattern (e.g. Quote layouts).
     """
     try:
-        from lxml import etree
-        from pptx.oxml.ns import qn
         layout = slide.slide_layout
         for ph in layout.placeholders:
             try:
@@ -445,7 +439,7 @@ def _layout_default_text_color(slide: Any, theme_colors: dict[str, str]) -> str 
                 if int(ph.placeholder_format.type) != 2:  # BODY = 2
                     continue
                 txBody = ph.text_frame._txBody
-                lst = txBody.find(qn("a:lstStyle"))
+                lst = _oxml_find_lstStyle(txBody)
                 if lst is None:
                     continue
                 # Walk all default/level paragraph properties for a solid fill color
@@ -453,13 +447,13 @@ def _layout_default_text_color(slide: Any, theme_colors: dict[str, str]) -> str 
                     tag = el.tag.split("}")[-1]
                     if tag not in ("defRPr", "r", "rPr"):
                         continue
-                    solid = el.find(qn("a:solidFill"))
+                    solid = _oxml_find_solidFill(el)
                     if solid is None:
                         continue
-                    rgb_el = solid.find(qn("a:srgbClr"))
+                    rgb_el = _oxml_find_srgbClr(solid)
                     if rgb_el is not None:
                         return "#" + rgb_el.get("val", "").lstrip("#")
-                    sch_el = solid.find(qn("a:schemeClr"))
+                    sch_el = _oxml_find_schemeClr(solid)
                     if sch_el is not None:
                         xml_name = sch_el.get("val", "")
                         key = _XML_SCHEME_NAME.get(xml_name, xml_name.upper())
@@ -952,17 +946,16 @@ def _chart_title(chart: Any, theme_colors: "dict | None" = None) -> ChartTitle:
     title.title_font_italic = safe_get(lambda: chart_title.text_frame.paragraphs[0].font.italic)
     title.title_font_color = _font_color(safe_get(lambda: chart_title.text_frame.paragraphs[0].font), theme_colors)
     try:
-        from pptx.oxml.ns import qn as _qn
-        layout_el = chart_title._element.find(_qn("c:layout"))
-        manual_el = layout_el.find(_qn("c:manualLayout")) if layout_el is not None else None
+        layout_el = _oxml_find_c(chart_title._element, "layout")
+        manual_el = _oxml_find_c(layout_el, "manualLayout")
         if manual_el is not None:
             def _ml_val(tag: str) -> "float | None":
-                e = manual_el.find(_qn(tag))
+                e = _oxml_find_c(manual_el, tag)
                 return float(e.get("val")) if e is not None and e.get("val") is not None else None
-            title.title_position_x = _ml_val("c:x")
-            title.title_position_y = _ml_val("c:y")
-            title.title_width = _ml_val("c:w")
-            title.title_height = _ml_val("c:h")
+            title.title_position_x = _ml_val("x")
+            title.title_position_y = _ml_val("y")
+            title.title_width = _ml_val("w")
+            title.title_height = _ml_val("h")
     except Exception:
         pass
     return title
@@ -996,8 +989,7 @@ def _chart_series(chart: Any, theme_colors: "dict | None" = None) -> list[ChartS
             # Smoothing (line charts)
             smooth = False
             try:
-                from pptx.oxml.ns import qn
-                smooth_el = series._element.find(qn("c:smooth"))
+                smooth_el = _oxml_find_c(series._element, "smooth")
                 if smooth_el is not None:
                     smooth = smooth_el.get("val", "0") not in ("0", "false")
             except Exception:
@@ -1031,8 +1023,7 @@ def _axis_minor_gridlines(axis: Any, theme_colors: "dict | None" = None) -> "Gri
     """Build Gridlines bridge object for minor gridlines on an axis."""
     from percy.bridge import Gridlines as _GL
     try:
-        from pptx.oxml.ns import qn
-        minor_el = safe_get(lambda: axis._element.find(qn("c:minorGridlines")))
+        minor_el = safe_get(lambda: _oxml_find_c(axis._element, "minorGridlines"))
         if minor_el is None:
             return _GL(has_major_gridlines=False)
         line = safe_get(lambda: axis.minor_gridlines.format.line)
@@ -1055,11 +1046,10 @@ def _chart_axis(chart: Any, axis_kind: str, theme_colors: "dict | None" = None) 
     crosses = None
     crosses_at = None
     try:
-        from pptx.oxml.ns import qn
-        crosses_el = axis._element.find(qn("c:crosses"))
+        crosses_el = _oxml_find_c(axis._element, "crosses")
         if crosses_el is not None:
             crosses = crosses_el.get("val")
-        crosses_at_el = axis._element.find(qn("c:crossesAt"))
+        crosses_at_el = _oxml_find_c(axis._element, "crossesAt")
         if crosses_at_el is not None:
             try:
                 crosses_at = float(crosses_at_el.get("val", "0"))
@@ -1071,8 +1061,7 @@ def _chart_axis(chart: Any, axis_kind: str, theme_colors: "dict | None" = None) 
     # delete attribute
     delete = False
     try:
-        from pptx.oxml.ns import qn
-        delete_el = axis._element.find(qn("c:delete"))
+        delete_el = _oxml_find_c(axis._element, "delete")
         if delete_el is not None:
             delete = delete_el.get("val", "0") not in ("0", "false")
     except Exception:
@@ -1081,8 +1070,7 @@ def _chart_axis(chart: Any, axis_kind: str, theme_colors: "dict | None" = None) 
     # numFmt on the axis itself (for value axis; separate from tick_labels.number_format)
     axis_num_fmt = None
     try:
-        from pptx.oxml.ns import qn
-        nf = axis._element.find(qn("c:numFmt"))
+        nf = _oxml_find_c(axis._element, "numFmt")
         if nf is not None:
             axis_num_fmt = nf.get("formatCode")
     except Exception:
@@ -1091,8 +1079,7 @@ def _chart_axis(chart: Any, axis_kind: str, theme_colors: "dict | None" = None) 
     # axPos — where the axis is placed (t/b/l/r)
     ax_pos = None
     try:
-        from pptx.oxml.ns import qn as _qn2
-        axpos_el = axis._element.find(_qn2("c:axPos"))
+        axpos_el = _oxml_find_c(axis._element, "axPos")
         if axpos_el is not None:
             ax_pos = axpos_el.get("val")
     except Exception:
@@ -1101,8 +1088,7 @@ def _chart_axis(chart: Any, axis_kind: str, theme_colors: "dict | None" = None) 
     # noMultiLvlLbl — suppress multi-level category labels
     no_multi_lvl_lbl = False
     try:
-        from pptx.oxml.ns import qn as _qn3
-        nml_el = axis._element.find(_qn3("c:noMultiLvlLbl"))
+        nml_el = _oxml_find_c(axis._element, "noMultiLvlLbl")
         if nml_el is not None:
             no_multi_lvl_lbl = nml_el.get("val", "0") not in ("0", "false")
     except Exception:
@@ -1111,8 +1097,7 @@ def _chart_axis(chart: Any, axis_kind: str, theme_colors: "dict | None" = None) 
     # lblOffset — offset of axis tick labels (100 = 100%, default)
     lbl_offset = None
     try:
-        from pptx.oxml.ns import qn as _qn4
-        lo_el = axis._element.find(_qn4("c:lblOffset"))
+        lo_el = _oxml_find_c(axis._element, "lblOffset")
         if lo_el is not None:
             lbl_offset = int(lo_el.get("val", 100))
     except Exception:
@@ -1121,8 +1106,7 @@ def _chart_axis(chart: Any, axis_kind: str, theme_colors: "dict | None" = None) 
     # lblAlgn — label alignment (ctr/l/r)
     lbl_algn = None
     try:
-        from pptx.oxml.ns import qn as _qn5
-        la_el = axis._element.find(_qn5("c:lblAlgn"))
+        la_el = _oxml_find_c(axis._element, "lblAlgn")
         if la_el is not None:
             lbl_algn = la_el.get("val")
     except Exception:
@@ -1131,8 +1115,7 @@ def _chart_axis(chart: Any, axis_kind: str, theme_colors: "dict | None" = None) 
     # crossBetween — where value axis crosses category axis (between/midCat)
     cross_between = None
     try:
-        from pptx.oxml.ns import qn as _qn6
-        cb_el = axis._element.find(_qn6("c:crossBetween"))
+        cb_el = _oxml_find_c(axis._element, "crossBetween")
         if cb_el is not None:
             cross_between = cb_el.get("val")
     except Exception:
@@ -1221,15 +1204,14 @@ def _chart_plot_properties(chart: Any, theme_colors: "dict | None" = None) -> Pl
     hole_size = None
     vary_colors = None
     try:
-        from pptx.oxml.ns import qn as _qn
         plot_el = plot._element
-        fsa_el = plot_el.find(_qn("c:firstSliceAng"))
+        fsa_el = _oxml_find_c(plot_el, "firstSliceAng")
         if fsa_el is not None:
             first_slice_ang = int(fsa_el.get("val", 0))
-        hs_el = plot_el.find(_qn("c:holeSize"))
+        hs_el = _oxml_find_c(plot_el, "holeSize")
         if hs_el is not None:
             hole_size = int(hs_el.get("val", 50))
-        vc_el = plot_el.find(_qn("c:varyColors"))
+        vc_el = _oxml_find_c(plot_el, "varyColors")
         if vc_el is not None:
             vary_colors = vc_el.get("val", "0") not in ("0", "false")
     except Exception:
@@ -1256,19 +1238,17 @@ def _chart_plot_properties(chart: Any, theme_colors: "dict | None" = None) -> Pl
 def _chart_plot_area_layout(chart: Any) -> "tuple[float|None,float|None,float|None,float|None,str|None,str|None,str|None]":
     """Returns (x, y, w, h, xMode, yMode, layoutTarget) from plotArea/layout/manualLayout."""
     try:
-        from pptx.oxml.ns import qn as _qn
         chart_el = chart._element
-        _C = "http://schemas.openxmlformats.org/drawingml/2006/chart"
-        plot_layout = chart_el.find(f".//{{{_C}}}plotArea/{{{_C}}}layout/{{{_C}}}manualLayout")
+        plot_layout = chart_el.find(f".//{_qc('plotArea')}/{_qc('layout')}/{_qc('manualLayout')}")
         if plot_layout is None:
             return (None, None, None, None, None, None, None)
         def _v(tag: str):
-            e = plot_layout.find(_qn(tag))
+            e = _oxml_find_c(plot_layout, tag)
             return float(e.get("val")) if e is not None and e.get("val") else None
         def _s(tag: str):
-            e = plot_layout.find(_qn(tag))
+            e = _oxml_find_c(plot_layout, tag)
             return e.get("val") if e is not None else None
-        return (_v("c:x"), _v("c:y"), _v("c:w"), _v("c:h"), _s("c:xMode"), _s("c:yMode"), _s("c:layoutTarget"))
+        return (_v("x"), _v("y"), _v("w"), _v("h"), _s("xMode"), _s("yMode"), _s("layoutTarget"))
     except Exception:
         return (None, None, None, None, None, None, None)
 
@@ -1280,24 +1260,23 @@ def _chart_legend(chart: Any, theme_colors: "dict | None" = None) -> Legend:
     # Extract manual layout if present
     ml_x = ml_y = ml_w = ml_h = ml_xm = ml_ym = None
     try:
-        from pptx.oxml.ns import qn as _qn
         leg_el = legend._element
-        layout_el = leg_el.find(_qn("c:layout"))
+        layout_el = _oxml_find_c(leg_el, "layout")
         if layout_el is not None:
-            ml_el = layout_el.find(_qn("c:manualLayout"))
+            ml_el = _oxml_find_c(layout_el, "manualLayout")
             if ml_el is not None:
                 def _ml_val(tag: str):
-                    e = ml_el.find(_qn(tag))
+                    e = _oxml_find_c(ml_el, tag)
                     return float(e.get("val")) if e is not None and e.get("val") else None
                 def _ml_mode(tag: str):
-                    e = ml_el.find(_qn(tag))
+                    e = _oxml_find_c(ml_el, tag)
                     return e.get("val") if e is not None else None
-                ml_x = _ml_val("c:x")
-                ml_y = _ml_val("c:y")
-                ml_w = _ml_val("c:w")
-                ml_h = _ml_val("c:h")
-                ml_xm = _ml_mode("c:xMode")
-                ml_ym = _ml_mode("c:yMode")
+                ml_x = _ml_val("x")
+                ml_y = _ml_val("y")
+                ml_w = _ml_val("w")
+                ml_h = _ml_val("h")
+                ml_xm = _ml_mode("xMode")
+                ml_ym = _ml_mode("yMode")
     except Exception:
         pass
     return Legend(
@@ -1336,12 +1315,10 @@ def _chart_space_txpr(chart: Any, theme_colors: "dict | None" = None) -> "tuple[
     font_bold = None
     font_color = None
     try:
-        from pptx.oxml.ns import qn as _qn
-        txpr_el = chart._chartSpace.find(_qn("c:txPr"))
+        txpr_el = _oxml_find_c(chart._chartSpace, "txPr")
         if txpr_el is None:
             return (None, None, None, None)
-        _A = "http://schemas.openxmlformats.org/drawingml/2006/main"
-        defrpr = txpr_el.find(f".//{{{_A}}}defRPr")
+        defrpr = _oxml_find_descendant_a(txpr_el, "defRPr")
         if defrpr is not None:
             sz = defrpr.get("sz")
             if sz is not None:
@@ -1349,7 +1326,7 @@ def _chart_space_txpr(chart: Any, theme_colors: "dict | None" = None) -> "tuple[
             b = defrpr.get("b")
             if b is not None:
                 font_bold = b not in ("0", "false")
-            latin = defrpr.find(f"{{{_A}}}latin")
+            latin = _oxml_find_latin(defrpr)
             if latin is not None:
                 font_name = latin.get("typeface")
             font_color = _extract_color_spec(defrpr, theme_colors) if theme_colors else _extract_color_spec(defrpr)
@@ -1361,9 +1338,7 @@ def _chart_space_txpr(chart: Any, theme_colors: "dict | None" = None) -> "tuple[
 def _chart_disp_blanks_as(chart: Any) -> "str | None":
     """Extract c:chart/c:dispBlanksAs value."""
     try:
-        from pptx.oxml.ns import qn as _qn
-        _C = "http://schemas.openxmlformats.org/drawingml/2006/chart"
-        el = chart._chartSpace.find(f"{{{_C}}}chart/{{{_C}}}dispBlanksAs")
+        el = chart._chartSpace.find(f"{_qc('chart')}/{_qc('dispBlanksAs')}")
         if el is not None:
             return el.get("val")
     except Exception:
@@ -1611,7 +1586,7 @@ def _table_cell_format(
 def _run_font_caps(run: Any) -> str | None:
     """Extract the OOXML 'cap' attribute from a run's rPr, walking up to defRPr if absent."""
     try:
-        rpr = run._r.find("{http://schemas.openxmlformats.org/drawingml/2006/main}rPr")
+        rpr = _oxml_find_rPr(run._r)
         if rpr is not None:
             cap = rpr.get("cap")
             if cap:
@@ -1633,7 +1608,7 @@ def _resolve_run_bold(run: Any, paragraph: Any) -> bool | None:
         return val
     # 3. Raw XML rPr 'b' attribute (handles cases python-pptx doesn't walk)
     try:
-        rpr = run._r.find("{http://schemas.openxmlformats.org/drawingml/2006/main}rPr")
+        rpr = _oxml_find_rPr(run._r)
         if rpr is not None:
             b_attr = rpr.get("b")
             if b_attr is not None:
@@ -1648,12 +1623,60 @@ def _resolve_run_bold(run: Any, paragraph: Any) -> bool | None:
     return None
 
 
-_A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+from percy.oxml import (
+    A_NS as _A_NS,
+    C_NS as _C_NS,
+    R_NS as _R_NS_CONST,
+    qa as _qa,
+    qc as _qc,
+    qp as _qp,
+    find_a as _oxml_find_a,
+    find_c as _oxml_find_c,
+    find_p as _oxml_find_p,
+    find_descendant_a as _oxml_find_descendant_a,
+    findall_a as _oxml_findall_a,
+    find_pPr as _oxml_find_pPr,
+    find_rPr as _oxml_find_rPr,
+    find_lstStyle as _oxml_find_lstStyle,
+    find_lvl_pPr as _oxml_find_lvl_pPr,
+    find_bodyPr as _oxml_find_bodyPr,
+    find_buChar as _oxml_find_buChar,
+    find_buFont as _oxml_find_buFont,
+    find_buBlip as _oxml_find_buBlip,
+    bullet_type_from_pPr as _oxml_bullet_type,
+    bullet_char_from_pPr as _oxml_bullet_char,
+    find_solidFill as _oxml_find_solidFill,
+    find_srgbClr as _oxml_find_srgbClr,
+    find_sysClr as _oxml_find_sysClr,
+    find_schemeClr as _oxml_find_schemeClr,
+    find_noFill as _oxml_find_noFill,
+    find_grpFill as _oxml_find_grpFill,
+    find_gradFill as _oxml_find_gradFill,
+    find_pattFill as _oxml_find_pattFill,
+    find_blipFill as _oxml_find_blipFill,
+    find_gsLst as _oxml_find_gsLst,
+    find_gsLst_descendant as _oxml_find_gsLst_descendant,
+    findall_gs as _oxml_findall_gs,
+    find_lin as _oxml_find_lin,
+    find_bgClr as _oxml_find_bgClr,
+    find_ln as _oxml_find_ln,
+    find_prstGeom as _oxml_find_prstGeom,
+    find_avLst as _oxml_find_avLst,
+    findall_gd as _oxml_findall_gd,
+    find_effectLst as _oxml_find_effectLst,
+    find_outerShdw as _oxml_find_outerShdw,
+    find_fontScheme as _oxml_find_fontScheme,
+    find_clrScheme as _oxml_find_clrScheme,
+    find_majorFont as _oxml_find_majorFont,
+    find_minorFont as _oxml_find_minorFont,
+    find_latin as _oxml_find_latin,
+    find_p_spPr as _oxml_find_p_spPr,
+)
 
 
 def _run_rPr(run: Any) -> Any:
     try:
-        return run._r.find(f"{{{_A_NS}}}rPr")
+        return _oxml_find_rPr(run._r)
     except Exception:
         return None
 
@@ -1712,7 +1735,7 @@ def _run_hyperlink(run: Any) -> str | None:
 
 def _paragraph_pPr(paragraph: Any) -> Any:
     try:
-        return paragraph._p.find(f"{{{_A_NS}}}pPr")
+        return _oxml_find_pPr(paragraph._p)
     except Exception:
         return None
 
@@ -1753,33 +1776,39 @@ def _pPr_emu_to_inches(pPr: Any, attr: str) -> float | None:
         return None
 
 
-def _para_bullet_type(pPr: Any) -> str:
-    if pPr is None:
-        return "none"
-    if pPr.find(f"{{{_A_NS}}}buNone") is not None:
-        return "none"
-    if pPr.find(f"{{{_A_NS}}}buChar") is not None:
-        return "char"
-    if pPr.find(f"{{{_A_NS}}}buAutoNum") is not None:
-        return "autonumber"
-    if pPr.find(f"{{{_A_NS}}}buBlip") is not None:
-        return "image"
-    return "none"
-
-
-def _para_bullet_char(pPr: Any) -> str | None:
+def _lstStyle_pPr_for_level(pPr: Any, level: int) -> Any:
+    """Return the txBody's <a:lstStyle>/<a:lvlNpPr> matching `level` (0-indexed).
+    PowerPoint stores per-list bullet defaults there when individual paragraphs
+    omit a <a:buChar> — e.g. reside slide 4 puts "•" on the lstStyle only.
+    """
     if pPr is None:
         return None
-    el = pPr.find(f"{{{_A_NS}}}buChar")
-    if el is not None:
-        return el.get("char")
-    return None
+    p_el = pPr.getparent()
+    if p_el is None: return None
+    txBody = p_el.getparent()
+    if txBody is None: return None
+    return _oxml_find_lvl_pPr(_oxml_find_lstStyle(txBody), level)
+
+
+def _para_bullet_type(pPr: Any, level: int = 0) -> str:
+    bt = _oxml_bullet_type(pPr)
+    if bt is not None:
+        return bt
+    bt = _oxml_bullet_type(_lstStyle_pPr_for_level(pPr, level))
+    return bt if bt is not None else "none"
+
+
+def _para_bullet_char(pPr: Any, level: int = 0) -> str | None:
+    val = _oxml_bullet_char(pPr)
+    if val is not None:
+        return val
+    return _oxml_bullet_char(_lstStyle_pPr_for_level(pPr, level))
 
 
 def _para_bullet_font(pPr: Any) -> str | None:
     if pPr is None:
         return None
-    el = pPr.find(f"{{{_A_NS}}}buFont")
+    el = _oxml_find_buFont(pPr)
     if el is not None:
         return el.get("typeface")
     return None
@@ -1789,14 +1818,13 @@ def _para_bullet_blip(pPr: Any, part: Any) -> tuple[bytes | None, str | None]:
     """Extract image bytes and extension from a buBlip picture bullet."""
     if pPr is None:
         return None, None
-    _R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-    blip_el = pPr.find(f"{{{_A_NS}}}buBlip")
+    blip_el = _oxml_find_buBlip(pPr)
     if blip_el is None:
         return None, None
-    inner = blip_el.find(f"{{{_A_NS}}}blip")
+    inner = blip_el.find(_qa("blip"))
     if inner is None:
         return None, None
-    rId = inner.get(f"{{{_R_NS}}}embed")
+    rId = inner.get(f"{{{_R_NS_CONST}}}embed")
     if not rId:
         return None, None
     try:
@@ -1863,8 +1891,8 @@ def _text_paragraphs_from_frame(text_frame: Any, ctx: _OnboardContext) -> list[T
             space_after=_para_space_pt(paragraph, "space_after"),
             left_indent=_pPr_emu_to_inches(pPr, "marL"),
             first_line_indent=_pPr_emu_to_inches(pPr, "indent"),
-            bullet_type=_para_bullet_type(pPr),
-            bullet_char=_para_bullet_char(pPr),
+            bullet_type=_para_bullet_type(pPr, safe_get(lambda p=paragraph: p.level, 0) or 0),
+            bullet_char=_para_bullet_char(pPr, safe_get(lambda p=paragraph: p.level, 0) or 0),
             bullet_font=_para_bullet_font(pPr),
             bullet_blip_bytes=blip_bytes,
             bullet_blip_ext=blip_ext,
@@ -1935,19 +1963,19 @@ def _line_xml_color(line: Any, theme_colors: "dict | None" = None) -> "ColorSpec
 
 def _extract_color_spec(element: Any, theme_colors: "dict | None" = None) -> "ColorSpec | None":
     """Extract a ColorSpec from any OOXML element containing color info."""
-    from pptx.oxml.ns import qn
     from percy.bridge.elements import ColorSpec
+    from percy.oxml import find_solidFill, find_srgbClr, find_sysClr, find_schemeClr
     if element is None:
         return None
     tag = element.tag.split("}")[-1] if hasattr(element, "tag") else ""
     if tag not in ("solidFill", "schemeClr", "srgbClr", "sysClr"):
-        solid = element.find(qn("a:solidFill"))
+        solid = find_solidFill(element)
         if solid is None:
             return None
         element = solid
         tag = "solidFill"
     def _read_alpha(clr_el: Any) -> "int | None":
-        alpha_el = clr_el.find(qn("a:alpha"))
+        alpha_el = clr_el.find(_qa("alpha"))
         if alpha_el is not None:
             try:
                 return int(alpha_el.get("val", ""))
@@ -1956,15 +1984,15 @@ def _extract_color_spec(element: Any, theme_colors: "dict | None" = None) -> "Co
         return None
 
     if tag == "solidFill":
-        srgb = element.find(qn("a:srgbClr"))
+        srgb = find_srgbClr(element)
         if srgb is not None:
             val = srgb.get("val", "")
             return ColorSpec(value=f"#{val.upper()}", alpha=_read_alpha(srgb)) if val else None
-        sys_el = element.find(qn("a:sysClr"))
+        sys_el = find_sysClr(element)
         if sys_el is not None:
             last_clr = sys_el.get("lastClr", "")
             return ColorSpec(value=f"#{last_clr.upper()}", alpha=_read_alpha(sys_el)) if last_clr else None
-        scheme = element.find(qn("a:schemeClr"))
+        scheme = find_schemeClr(element)
         if scheme is not None:
             return _extract_scheme_color_spec(scheme, theme_colors)
         return None
@@ -1987,7 +2015,6 @@ def _extract_scheme_color_spec(scheme_el: Any, theme_colors: "dict | None" = Non
     ColorSpec.resolve() can apply them. This ensures bridge objects never contain
     ``scheme:X`` references — all colors are self-contained hex values.
     """
-    from pptx.oxml.ns import qn
     from percy.bridge.elements import ColorSpec
     xml_name = scheme_el.get("val", "")
     if not xml_name:
@@ -1995,7 +2022,7 @@ def _extract_scheme_color_spec(scheme_el: Any, theme_colors: "dict | None" = Non
     normalized = _XML_SCHEME_NAME.get(xml_name, xml_name.upper())
 
     def _int_val(tag: str) -> int | None:
-        el = scheme_el.find(qn(f"a:{tag}"))
+        el = _oxml_find_a(scheme_el, tag)
         if el is not None:
             try:
                 return int(el.get("val", ""))
@@ -2506,11 +2533,10 @@ def _group_fill_color(group_shape: Any, theme_colors: "dict | None" = None) -> "
 def _shape_has_grp_fill(shape: Any) -> bool:
     """Return True if the shape's spPr contains <a:grpFill> (inherit fill from parent group)."""
     try:
-        from pptx.oxml.ns import qn
         spPr = shape.element.spPr
         if spPr is None:
             return False
-        return spPr.find(qn("a:grpFill")) is not None
+        return _oxml_find_grpFill(spPr) is not None
     except Exception:
         return False
 
@@ -2525,7 +2551,6 @@ def _text_frame_text(text_frame: Any) -> str | None:
 def _font_color(font: Any, theme_colors: "dict | None" = None) -> "ColorSpec | None":
     from percy.bridge.elements import ColorSpec
     try:
-        from pptx.oxml.ns import qn
         rpr_el = font._element
         spec = _extract_color_spec(rpr_el, theme_colors)
         if spec is not None:
@@ -2556,7 +2581,6 @@ def _chart_format_fill_color(chart_format: Any, theme_colors: "dict | None" = No
 def _chart_fill_color(fill: Any, theme_colors: "dict | None" = None) -> "ColorSpec | None":
     from percy.bridge.elements import ColorSpec
     try:
-        from pptx.oxml.ns import qn
         sp_pr = getattr(fill, "_xPr", None)
         if sp_pr is None:
             sp_pr = getattr(fill, "_element", None)
@@ -2607,7 +2631,6 @@ def _chart_line_format(line: Any, theme_colors: "dict | None" = None) -> LineFor
 def _chart_line_color(line: Any, theme_colors: "dict | None" = None) -> "ColorSpec | None":
     from percy.bridge.elements import ColorSpec
     try:
-        from pptx.oxml.ns import qn
         ln_el = safe_get(lambda: line._element)
         if ln_el is not None:
             spec = _extract_color_spec(ln_el, theme_colors)
@@ -2672,16 +2695,15 @@ def _chart_line_is_no_fill(line: Any) -> bool:
     if line is None:
         return False
     try:
-        from pptx.oxml.ns import qn
         # LineFormat._ln gives the <a:ln> element (or None if absent)
         ln_el = safe_get(lambda: line._ln)
-        if ln_el is not None and ln_el.find(qn("a:noFill")) is not None:
+        if ln_el is not None and _oxml_find_noFill(ln_el) is not None:
             return True
         # Fallback: parent element may contain <a:ln>
         parent_el = safe_get(lambda: line._parent)
         if parent_el is not None:
-            ln_el2 = parent_el.find(qn("a:ln"))
-            if ln_el2 is not None and ln_el2.find(qn("a:noFill")) is not None:
+            ln_el2 = _oxml_find_ln(parent_el)
+            if ln_el2 is not None and _oxml_find_noFill(ln_el2) is not None:
                 return True
     except Exception:
         pass
@@ -2691,18 +2713,17 @@ def _chart_line_is_no_fill(line: Any) -> bool:
 def _series_gradient_stops(series: Any) -> list:
     """Extract gradient stops from a chart series' spPr/gradFill."""
     try:
-        from pptx.oxml.ns import qn
-        sp_pr = series._element.find(qn("p:spPr")) or series._element.find(qn("c:spPr"))
+        sp_pr = _oxml_find_p_spPr(series._element) or _oxml_find_c(series._element, "spPr")
         if sp_pr is None:
             return []
-        grad = sp_pr.find(qn("a:gradFill"))
+        grad = _oxml_find_gradFill(sp_pr)
         if grad is None:
             return []
-        gs_lst = grad.find(qn("a:gsLst"))
+        gs_lst = _oxml_find_gsLst(grad)
         if gs_lst is None:
             return []
         stops = []
-        for gs in gs_lst.findall(qn("a:gs")):
+        for gs in _oxml_findall_gs(gs_lst):
             pos = int(gs.get("pos", "0")) / 100000.0
             cs = _extract_color_spec(gs)
             if cs is not None:
@@ -2724,8 +2745,7 @@ def _marker_format(marker: Any, theme_colors: "dict | None" = None) -> MarkerFor
 def _dl_flag(d_lbls: Any, tag: str) -> bool:
     """Read a show-flag (showVal, showCatName, etc.) from dLbls XML, default False."""
     try:
-        from pptx.oxml.ns import qn
-        el = d_lbls.find(qn(f"c:{tag}"))
+        el = _oxml_find_c(d_lbls, tag)
         if el is not None:
             return el.get("val", "0") not in ("0", "false")
     except Exception:
@@ -2750,8 +2770,7 @@ def _data_labels(d_lbls: Any, theme_colors: "dict | None" = None) -> DataLabels:
 
     sep = None
     try:
-        from pptx.oxml.ns import qn
-        sep_el = d_lbls.find(qn("c:separator"))
+        sep_el = _oxml_find_c(d_lbls, "separator")
         if sep_el is not None and sep_el.text:
             sep = sep_el.text
     except Exception:
@@ -2981,8 +3000,7 @@ def _resolve_vertical_anchor(shape: Any) -> str | None:
     _ANCHOR_MAP = {"t": "TOP", "ctr": "MIDDLE", "b": "BOTTOM", "just": "MIXED"}
     # Check the actual XML attribute — pptx-python's vertical_anchor returns a default even when absent
     try:
-        from pptx.oxml.ns import qn as _qn
-        body_pr = shape.text_frame._txBody.find(_qn("a:bodyPr"))
+        body_pr = _oxml_find_bodyPr(shape.text_frame._txBody)
         if body_pr is not None and body_pr.get("anchor"):
             return _ANCHOR_MAP.get(body_pr.get("anchor"), body_pr.get("anchor").upper())
     except Exception:
@@ -3040,21 +3058,20 @@ def _fill_gradient_stops(shape: Any, theme_colors: "dict | None" = None) -> list
     """Extract gradient stops from a shape's gradFill XML. Returns [] for non-gradient fills."""
     stops: list[GradientStop] = []
     try:
-        from pptx.oxml.ns import qn
         spPr = shape.element.spPr
-        grad_fill = spPr.find(qn("a:gradFill"))
+        grad_fill = _oxml_find_gradFill(spPr)
         if grad_fill is None:
             return stops
-        gs_lst = grad_fill.find(qn("a:gsLst"))
+        gs_lst = _oxml_find_gsLst(grad_fill)
         if gs_lst is None:
             return stops
-        for gs in gs_lst.findall(qn("a:gs")):
+        for gs in _oxml_findall_gs(gs_lst):
             pos = int(gs.get("pos", 0)) / 100000.0
             # Gradient stop colors are stored directly as srgbClr/schemeClr/sysClr,
             # not wrapped in solidFill like shape fills.
             color_child = None
-            for color_tag in ("a:srgbClr", "a:schemeClr", "a:sysClr"):
-                color_child = gs.find(qn(color_tag))
+            for color_tag in ("srgbClr", "schemeClr", "sysClr"):
+                color_child = _oxml_find_a(gs, color_tag)
                 if color_child is not None:
                     break
             cs = _extract_color_spec(color_child, theme_colors) if color_child is not None else _extract_color_spec(gs, theme_colors)
@@ -3068,12 +3085,11 @@ def _fill_gradient_stops(shape: Any, theme_colors: "dict | None" = None) -> list
 def _fill_gradient_angle(shape: Any) -> float:
     """Extract linear gradient angle in degrees (OOXML 60ths-of-a-degree → degrees)."""
     try:
-        from pptx.oxml.ns import qn
         spPr = shape.element.spPr
-        grad_fill = spPr.find(qn("a:gradFill"))
+        grad_fill = _oxml_find_gradFill(spPr)
         if grad_fill is None:
             return 0.0
-        lin = grad_fill.find(qn("a:lin"))
+        lin = _oxml_find_lin(grad_fill)
         if lin is not None:
             return int(lin.get("ang", 0)) / 60000.0
     except Exception:
@@ -3086,16 +3102,15 @@ def _fill_type(shape: Any) -> str | None:
     # python-pptx returns None or BACKGROUND when the spPr has a scheme-color solidFill;
     # always check raw XML so explicit spPr fills override style references.
     try:
-        from pptx.oxml.ns import qn
         spPr = shape.element.spPr
         if spPr is not None:
-            if spPr.find(qn("a:solidFill")) is not None:
+            if _oxml_find_solidFill(spPr) is not None:
                 return "solidFill"
-            if spPr.find(qn("a:gradFill")) is not None:
+            if _oxml_find_gradFill(spPr) is not None:
                 return "gradFill"
-            if spPr.find(qn("a:noFill")) is not None:
+            if _oxml_find_noFill(spPr) is not None:
                 return "noFill"
-            if spPr.find(qn("a:grpFill")) is not None:
+            if _oxml_find_grpFill(spPr) is not None:
                 return "grpFill"
     except Exception:
         pass
@@ -3109,16 +3124,15 @@ def _shape_has_explicit_fill(shape: Any) -> bool:
     can return a solid fill for shapes that have no fill in their own XML).
     """
     try:
-        from pptx.oxml.ns import qn
         spPr = shape.element.spPr
         if spPr is None:
             return False
         # Explicit noFill → definitely no fill
-        if spPr.find(qn("a:noFill")) is not None:
+        if _oxml_find_noFill(spPr) is not None:
             return False
         # Any explicit fill element → has fill
-        for tag in ("a:solidFill", "a:gradFill", "a:blipFill", "a:pattFill"):
-            if spPr.find(qn(tag)) is not None:
+        for tag in ("solidFill", "gradFill", "blipFill", "pattFill"):
+            if _oxml_find_a(spPr, tag) is not None:
                 return True
         return False
     except Exception:
@@ -3129,7 +3143,6 @@ def _shape_has_explicit_fill(shape: Any) -> bool:
 def _fill_color(shape: Any, theme_colors: "dict | None" = None) -> "ColorSpec | None":
     from percy.bridge.elements import ColorSpec
     try:
-        from pptx.oxml.ns import qn
         spPr = shape.element.spPr
         spec = _extract_color_spec(spPr, theme_colors)
         if spec is not None:
@@ -3158,11 +3171,10 @@ def _fill_scheme(shape: Any) -> str | None:
 
 def _fill_pattern_preset(shape: Any) -> str | None:
     try:
-        from pptx.oxml.ns import qn
         spPr = shape.element.spPr
         if spPr is None:
             return None
-        patt = spPr.find(qn("a:pattFill"))
+        patt = _oxml_find_pattFill(spPr)
         return patt.get("prst") if patt is not None else None
     except Exception:
         return None
@@ -3170,14 +3182,13 @@ def _fill_pattern_preset(shape: Any) -> str | None:
 
 def _fill_bg_color(shape: Any, theme_colors: "dict | None" = None) -> "ColorSpec | None":
     try:
-        from pptx.oxml.ns import qn
         spPr = shape.element.spPr
         if spPr is None:
             return None
-        patt = spPr.find(qn("a:pattFill"))
+        patt = _oxml_find_pattFill(spPr)
         if patt is None:
             return None
-        bg_el = patt.find(qn("a:bgClr"))
+        bg_el = _oxml_find_bgClr(patt)
         if bg_el is None:
             return None
         # bgClr/fgClr contain a color element directly (schemeClr/srgbClr), not solidFill
@@ -3301,13 +3312,12 @@ def _line_visible(shape: Any) -> bool:
     ln_el = safe_get(lambda: shape.element.spPr.ln)
     if ln_el is None:
         return False
-    from pptx.oxml.ns import qn as _qn
     # noFill child means explicitly no border
-    if ln_el.find(_qn("a:noFill")) is not None:
+    if _oxml_find_noFill(ln_el) is not None:
         return False
     # solidFill or gradFill → visible
-    return (ln_el.find(_qn("a:solidFill")) is not None
-            or ln_el.find(_qn("a:gradFill")) is not None)
+    return (_oxml_find_solidFill(ln_el) is not None
+            or _oxml_find_gradFill(ln_el) is not None)
 
 
 def _line_color(shape: Any, theme_colors: "dict | None" = None) -> "ColorSpec | None":
@@ -3402,21 +3412,19 @@ def _image_shape_geometry(shape: Any) -> tuple[str | None, dict[str, str]]:
     the shape is a content placeholder (e.g. roundRect picture placeholders).
     Returns (None, {}) for plain rectangles.
     """
-    from pptx.oxml.ns import qn
-
     def _geom_from_sp_pr(sp_pr: Any) -> tuple[str | None, dict[str, str]]:
         if sp_pr is None:
             return None, {}
-        geom = sp_pr.find(qn("a:prstGeom"))
+        geom = _oxml_find_prstGeom(sp_pr)
         if geom is None:
             return None, {}
         prst = geom.get("prst")
         if not prst or prst == "rect":
             return None, {}
         adj: dict[str, str] = {}
-        av_lst = geom.find(qn("a:avLst"))
+        av_lst = _oxml_find_avLst(geom)
         if av_lst is not None:
-            for gd in av_lst.findall(qn("a:gd")):
+            for gd in _oxml_findall_gd(av_lst):
                 name = gd.get("name")
                 fmla = gd.get("fmla")
                 if name and fmla:
@@ -3447,23 +3455,22 @@ def _image_shape_geometry(shape: Any) -> tuple[str | None, dict[str, str]]:
 
 def _extract_outer_shadow(shape: Any, theme_colors: "dict | None" = None) -> "ShapeShadow":
     """Extract outerShdw from effectLst or effectDag on a shape element."""
-    from pptx.oxml.ns import qn
     try:
         sp_pr = safe_get(lambda: shape.element.spPr)
         if sp_pr is None:
             # For pictures the element is a <p:pic>, check directly
-            sp_pr = safe_get(lambda: shape.element.find(qn("p:spPr")))
+            sp_pr = safe_get(lambda: _oxml_find_p_spPr(shape.element))
         if sp_pr is None:
             return ShapeShadow()
 
-        effect_lst = sp_pr.find(qn("a:effectLst"))
+        effect_lst = _oxml_find_effectLst(sp_pr)
         if effect_lst is None:
             # Also check direct on element (charts/pics sometimes put it there)
-            effect_lst = safe_get(lambda: shape.element.find(".//" + qn("a:effectLst")))
+            effect_lst = safe_get(lambda: _oxml_find_descendant_a(shape.element, "effectLst"))
         if effect_lst is None:
             return ShapeShadow()
 
-        shdw = effect_lst.find(qn("a:outerShdw"))
+        shdw = _oxml_find_outerShdw(effect_lst)
         if shdw is None:
             return ShapeShadow()
 

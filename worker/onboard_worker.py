@@ -316,7 +316,10 @@ def _dataclass_to_dict(obj: Any) -> Any:
 
 
 def run_onboard(job_id: str, document_id: str, storage_uri: str) -> dict[str, Any]:
-    from percy.diagnostics.onboard import onboard_pptx
+    # Route through the central onboarding facade so this worker shares logging
+    # + future cross-cutting concerns (metrics, font registration, caching) with
+    # the in-process backend's onboarding path.
+    from percy.onboarding import onboard_document
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -326,7 +329,7 @@ def run_onboard(job_id: str, document_id: str, storage_uri: str) -> dict[str, An
         s3_download(storage_uri, pptx_path)
 
         log.info("onboarding %s", pptx_path)
-        percy_doc = onboard_pptx(pptx_path)
+        percy_doc = onboard_document(pptx_path)
 
         # Store pickle bundle (full fidelity for rebuild)
         bundle_key = f"bundles/{document_id}/bridge.pkl"

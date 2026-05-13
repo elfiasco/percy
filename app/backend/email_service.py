@@ -24,8 +24,8 @@ from email.mime.text import MIMEText
 
 log = logging.getLogger("percy.email")
 
+from app.backend.config import APP_BASE_URL as APP_URL  # noqa: F401 — re-exported
 FROM_ADDR   = os.environ.get("PERCY_EMAIL_FROM", "noreply@percy.app")
-APP_URL     = os.environ.get("PERCY_APP_URL", "http://localhost:5173")
 SMTP_HOST   = os.environ.get("SMTP_HOST", "")
 SMTP_PORT   = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER   = os.environ.get("SMTP_USER", "")

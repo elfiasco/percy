@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react"
 import type { StudioElement } from "../../lib/studioTypes"
+import { SLIDE_HEIGHT_IN } from "../../lib/studioTypes"
 import { createImageElement, elementPngUrl, broadcastElement, rewriteElementText, generateTalkingPoints } from "../../lib/studioApi"
 import type { FreeformPathCmd } from "../../lib/studioApi"
 import { CanvasContext } from "./CanvasContext"
@@ -523,7 +524,7 @@ export default function StudioCanvas({ docId, slideN, slideWidthIn, slideHeightI
             // given this slide's height in inches. Used by BridgeTextStyle and
             // BridgeParagraph to render font/spacing in physical canvas units
             // rather than CSS pt (which assumes 96 DPI, not 120 DPI reference).
-            ["--pt-scale"]: slideHeightIn > 0 ? zoom * 85 / (slideHeightIn * 72) : zoom * 85 / (7.5 * 72),
+            ["--pt-scale"]: slideHeightIn > 0 ? zoom * 85 / (slideHeightIn * 72) : zoom * 85 / (SLIDE_HEIGHT_IN * 72),
             // PowerPoint-style: stronger drop shadow so the slide reads as a
             // discrete object floating above the workspace.
             boxShadow: "0 14px 40px -10px rgba(0,0,0,0.30), 0 4px 12px -2px rgba(0,0,0,0.12)",

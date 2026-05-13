@@ -10,12 +10,20 @@ from pptx.enum.shapes import PP_PLACEHOLDER
 from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 
 from percy.diagnostics.common import enum_name, length_to_points, safe_get
-
-NS = {
-    "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
-    "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
-    "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
-}
+from percy.oxml import (
+    A_NS,
+    P_NS,
+    NS_MAP as NS,
+    qa,
+    find_pPr,
+    find_rPr,
+    find_buChar,
+    find_buFont,
+    find_solidFill,
+    find_srgbClr,
+    find_sysClr,
+    find_schemeClr,
+)
 
 TITLE_PLACEHOLDERS = {
     PP_PLACEHOLDER.TITLE,
@@ -83,9 +91,8 @@ def resolve_body_pr(shape: Any) -> dict[str, Any]:
     """Resolve bodyPr attributes with inheritance: slide → layout placeholder → master placeholder."""
     result: dict[str, Any] = {}
     try:
-        from pptx.oxml.ns import qn
         txBody = shape.text_frame._txBody
-        bodyPr = txBody.find(qn("a:bodyPr"))
+        bodyPr = txBody.find(qa("bodyPr"))
         if bodyPr is not None:
             result["wrap"] = bodyPr.get("wrap")
             if bodyPr.get("anchor"):
@@ -94,15 +101,14 @@ def resolve_body_pr(shape: Any) -> dict[str, Any]:
     except Exception:
         pass
     # Fall through to layout then master placeholder for anchor (shapes use p:txBody not a:txBody)
-    from pptx.oxml.ns import qn as _qn
-    _P = "http://schemas.openxmlformats.org/presentationml/2006/main"
+    from percy.oxml import qp
     for match_fn in (_matching_layout_placeholder, _matching_master_placeholder):
         match = match_fn(shape)
         if match is not None:
             try:
-                txBody = match.element.find(f"{{{_P}}}txBody")
+                txBody = match.element.find(qp("txBody"))
                 if txBody is not None:
-                    bodyPr = txBody.find(_qn("a:bodyPr"))
+                    bodyPr = txBody.find(qa("bodyPr"))
                     if bodyPr is not None and bodyPr.get("anchor"):
                         result["anchor"] = bodyPr.get("anchor")
                         return result
@@ -155,15 +161,14 @@ def _style_sources(shape: Any, paragraph_level: int) -> list[dict[str, Any]]:
             # Non-placeholder shapes (text boxes, auto shapes): use presentation defaultTextStyle
             prs_el = safe_get(lambda: shape.part.package.presentation_part._element)
             if prs_el is not None:
-                _P = "http://schemas.openxmlformats.org/presentationml/2006/main"
-                _A = "http://schemas.openxmlformats.org/drawingml/2006/main"
-                dts = prs_el.find(f"{{{_P}}}defaultTextStyle")
+                from percy.oxml import qp
+                dts = prs_el.find(qp("defaultTextStyle"))
                 if dts is not None:
-                    lvl_pr = dts.find(f"{{{_A}}}{level_tag}")
+                    lvl_pr = dts.find(qa(level_tag))
                     if lvl_pr is not None:
                         sources.append({"name": f"prs:defaultTextStyle:{level_tag}", "pPr": lvl_pr, "rPr": _def_rpr(lvl_pr)})
                     if level_tag != "lvl1pPr":
-                        lvl1_pr = dts.find(f"{{{_A}}}lvl1pPr")
+                        lvl1_pr = dts.find(qa("lvl1pPr"))
                         if lvl1_pr is not None:
                             sources.append({"name": "prs:defaultTextStyle:lvl1pPr:fallback", "pPr": lvl1_pr, "rPr": _def_rpr(lvl1_pr)})
 
@@ -327,7 +332,6 @@ def _resolve_alignment(paragraph: Any | None, sources: list[dict[str, Any]]) -> 
     explicit = enum_name(safe_get(lambda: paragraph.alignment))
     if explicit:
         return ResolvedValue(explicit, "slide:paragraph:pPr")
-    _A = "http://schemas.openxmlformats.org/drawingml/2006/main"
     for source in sources:
         pPr = source["pPr"]
         if pPr is None:
@@ -353,8 +357,7 @@ def _python_color(run: Any | None, theme: dict[str, Any] | None = None) -> "Colo
     if run is None:
         return None
     try:
-        from pptx.oxml.ns import qn
-        rpr_el = run._r.find(qn("a:rPr"))
+        rpr_el = find_rPr(safe_get(lambda: run._r))
         if rpr_el is not None:
             spec = _xml_color(rpr_el, theme or {})
             if spec is not None:
@@ -379,28 +382,27 @@ def _xml_color(r_pr: Any, theme: dict[str, Any]) -> "ColorSpec | None":
         "hlink": "HYPERLINK", "folHlink": "FOLLOWED_HYPERLINK",
     }
     try:
-        from pptx.oxml.ns import qn
-        solid = r_pr.find(qn("a:solidFill"))
+        solid = find_solidFill(r_pr)
         if solid is None:
             solid = _first(_xpath(r_pr, "./a:solidFill"))
         if solid is None:
             return None
-        srgb = solid.find(qn("a:srgbClr"))
+        srgb = find_srgbClr(solid)
         if srgb is not None:
             val = srgb.get("val", "")
             return ColorSpec(value=f"#{val.upper()}") if val else None
-        sys_el = solid.find(qn("a:sysClr"))
+        sys_el = find_sysClr(solid)
         if sys_el is not None:
             last_clr = sys_el.get("lastClr", "")
             return ColorSpec(value=f"#{last_clr.upper()}") if last_clr else None
-        scheme = solid.find(qn("a:schemeClr"))
+        scheme = find_schemeClr(solid)
         if scheme is None:
             return None
         xml_name = scheme.get("val", "")
         normalized = _XML_MAP.get(xml_name, xml_name.upper())
 
         def _int_val(tag: str) -> int | None:
-            el = scheme.find(qn(f"a:{tag}"))
+            el = scheme.find(qa(tag))
             if el is not None:
                 try:
                     return int(el.get("val", ""))
@@ -449,7 +451,7 @@ def _resolve_run_str_attr(attr_name: str, run: Any | None, sources: list[dict[st
     """Resolve a string rPr attribute from run level falling back through the source chain."""
     if run is not None:
         try:
-            rPr = run._r.find("{http://schemas.openxmlformats.org/drawingml/2006/main}rPr")
+            rPr = find_rPr(run._r)
             if rPr is not None:
                 val = rPr.get(attr_name)
                 if val is not None:
@@ -469,7 +471,7 @@ def _resolve_run_int_attr(attr_name: str, run: Any | None, sources: list[dict[st
     """Resolve an int rPr attribute from run level falling back through the source chain."""
     if run is not None:
         try:
-            rPr = run._r.find("{http://schemas.openxmlformats.org/drawingml/2006/main}rPr")
+            rPr = find_rPr(run._r)
             if rPr is not None:
                 val = rPr.get(attr_name)
                 if val is not None:
@@ -512,16 +514,15 @@ def _resolve_para_line_spacing(paragraph: Any | None, sources: list[dict[str, An
         if pPr is None:
             continue
         try:
-            from pptx.oxml.ns import qn
-            lnSpc = pPr.find(qn("a:lnSpc"))
+            lnSpc = pPr.find(qa("lnSpc"))
             if lnSpc is None:
                 continue
-            spcPct = lnSpc.find(qn("a:spcPct"))
+            spcPct = lnSpc.find(qa("spcPct"))
             if spcPct is not None:
                 val = spcPct.get("val")
                 if val is not None:
                     return ResolvedValue(int(val) / 100000.0, source["name"])
-            spcPts = lnSpc.find(qn("a:spcPts"))
+            spcPts = lnSpc.find(qa("spcPts"))
             if spcPts is not None:
                 val = spcPts.get("val")
                 if val is not None:
@@ -537,16 +538,15 @@ def _resolve_para_spacing(tag_name: str, paragraph: Any | None, sources: list[di
         if pPr is None:
             return None
         try:
-            from pptx.oxml.ns import qn
-            spcEl = pPr.find(qn(f"a:{tag_name}"))
+            spcEl = pPr.find(qa(tag_name))
             if spcEl is None:
                 return None
-            spcPts = spcEl.find(qn("a:spcPts"))
+            spcPts = spcEl.find(qa("spcPts"))
             if spcPts is not None:
                 val = spcPts.get("val")
                 if val is not None:
                     return int(val) / 100.0  # hundredths of a point → points
-            spcPct = spcEl.find(qn("a:spcPct"))
+            spcPct = spcEl.find(qa("spcPct"))
             if spcPct is not None:
                 val = spcPct.get("val")
                 if val is not None:
@@ -557,8 +557,7 @@ def _resolve_para_spacing(tag_name: str, paragraph: Any | None, sources: list[di
 
     if paragraph is not None:
         try:
-            from pptx.oxml.ns import qn
-            pPr = paragraph._p.find(qn("a:pPr"))
+            pPr = find_pPr(paragraph._p)
             result = _extract_spc(pPr)
             if result is not None:
                 return ResolvedValue(result, "slide:paragraph:pPr")
@@ -578,11 +577,9 @@ def _resolve_para_emu_attr(attr_name: str, paragraph: Any | None, sources: list[
     when para[0] has an explicit buNone — meaning it is a non-bullet heading whose marL=0
     should NOT override lstStyle hanging-indent values for body/bullet paragraphs.
     """
-    _A = "http://schemas.openxmlformats.org/drawingml/2006/main"
     if paragraph is not None:
         try:
-            from pptx.oxml.ns import qn
-            pPr = paragraph._p.find(qn("a:pPr"))
+            pPr = find_pPr(paragraph._p)
             if pPr is not None:
                 val = pPr.get(attr_name)
                 if val is not None:
@@ -594,7 +591,7 @@ def _resolve_para_emu_attr(attr_name: str, paragraph: Any | None, sources: list[
         # with buNone+marL=0 must not shadow lstStyle bullet hanging-indent for body paragraphs.
         if source.get("name", "").endswith(":paragraph"):
             pPr_check = source.get("pPr")
-            if pPr_check is not None and pPr_check.find(f"{{{_A}}}buNone") is not None:
+            if pPr_check is not None and pPr_check.find(qa("buNone")) is not None:
                 continue
         pPr = source.get("pPr")
         if pPr is not None:
@@ -614,26 +611,12 @@ def _resolve_para_bullet_type(paragraph: Any | None, sources: list[dict[str, Any
     not a shape-wide template. Skip it for bullet resolution so that para[0]'s
     explicit buNone (e.g. a heading) doesn't shadow inherited bullets on para[1+].
     """
-    _A = "http://schemas.openxmlformats.org/drawingml/2006/main"
-
-    def _detect(pPr: Any) -> str | None:
-        if pPr is None:
-            return None
-        if pPr.find(f"{{{_A}}}buNone") is not None:
-            return "none"
-        if pPr.find(f"{{{_A}}}buChar") is not None:
-            return "char"
-        if pPr.find(f"{{{_A}}}buAutoNum") is not None:
-            return "autonumber"
-        if pPr.find(f"{{{_A}}}buBlip") is not None:
-            return "image"
-        return None
+    from percy.oxml import bullet_type_from_pPr
 
     if paragraph is not None:
         try:
-            from pptx.oxml.ns import qn
-            pPr = paragraph._p.find(qn("a:pPr"))
-            result = _detect(pPr)
+            pPr = find_pPr(paragraph._p)
+            result = bullet_type_from_pPr(pPr)
             if result is not None:
                 return ResolvedValue(result, "slide:paragraph:pPr")
         except Exception:
@@ -643,7 +626,7 @@ def _resolve_para_bullet_type(paragraph: Any | None, sources: list[dict[str, Any
         # shape-wide default, and its buNone would incorrectly mask inherited bullets.
         if source.get("name") == "slide:paragraph":
             continue
-        result = _detect(source.get("pPr"))
+        result = bullet_type_from_pPr(source.get("pPr"))
         if result is not None:
             return ResolvedValue(result, source["name"])
     return ResolvedValue("none", "office-default")
@@ -651,19 +634,12 @@ def _resolve_para_bullet_type(paragraph: Any | None, sources: list[dict[str, Any
 
 def _resolve_para_bullet_char(paragraph: Any | None, sources: list[dict[str, Any]]) -> ResolvedValue:
     """Resolve bullet character from slide paragraph pPr then lstStyle sources."""
-    _A = "http://schemas.openxmlformats.org/drawingml/2006/main"
-
-    def _char(pPr: Any) -> str | None:
-        if pPr is None:
-            return None
-        el = pPr.find(f"{{{_A}}}buChar")
-        return el.get("char") if el is not None else None
+    from percy.oxml import bullet_char_from_pPr
 
     if paragraph is not None:
         try:
-            from pptx.oxml.ns import qn
-            pPr = paragraph._p.find(qn("a:pPr"))
-            result = _char(pPr)
+            pPr = find_pPr(paragraph._p)
+            result = bullet_char_from_pPr(pPr)
             if result is not None:
                 return ResolvedValue(result, "slide:paragraph:pPr")
         except Exception:
@@ -671,7 +647,7 @@ def _resolve_para_bullet_char(paragraph: Any | None, sources: list[dict[str, Any
     for source in sources:
         if source.get("name") == "slide:paragraph":
             continue  # skip para[0]'s pPr — not a shape-wide bullet template
-        result = _char(source.get("pPr"))
+        result = bullet_char_from_pPr(source.get("pPr"))
         if result is not None:
             return ResolvedValue(result, source["name"])
     return ResolvedValue(None, "unresolved")
@@ -679,19 +655,12 @@ def _resolve_para_bullet_char(paragraph: Any | None, sources: list[dict[str, Any
 
 def _resolve_para_bullet_font(paragraph: Any | None, sources: list[dict[str, Any]]) -> ResolvedValue:
     """Resolve bullet font typeface from slide paragraph pPr then lstStyle sources."""
-    _A = "http://schemas.openxmlformats.org/drawingml/2006/main"
-
-    def _font(pPr: Any) -> str | None:
-        if pPr is None:
-            return None
-        el = pPr.find(f"{{{_A}}}buFont")
-        return el.get("typeface") if el is not None else None
+    from percy.oxml import bullet_font_from_pPr
 
     if paragraph is not None:
         try:
-            from pptx.oxml.ns import qn
-            pPr = paragraph._p.find(qn("a:pPr"))
-            result = _font(pPr)
+            pPr = find_pPr(paragraph._p)
+            result = bullet_font_from_pPr(pPr)
             if result is not None:
                 return ResolvedValue(result, "slide:paragraph:pPr")
         except Exception:
@@ -699,7 +668,7 @@ def _resolve_para_bullet_font(paragraph: Any | None, sources: list[dict[str, Any
     for source in sources:
         if source.get("name") == "slide:paragraph":
             continue  # skip para[0]'s pPr — not a shape-wide bullet template
-        result = _font(source.get("pPr"))
+        result = bullet_font_from_pPr(source.get("pPr"))
         if result is not None:
             return ResolvedValue(result, source["name"])
     return ResolvedValue(None, "unresolved")

@@ -667,8 +667,14 @@ class ColorSpec:
             self.alpha, self.hue_mod, self.sat_mod,
         ))
 
-    def resolve(self, theme_colors: dict[str, str] | None = None) -> str:
-        """Return #RRGGBB with all OOXML modifiers applied."""
+    def resolve(self, theme_colors: dict[str, str] | None = None, *, skip_alpha: bool = False) -> str:
+        """Return #RRGGBB with all OOXML modifiers applied.
+
+        When ``skip_alpha=True`` the alpha pre-blend against white is skipped
+        (used by callers that will apply the color's alpha separately as CSS
+        opacity, so the same alpha doesn't double-fade — see snowflake slide 2's
+        photo + tint overlay). lum_mod/lum_off/shade/tint still apply.
+        """
         val = self.value
         if not val:
             return "#888888"
@@ -705,7 +711,7 @@ class ColorSpec:
             r = 1 - (1 - r) * f
             g = 1 - (1 - g) * f
             b = 1 - (1 - b) * f
-        if self.alpha is not None:
+        if self.alpha is not None and not skip_alpha:
             opacity = max(0.0, min(1.0, self.alpha / 100000))
             r = r * opacity + 1.0 * (1 - opacity)
             g = g * opacity + 1.0 * (1 - opacity)

@@ -3,6 +3,7 @@ import type { ConnectorData } from "../../../lib/studioTypes"
 import { fetchConnectorData, updateConnectorData } from "../../../lib/studioApi"
 import { studioStore } from "../../../lib/studio/store"
 import type { NativeRendererProps } from "./RendererRegistry"
+import { RendererShell } from "./RendererShell"
 import { registerRenderer } from "./RendererRegistry"
 
 function dashFor(dash: string): string | undefined {
@@ -56,16 +57,26 @@ function ConnectorRendererImpl({ element, docId, slideN, renderKey, selected }: 
     return () => { cancelled = true }
   }, [docId, slideN, element.id, renderKey])
 
-  if (error) {
+  // Migrated to RendererShell — emits `data-percy-error="connector"` /
+  // `data-percy-loading="connector"` consistent with the other renderers, and
+  // auto-retries on transient errors. Other renderers should adopt the same
+  // pattern in a follow-up pass.
+  if (error || !data) {
     return (
-      <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center",
-                    background: "#fff5f5", color: "#b91c1c", fontSize: 9 }}>
-        ! {error.slice(0, 30)}
-      </div>
+      <RendererShell
+        loading={!error && !data}
+        error={error}
+        kind="connector"
+        onRetry={() => {
+          setError(null)
+          fetchConnectorData(docId, slideN, element.id)
+            .then((d) => setData(d))
+            .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+        }}
+      >
+        {null}
+      </RendererShell>
     )
-  }
-  if (!data) {
-    return <div style={{ width: "100%", height: "100%" }} data-percy-loading="connector" />
   }
 
   // Endpoints are absolute slide inches. Map into 0..100% of the element's

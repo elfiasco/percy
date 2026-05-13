@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { registerRenderer, type NativeRendererProps } from "./RendererRegistry"
+import { RendererShell } from "./RendererShell"
 import type { GradientStop } from "../../../lib/studioTypes"
 
 interface PathCommand {
@@ -109,17 +110,33 @@ function dashArray(dash: string | null | undefined, strokeW: string): string | u
 
 function BridgeFreeformRendererImpl({ element, docId, slideN, renderKey }: NativeRendererProps) {
   const [data, setData] = useState<FreeformData | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
+    let cancelled = false
+    setError(null)
     const url = `/api/docs/${encodeURIComponent(docId)}/slides/${slideN}/elements/${encodeURIComponent(element.id)}/freeform-data`
     fetch(url)
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(setData)
-      .catch(() => {})
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then((d) => { if (!cancelled) setData(d) })
+      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)) })
+    return () => { cancelled = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docId, slideN, element.id, renderKey])
+  }, [docId, slideN, element.id, renderKey, reloadKey])
 
-  if (!data) return <div style={{ width: "100%", height: "100%" }} data-percy-loading="freeform" />
+  if (error || !data) {
+    return (
+      <RendererShell
+        loading={!error && !data}
+        error={error}
+        kind="freeform"
+        onRetry={() => { setError(null); setReloadKey((k) => k + 1) }}
+      >
+        {null}
+      </RendererShell>
+    )
+  }
 
   const fillTypeLower = data.fill_type?.toLowerCase()
   const isGradient = (fillTypeLower === "gradient" || fillTypeLower === "gradfill") && data.gradient_stops && data.gradient_stops.length >= 2

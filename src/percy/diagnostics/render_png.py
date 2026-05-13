@@ -148,7 +148,6 @@ _FONT_FAMILY_MAP: dict[str, str] = {
     "montserrat":          "Century Gothic",   # geometric sans; Century Gothic is the closest Windows match
     "helveticaneue":       "Arial",        # Helvetica Neue not on Windows; Arial has near-identical metrics
     "helvetica":           "Arial",        # same reasoning
-    "arialmт":             "Arial",
     "arial":               "Arial",
     "arialmt":             "Arial",
     "calibri":             "Calibri",
@@ -461,29 +460,58 @@ _MARK_TYPE_MAP = {
 # ---------------------------------------------------------------------------
 
 def _color(value: "Any", default: str = "none", theme: dict[str, str] | None = None) -> str:
-    """Convert a BridgeElement colour (ColorSpec or legacy str) to a matplotlib colour string."""
+    """Convert a BridgeElement colour (ColorSpec or legacy str) to a matplotlib colour string.
+
+    Delegates all hex/scheme/modifier math to ``ColorSpec.resolve()`` — the
+    canonical implementation. Only this helper's responsibility is:
+      1. translate legacy str inputs into a ColorSpec,
+      2. normalise raw OOXML scheme names (e.g. "accent1") to the keys used in
+         the ``_THEME`` dict (e.g. "ACCENT_1"),
+      3. return the matplotlib-friendly ``default`` string when value is empty.
+    """
     from percy.bridge.elements import ColorSpec
     if value is None:
         return default
-    if isinstance(value, ColorSpec):
+    active = theme if theme is not None else _THEME
+
+    # Coerce legacy str inputs into a ColorSpec so resolve() handles them.
+    if isinstance(value, str):
+        if not value:
+            return default
+        if value.startswith("scheme:"):
+            key = value[7:]
+            normalized = _XML_TO_THEME_KEY.get(key) or _XML_TO_THEME_KEY.get(key.lower()) or key
+            spec = ColorSpec(value=f"scheme:{normalized}")
+        else:
+            clean = value.lstrip("#")
+            if len(clean) == 8:
+                clean = clean[2:]
+            if len(clean) != 6:
+                return default
+            spec = ColorSpec(value="#" + clean)
+    elif isinstance(value, ColorSpec):
         if not value.value:
             return default
-        active = theme if theme is not None else _THEME
-        return value.resolve(active)
-    # Legacy str handling
-    if not value:
+        spec = value
+        # Normalise raw OOXML scheme names inside ColorSpec.value too.
+        if spec.value.startswith("scheme:"):
+            key = spec.value[7:]
+            normalized = _XML_TO_THEME_KEY.get(key) or _XML_TO_THEME_KEY.get(key.lower()) or key
+            if normalized != key:
+                spec = ColorSpec(
+                    value=f"scheme:{normalized}",
+                    lum_mod=spec.lum_mod, lum_off=spec.lum_off,
+                    shade=spec.shade,     tint=spec.tint,
+                    alpha=spec.alpha,
+                    hue_mod=spec.hue_mod, sat_mod=spec.sat_mod,
+                )
+    else:
         return default
-    if value.startswith("scheme:"):
-        key = value[7:]
-        normalized = _XML_TO_THEME_KEY.get(key) or _XML_TO_THEME_KEY.get(key.lower()) or key
-        active = theme if theme is not None else _THEME
-        return active.get(normalized) or _THEME.get(normalized, "#888888")
-    clean = value.lstrip("#")
-    if len(clean) == 6:
-        return "#" + clean
-    if len(clean) == 8:
-        return "#" + clean[2:]
-    return default
+
+    # Merge per-call theme over the module-level _THEME fallbacks so unspecified
+    # keys still resolve to a sensible color.
+    merged = {**_THEME, **active} if active is not _THEME else _THEME
+    return spec.resolve(merged)
 
 
 # ---------------------------------------------------------------------------

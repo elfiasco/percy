@@ -53,6 +53,7 @@ from percy.diagnostics.pdf_onboard import onboard_pdf
 from percy.diagnostics.rebuild import rebuild_pptx as _rebuild_pptx
 from percy.diagnostics.render_png import SlideRenderer
 from percy.bridge import BridgeSlide, PercyDocument, PresentationMetadata
+from percy.bridge.constants import SLIDE_WIDTH_IN, SLIDE_HEIGHT_IN
 from percy.tableau import onboard_tableau
 import fitz  # PyMuPDF
 
@@ -78,6 +79,10 @@ from app.backend import sso_api as _sso_api  # noqa: E402
 from app.backend import admin_api as _admin_api  # noqa: E402
 from app.backend import template_sets_api as _template_sets_api  # noqa: E402
 from app.backend import showcase_api as _showcase_api  # noqa: E402
+from app.backend import tableau_routes as _tableau_routes  # noqa: E402
+from app.backend import export_routes as _export_routes  # noqa: E402
+from app.backend import rendering_routes as _rendering_routes  # noqa: E402
+from app.backend import docs_core_routes as _docs_core_routes  # noqa: E402
 _auth_db_mod.init_db()
 
 # ── Rate limit middleware — must be installed BEFORE auth so that when it runs
@@ -98,6 +103,10 @@ app.include_router(_sso_api.router)
 app.include_router(_admin_api.router)
 _template_sets_api.register_template_sets_router(app)
 _showcase_api.register_showcase_router(app)
+_tableau_routes.register_tableau_router(app)
+_export_routes.register_export_router(app)
+_rendering_routes.register_rendering_router(app)
+_docs_core_routes.register_docs_core_router(app)
 
 
 @app.on_event("startup")
@@ -1310,1445 +1319,12 @@ def get_summary(doc_id: str):
     return _doc_summary(doc_id)
 
 
-@app.get("/api/docs/{doc_id}/tableau")
-def get_tableau(doc_id: str):
-    return _tableau_payload(_require(doc_id))
-
-
-@app.get("/api/docs/{doc_id}/tableau/images/{image_index}")
-def get_tableau_image(doc_id: str, image_index: int):
-    d = _require(doc_id)
-    if d.get("source_format") != "tableau":
-        raise HTTPException(400, "Document is not a Tableau workbook")
-    tableau = (d["doc"].custom_properties or {}).get("tableau", {})
-    images = tableau.get("packaged_images", [])
-    if image_index < 0 or image_index >= len(images):
-        raise HTTPException(404, f"Tableau packaged image {image_index} out of range")
-    image = images[image_index]
-    source_path = Path(d["source_path"])
-    if source_path.suffix.lower() != ".twbx":
-        raise HTTPException(404, "Packaged Tableau images only exist for .twbx files")
-    image_path = str(image.get("path") or "").replace("\\", "/")
-    if not image_path:
-        raise HTTPException(404, "Packaged image path is missing")
-    try:
-        with zipfile.ZipFile(source_path) as package:
-            payload = package.read(image_path)
-    except KeyError:
-        raise HTTPException(404, f"Packaged image not found: {image_path}")
-    media_type = "image/jpeg" if str(image.get("format", "")).lower() in {"jpg", "jpeg"} else "image/png"
-    return Response(content=payload, media_type=media_type, headers={"Cache-Control": "max-age=60"})
-
-
-@app.post("/api/docs/{doc_id}/tableau/native-screenshot")
-def capture_tableau_native_screenshot(doc_id: str, wait_sec: int = 45):
-    d = _require(doc_id)
-    if d.get("source_format") != "tableau":
-        raise HTTPException(400, "Document is not a Tableau workbook")
-    if sys.platform != "win32":
-        raise HTTPException(400, "Native Tableau screenshot capture currently requires Windows/Tableau Desktop")
-    source_path = Path(d["source_path"])
-    if not source_path.exists():
-        raise HTTPException(404, f"Source workbook missing: {source_path}")
-
-    out_dir = _CACHE_DIR / doc_id / "tableau-native"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "native-window.png"
-    result = _capture_tableau_desktop_window(source_path, out_path, wait_sec=max(5, min(wait_sec, 120)))
-    d["tableau_native_screenshot"] = str(out_path)
-    _record_event(
-        d["source_path"], d["name"], "tableau", d["slide_count"],
-        "native_tableau_screenshot",
-        f"Captured Tableau Desktop window: {result.get('title')}",
-        {"doc_id": doc_id, **result},
-        "ok",
-    )
-    _update_history_snapshot(doc_id)
-    return result
-
-
-@app.get("/api/docs/{doc_id}/tableau/native-screenshot.png")
-def get_tableau_native_screenshot(doc_id: str):
-    d = _require(doc_id)
-    path = d.get("tableau_native_screenshot")
-    if not path:
-        raise HTTPException(404, "Native Tableau screenshot has not been captured yet")
-    p = Path(path)
-    if not p.exists():
-        raise HTTPException(404, f"Native Tableau screenshot missing: {p}")
-    return FileResponse(str(p), media_type="image/png", headers={"Cache-Control": "max-age=30"})
-
-
-@app.post("/api/docs/{doc_id}/tableau/artifacts/{artifact_n}/capture")
-def capture_tableau_artifact(doc_id: str, artifact_n: int, wait_sec: int = 60):
-    """Open Tableau Desktop, navigate to a specific worksheet/artifact, and capture a screenshot."""
-    d = _require(doc_id)
-    if d.get("source_format") != "tableau":
-        raise HTTPException(400, "Document is not a Tableau workbook")
-    if sys.platform != "win32":
-        raise HTTPException(400, "Native Tableau screenshot capture requires Windows/Tableau Desktop")
-    source_path = Path(d["source_path"])
-    if not source_path.exists():
-        raise HTTPException(404, f"Source workbook missing: {source_path}")
-
-    # Find the artifact name for this slide number
-    doc = d["doc"]
-    artifact_slide = next((s for s in doc.slides if s.slide_number == artifact_n), None)
-    if artifact_slide is None:
-        raise HTTPException(404, f"Artifact {artifact_n} not found in document")
-
-    props = artifact_slide.custom_properties or {}
-    tab_info = props.get("tableau", {}) or {}
-    artifact_name = tab_info.get("name") or tab_info.get("title") or f"Artifact {artifact_n}"
-    artifact_kind = props.get("tableau_kind", "artifact")
-
-    out_dir = _CACHE_DIR / doc_id / "tableau-artifacts"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"artifact-{artifact_n:03d}.png"
-
-    result = _capture_tableau_artifact_window(
-        source_path, artifact_name, artifact_kind, out_path,
-        wait_sec=max(5, min(wait_sec, 120)),
-    )
-
-    # Cache per-artifact path in doc state
-    artifact_captures = d.setdefault("tableau_artifact_captures", {})
-    artifact_captures[artifact_n] = str(out_path)
-
-    _record_event(
-        d["source_path"], d["name"], "tableau", d["slide_count"],
-        "tableau_artifact_capture",
-        f"Captured Tableau artifact {artifact_n}: {artifact_name}",
-        {"doc_id": doc_id, "artifact_n": artifact_n, "artifact_name": artifact_name, **result},
-        "ok",
-    )
-    _update_history_snapshot(doc_id)
-    return result
-
-
-@app.get("/api/docs/{doc_id}/tableau/artifacts/{artifact_n}/capture.png")
-def get_tableau_artifact_capture(doc_id: str, artifact_n: int):
-    d = _require(doc_id)
-    captures = d.get("tableau_artifact_captures", {})
-    path = captures.get(artifact_n)
-    if not path:
-        raise HTTPException(404, f"No capture for artifact {artifact_n} — call POST first")
-    p = Path(path)
-    if not p.exists():
-        raise HTTPException(404, f"Capture image missing: {p}")
-    return FileResponse(str(p), media_type="image/png", headers={"Cache-Control": "max-age=30"})
-
-
-@app.post("/api/docs/{doc_id}/tableau/capture-all")
-def capture_all_tableau_sheets(doc_id: str, wait_sec: int = 60, render_wait: float = 2.0):
-    """Open Tableau Desktop once and screenshot every worksheet and dashboard in order.
-
-    Navigates via Ctrl+PgDn cycling — no per-sheet Tableau instance needed.
-    Returns a mapping of slide_number → capture path.
-    """
-    d = _require(doc_id)
-    if d.get("source_format") != "tableau":
-        raise HTTPException(400, "Document is not a Tableau workbook")
-    if sys.platform != "win32":
-        raise HTTPException(400, "Requires Windows + Tableau Desktop")
-    source_path = Path(d["source_path"])
-    if not source_path.exists():
-        raise HTTPException(404, f"Source workbook missing: {source_path}")
-
-    doc = d["doc"]
-    # Collect ordered artifacts (worksheets then dashboards, as they appear in the TWB tab strip)
-    artifacts = []
-    for slide in doc.slides:
-        props = slide.custom_properties or {}
-        kind = props.get("tableau_kind")
-        if kind not in {"worksheet", "dashboard"}:
-            continue
-        info = props.get("tableau", {}) or {}
-        name = info.get("name") or info.get("title") or f"Sheet {slide.slide_number}"
-        artifacts.append({"slide_number": slide.slide_number, "name": name, "kind": kind})
-
-    if not artifacts:
-        raise HTTPException(400, "No worksheet or dashboard artifacts found in this document")
-
-    out_dir = _CACHE_DIR / doc_id / "tableau-artifacts"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    results = _capture_all_tableau_sheets(
-        source_path, artifacts, out_dir,
-        wait_sec=max(10, min(wait_sec, 180)),
-        render_wait=max(0.5, min(render_wait, 10.0)),
-    )
-
-    # Cache results per artifact_n
-    artifact_captures = d.setdefault("tableau_artifact_captures", {})
-    captured_count = 0
-    for r in results:
-        sn = r.get("slide_number")
-        path = r.get("path")
-        if sn and path and Path(path).exists():
-            artifact_captures[sn] = path
-            captured_count += 1
-
-    _record_event(
-        d["source_path"], d["name"], "tableau", d["slide_count"],
-        "tableau_capture_all",
-        f"Batch-captured {captured_count}/{len(artifacts)} sheets from Tableau Desktop",
-        {"doc_id": doc_id, "captured": captured_count, "total": len(artifacts)},
-        "ok",
-    )
-    _update_history_snapshot(doc_id)
-    return {"captured": captured_count, "total": len(artifacts), "results": results}
-
-
-# ─── Smart capture helpers ────────────────────────────────────────────────────
-
-def _pixel_quality_score(img: Image.Image) -> float:
-    """0–100 quality score. 0 = black/blank, 100 = rich rendered content.
-
-    Uses mean brightness and standard deviation of the grayscale image.
-    A fully-black screenshot has mean≈0; a fully-white blank has std≈0.
-    A rendered chart has mean in a middle range and meaningful std.
-    """
-    import math
-    gray = img.convert("L")
-    stat = ImageStat.Stat(gray)
-    mean = stat.mean[0]
-    std  = stat.stddev[0]
-    brightness_score = min(50.0, max(0.0, (mean - 10.0) / 4.0))   # mean 10→50 maps to 0→10; 210→50
-    texture_score    = min(50.0, std * 50.0 / 70.0)                # std=70 → 50 points
-    return brightness_score + texture_score
-
-
-def _images_rms_diff(img1: Image.Image, img2: Image.Image) -> float:
-    """RMS pixel difference between two images (downsampled for speed)."""
-    import math
-    s1 = img1.convert("L").resize((80, 45), Image.BILINEAR)
-    s2 = img2.convert("L").resize((80, 45), Image.BILINEAR)
-    diff = ImageChops.difference(s1, s2)
-    stat = ImageStat.Stat(diff)
-    return stat.rms[0]
-
-
-def _wait_until_stable(
-    grab_fn: "Any",
-    *,
-    max_wait: float = 8.0,
-    stability_hold: float = 0.8,
-    rms_threshold: float = 1.2,
-    min_quality: float = 12.0,
-    poll_interval: float = 0.35,
-) -> Image.Image:
-    """Poll screenshots until two consecutive frames are nearly identical AND quality is ok.
-
-    Returns the stable (best-quality) frame. Falls back to whatever we have at timeout.
-    """
-    deadline = time.time() + max_wait
-    prev = grab_fn()
-    stable_since: float | None = None
-    best = prev
-    best_q = _pixel_quality_score(prev)
-
-    while time.time() < deadline:
-        time.sleep(poll_interval)
-        curr = grab_fn()
-        q = _pixel_quality_score(curr)
-        rms = _images_rms_diff(prev, curr)
-
-        if q > best_q:
-            best = curr
-            best_q = q
-
-        if rms <= rms_threshold and q >= min_quality:
-            if stable_since is None:
-                stable_since = time.time()
-            elif time.time() - stable_since >= stability_hold:
-                return curr  # held stable long enough
-        else:
-            stable_since = None
-
-        prev = curr
-
-    return best  # return highest-quality frame seen, even if not fully stable
-
-
-def _lm_studio_vision_check(
-    img_path: Path,
-    lm_url: str = "http://localhost:1234/v1/chat/completions",
-) -> dict[str, Any]:
-    """Ask the LM Studio vision model if the screenshot looks fully rendered.
-
-    Returns {ok: bool|None, score: int 1-5, reason: str, description: str}.
-    ok=None means the vision call itself failed (network/model error).
-    """
-    import json as _json
-    import urllib.request as _req
-
-    try:
-        with open(img_path, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode()
-
-        prompt = (
-            "You are reviewing a screenshot of Tableau Desktop to decide if the visualization "
-            "is fully rendered and ready to save.\n\n"
-            "Answer ONLY with valid JSON — no extra text:\n"
-            '{"ok": true_or_false, "score": 1_to_5, "reason": "one sentence", "description": "what you see"}\n\n'
-            "ok=true  → chart/dashboard is fully rendered with real data visible\n"
-            "ok=false → screen is black, blank, still loading a spinner, or shows an error\n"
-            "score    → 1=completely black/blank, 5=fully rendered with clear data"
-        )
-
-        payload = _json.dumps({
-            "model": "google/gemma-3-27b",
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                ],
-            }],
-            "max_tokens": 150,
-            "temperature": 0.05,
-        }).encode()
-
-        req = _req.Request(lm_url, data=payload, headers={"Content-Type": "application/json"})
-        with _req.urlopen(req, timeout=60) as resp:
-            body = _json.loads(resp.read())
-
-        text = body["choices"][0]["message"]["content"].strip()
-        m = re.search(r"\{.*?\}", text, re.DOTALL)
-        if m:
-            result = _json.loads(m.group())
-            # normalise keys
-            return {
-                "ok":          bool(result.get("ok", False)),
-                "score":       int(result.get("score", 0)),
-                "reason":      str(result.get("reason", "")),
-                "description": str(result.get("description", "")),
-            }
-        ok = ("true" in text.lower()) and ("false" not in text.lower())
-        return {"ok": ok, "score": 3 if ok else 1, "reason": text[:200], "description": ""}
-
-    except Exception as exc:
-        log.warning("vision_check failed for %s: %s", img_path.name, exc)
-        return {"ok": None, "score": None, "reason": str(exc)[:200], "description": "vision unavailable"}
-
-
-def _smart_capture_one(
-    grab_fn: "Any",
-    out_path: Path,
-    sheet_name: str,
-    *,
-    max_render_wait: float = 10.0,
-    quality_threshold: float = 14.0,
-    max_retries: int = 3,
-    use_vision: bool = True,
-) -> dict[str, Any]:
-    """Capture one sheet with stability wait, quality check, and optional vision verification."""
-    attempt = 0
-    best_img: Image.Image | None = None
-    best_q = -1.0
-
-    while attempt < max_retries:
-        wait_this_round = max_render_wait * (attempt + 1)
-        img = _wait_until_stable(
-            grab_fn,
-            max_wait=wait_this_round,
-            min_quality=quality_threshold,
-        )
-        q = _pixel_quality_score(img)
-        if best_img is None or q > best_q:
-            best_img = img
-            best_q = q
-
-        if q >= quality_threshold:
-            break
-
-        attempt += 1
-        log.warning("smart_capture: %s attempt %d quality=%.1f < %.1f, retrying", sheet_name, attempt, q, quality_threshold)
-        if attempt < max_retries:
-            time.sleep(1.5)  # brief pause before re-checking
-
-    assert best_img is not None
-    best_img.save(out_path)
-
-    vision: dict[str, Any] = {}
-    if use_vision:
-        vision = _lm_studio_vision_check(out_path)
-        # If vision says bad and we have retries left, try one last grab
-        if vision.get("ok") is False and best_q < 50.0:
-            log.warning(
-                "smart_capture: vision rejected %s (score=%s, reason=%s) — final grab",
-                sheet_name, vision.get("score"), vision.get("reason"),
-            )
-            time.sleep(max_render_wait)
-            final_img = grab_fn()
-            final_q = _pixel_quality_score(final_img)
-            if final_q > best_q:
-                final_img.save(out_path)
-                best_q = final_q
-                vision = _lm_studio_vision_check(out_path)
-
-    return {
-        "quality_score": round(best_q, 1),
-        "vision":        vision,
-        "ok":            best_q >= quality_threshold,
-    }
-
-
-def _pil_to_bytes(img: Image.Image, fmt: str = "PNG") -> bytes:
-    import io
-    buf = io.BytesIO()
-    img.save(buf, format=fmt)
-    return buf.getvalue()
-
-
-def _force_hwnd_topmost(hwnd: int) -> None:
-    """Force window above all other windows so ImageGrab captures it, not what's in front."""
-    import ctypes
-    from ctypes import wintypes
-    user32 = ctypes.windll.user32
-    HWND_TOPMOST = ctypes.c_void_p(-1)
-    SWP_NOMOVE    = 0x0002
-    SWP_NOSIZE    = 0x0001
-    SWP_SHOWWINDOW = 0x0040
-    user32.SetWindowPos(
-        wintypes.HWND(hwnd), HWND_TOPMOST,
-        0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
-    )
-    # Thread-input attachment trick so SetForegroundWindow works from background threads
-    current_tid = ctypes.windll.kernel32.GetCurrentThreadId()
-    fg_hwnd = user32.GetForegroundWindow()
-    fg_tid  = user32.GetWindowThreadProcessId(fg_hwnd, None)
-    if fg_tid and fg_tid != current_tid:
-        user32.AttachThreadInput(current_tid, fg_tid, True)
-        user32.SetForegroundWindow(wintypes.HWND(hwnd))
-        user32.AttachThreadInput(current_tid, fg_tid, False)
-    else:
-        user32.SetForegroundWindow(wintypes.HWND(hwnd))
-    user32.BringWindowToTop(wintypes.HWND(hwnd))
-
-
-def _restore_hwnd_notopmost(hwnd: int) -> None:
-    """Remove topmost flag from window after capture is complete."""
-    import ctypes
-    from ctypes import wintypes
-    HWND_NOTOPMOST = ctypes.c_void_p(-2)
-    SWP_NOMOVE = 0x0002
-    SWP_NOSIZE = 0x0001
-    ctypes.windll.user32.SetWindowPos(
-        wintypes.HWND(hwnd), HWND_NOTOPMOST,
-        0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE,
-    )
-
-
-def _get_window_title(hwnd: int) -> str:
-    import ctypes
-    from ctypes import wintypes
-    user32 = ctypes.windll.user32
-    length = user32.GetWindowTextLengthW(wintypes.HWND(hwnd))
-    if length <= 0:
-        return ""
-    buf = ctypes.create_unicode_buffer(length + 1)
-    user32.GetWindowTextW(wintypes.HWND(hwnd), buf, length + 1)
-    return buf.value
-
-
-def _sendinput_key_combo(vk_mod: int, vk_key: int) -> None:
-    """Send modifier+key via SendInput — goes to the globally-focused window.
-
-    This is the correct way to simulate keystrokes in modern Windows apps
-    (SendMessageW WM_KEYDOWN is ignored by apps that use TranslateMessage/DispatchMessage).
-    Caller must ensure the target window is the foreground window first.
-    """
-    import ctypes
-
-    INPUT_KEYBOARD = 1
-    KEYEVENTF_KEYUP = 0x0002
-
-    class _KI(ctypes.Structure):
-        _fields_ = [
-            ("wVk",         ctypes.c_ushort),
-            ("wScan",       ctypes.c_ushort),
-            ("dwFlags",     ctypes.c_ulong),
-            ("time",        ctypes.c_ulong),
-            ("dwExtraInfo", ctypes.c_ulong),
-        ]
-
-    class _INPUT(ctypes.Structure):
-        _fields_ = [
-            ("type", ctypes.c_ulong),
-            ("ki",   _KI),
-            ("_pad", ctypes.c_ubyte * 8),
-        ]
-
-    seq = [
-        _INPUT(type=INPUT_KEYBOARD, ki=_KI(wVk=vk_mod)),
-        _INPUT(type=INPUT_KEYBOARD, ki=_KI(wVk=vk_key)),
-        _INPUT(type=INPUT_KEYBOARD, ki=_KI(wVk=vk_key, dwFlags=KEYEVENTF_KEYUP)),
-        _INPUT(type=INPUT_KEYBOARD, ki=_KI(wVk=vk_mod, dwFlags=KEYEVENTF_KEYUP)),
-    ]
-    arr = (_INPUT * len(seq))(*seq)
-    ctypes.windll.user32.SendInput(len(seq), arr, ctypes.sizeof(_INPUT))
-
-
-def _send_ctrl_pgup(user32: Any, hwnd: int, canvas_xy: tuple[int, int] | None = None) -> None:
-    """Send Ctrl+PgUp to navigate to the previous Tableau tab."""
-    import pyautogui
-    _force_hwnd_topmost(hwnd)
-    time.sleep(0.05)
-    pyautogui.hotkey("ctrl", "pageup")
-
-
-def _mouse_click_screen(x: int, y: int) -> None:
-    """Perform a real left-click at absolute screen coordinates."""
-    import ctypes
-    ctypes.windll.user32.SetCursorPos(x, y)
-    time.sleep(0.06)
-    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
-    time.sleep(0.06)
-    ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
-
-
-def _find_tab_via_ocr(sheet_name: str, win_rect: tuple[int, int, int, int]) -> tuple[int, int] | None:
-    """Tesseract-OCR the Tableau tab strip to find (screen_x, screen_y) of the named tab.
-
-    Tesseract must be installed at C:\\Program Files\\Tesseract-OCR\\tesseract.exe.
-    Returns None if the tab is not found or Tesseract is unavailable.
-    """
-    try:
-        import pytesseract
-        pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-
-        win_l, win_t, win_r, win_b = win_rect
-        tab_h = 38
-        tab_bbox = (win_l, win_b - tab_h, win_r, win_b)
-        tab_img = ImageGrab.grab(bbox=tab_bbox)
-
-        # 2× upscale for better OCR on small tab text
-        w, h = tab_img.size
-        tab_big = tab_img.resize((w * 2, h * 2), Image.LANCZOS)
-
-        data = pytesseract.image_to_data(tab_big, output_type=pytesseract.Output.DICT)
-
-        texts = [str(t).strip() for t in data["text"]]
-        name_lower = sheet_name.lower().strip()
-        target_words = name_lower.split()
-
-        # Helper: screen coords from OCR pixel coords inside the 2× upscaled crop
-        def to_screen(px: int, py: int) -> tuple[int, int]:
-            return win_l + px // 2, win_b - tab_h + py // 2
-
-        # Exact single-token match
-        for i, word in enumerate(texts):
-            if word.lower() == name_lower:
-                cx = data["left"][i] + data["width"][i] // 2
-                cy = data["top"][i]  + data["height"][i] // 2
-                return to_screen(cx, cy)
-
-        # Multi-word contiguous match
-        n = len(target_words)
-        for i in range(len(texts) - n + 1):
-            window_words = [texts[j].lower() for j in range(i, i + n)]
-            if window_words == target_words:
-                left  = data["left"][i]
-                right = data["left"][i + n - 1] + data["width"][i + n - 1]
-                cx = (left + right) // 2
-                cy = data["top"][i] + data["height"][i] // 2
-                return to_screen(cx, cy)
-
-        # Substring fallback: join all tokens and look for the name
-        joined = " ".join(t.lower() for t in texts if t)
-        log.info("smart_capture: OCR tab strip tokens=%r (looking for %r)", joined[:200], sheet_name)
-        return None
-
-    except ImportError:
-        log.warning("smart_capture: pytesseract not installed; OCR tab navigation unavailable")
-        return None
-    except Exception as exc:
-        log.warning("smart_capture: OCR tab find failed for '%s': %s", sheet_name, exc)
-        return None
-
-
-def _find_tab_via_vision(sheet_name: str, win_rect: tuple[int, int, int, int]) -> tuple[int, int] | None:
-    """Ask LM Studio vision model for the screen position of the named tab in the tab strip.
-
-    Returns (screen_x, screen_y) or None if not found / model unavailable.
-    """
-    try:
-        import json as _json, urllib.request as _req
-        win_l, win_t, win_r, win_b = win_rect
-        tab_bbox = (win_l, win_b - 44, win_r, win_b)
-        tab_img = ImageGrab.grab(bbox=tab_bbox)
-        b64 = base64.b64encode(_pil_to_bytes(tab_img)).decode()
-
-        prompt = (
-            f'This is the tab strip at the bottom of Tableau Desktop. '
-            f'Find the tab named exactly "{sheet_name}" (case-insensitive). '
-            f'The image is {tab_img.width}×{tab_img.height} px. '
-            f'Reply ONLY with JSON: {{"found": true_or_false, "x": pixel_x_of_tab_center}} '
-            f'(x is in image pixels, 0=left edge). If not found set found=false and x=0.'
-        )
-        payload = _json.dumps({
-            "model": "google/gemma-3-27b",
-            "messages": [{"role": "user", "content": [
-                {"type": "text",      "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-            ]}],
-            "max_tokens": 60, "temperature": 0.05,
-        }).encode()
-        req = _req.Request(
-            "http://localhost:1234/v1/chat/completions",
-            data=payload, headers={"Content-Type": "application/json"},
-        )
-        with _req.urlopen(req, timeout=25) as resp:
-            body = _json.loads(resp.read())
-        text = body["choices"][0]["message"]["content"].strip()
-        m = re.search(r"\{.*?\}", text, re.DOTALL)
-        if m:
-            jd = _json.loads(m.group())
-            if jd.get("found") and jd.get("x"):
-                screen_x = win_l + int(jd["x"])
-                screen_y = win_b - 22
-                log.info("smart_capture: vision tab found '%s' at x=%d", sheet_name, jd["x"])
-                return screen_x, screen_y
-        return None
-    except Exception as exc:
-        log.warning("smart_capture: vision tab-find failed for '%s': %s", sheet_name, exc)
-        return None
-
-
-def _prep_capture_twbx(source_path: Path) -> tuple[Path, list[str]]:
-    """Create an unhidden copy of the .twbx with all worksheet tabs visible.
-
-    Returns (temp_twbx_path, tab_order) where tab_order lists sheet names
-    in the order they will appear in Tableau Desktop's tab strip (from <windows>).
-    The temp file is written alongside the source; caller must delete it.
-    """
-    import zipfile, re, xml.etree.ElementTree as ET
-
-    with zipfile.ZipFile(source_path, "r") as zin:
-        twb_name = next(n for n in zin.namelist() if n.endswith(".twb"))
-        twb_bytes = zin.read(twb_name)
-
-    xml_str = twb_bytes.decode("utf-8", errors="replace")
-
-    # Extract tab order from <windows> section (this is the order Tableau shows tabs)
-    root = ET.fromstring(xml_str)
-    windows_el = root.find("windows")
-    tab_order: list[str] = []
-    if windows_el is not None:
-        for w in windows_el:
-            cls = w.get("class", "")
-            name = w.get("name", "")
-            if cls in ("worksheet", "dashboard") and name:
-                tab_order.append(name)
-
-    # Remove hidden='true' from <window> elements to make all worksheets visible
-    def _strip_hidden(m: re.Match) -> str:
-        return m.group(0).replace(" hidden='true'", "")
-
-    xml_str = re.sub(r"<window[^>]+>", _strip_hidden, xml_str)
-
-    # Write temp file in the same directory as source (so Tableau finds any sidecar files)
-    temp_path = source_path.with_name("_percy_capture.twbx")
-    with zipfile.ZipFile(source_path, "r") as zin:
-        with zipfile.ZipFile(temp_path, "w", zipfile.ZIP_DEFLATED) as zout:
-            for item in zin.infolist():
-                data = xml_str.encode("utf-8") if item.filename == twb_name else zin.read(item.filename)
-                zout.writestr(item, data)
-
-    return temp_path, tab_order
-
-
-def _dismiss_blocking_dialogs(tableau_hwnd: int) -> None:
-    """Close non-Tableau system dialog windows (e.g. OneDrive) that could steal keyboard focus.
-
-    Only targets non-resizable windows (no WS_THICKFRAME) with known blocking titles,
-    so browser windows and other main application windows are never closed.
-    """
-    import ctypes
-    from ctypes import wintypes
-    user32 = ctypes.windll.user32
-    WM_CLOSE = 0x0010
-    WS_THICKFRAME = 0x00040000  # Resizable windows are main apps, not dialogs
-
-    blockers: list[int] = []
-
-    def _cb(hwnd: int, _: int) -> bool:
-        if hwnd == tableau_hwnd or not user32.IsWindowVisible(hwnd):
-            return True
-        # Skip resizable (main application) windows
-        if user32.GetWindowLongW(hwnd, -16) & WS_THICKFRAME:
-            return True
-        l = user32.GetWindowTextLengthW(hwnd)
-        if l <= 0:
-            return True
-        buf = ctypes.create_unicode_buffer(l + 1)
-        user32.GetWindowTextW(hwnd, buf, l + 1)
-        title = buf.value.lower()
-        if any(k in title for k in ("onedrive", "file recovery")):
-            blockers.append(hwnd)
-        return True
-
-    user32.EnumWindows(ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)(_cb), 0)
-    for h in blockers:
-        log.info("smart_capture: dismissing blocking dialog hwnd=%d", h)
-        user32.PostMessageW(wintypes.HWND(h), WM_CLOSE, 0, 0)
-        time.sleep(0.3)
-
-
-def _smart_capture_all_tableau(
-    source_path: Path,
-    artifacts: list[dict],
-    out_dir: Path,
-    *,
-    wait_sec: int = 60,
-    max_render_wait: float = 10.0,
-    use_vision: bool = True,
-    quality_threshold: float = 14.0,
-    max_retries: int = 3,
-) -> list[dict]:
-    """Open Tableau Desktop once and smart-capture every artifact.
-
-    For each sheet:
-      1. Force Tableau window topmost (fixes browser-covers-Tableau capture bug)
-      2. Navigate tab by name: OCR → vision-model → keyboard Ctrl+PgDn
-      3. Wait for rendering to stabilize (frame-diff analysis)
-      4. Pixel quality check — retry with longer wait if too dark/blank
-      5. Vision model verify (LM Studio) — final retry if vision rejects
-    """
-    import ctypes
-    from ctypes import wintypes
-
-    user32 = ctypes.windll.user32
-
-    # Unhide all worksheet tabs so every artifact is keyboard-navigable.
-    # This rewrites the <windows> section to remove hidden='true'.
-    open_path, tab_order = _prep_capture_twbx(source_path)
-    target_stem = open_path.stem.lower()   # "_percy_capture"
-    log.info("smart_capture: prep'd unhidden workbook %s (tab_order=%s)", open_path.name, tab_order)
-
-    # Re-order artifacts to match Tableau's tab strip order so keyboard nav is sequential.
-    name_to_artifact: dict[str, dict] = {a["name"]: a for a in artifacts}
-    sorted_artifacts: list[dict] = []
-    for tab_name in tab_order:
-        if tab_name in name_to_artifact:
-            sorted_artifacts.append(name_to_artifact.pop(tab_name))
-    sorted_artifacts.extend(name_to_artifact.values())  # any not in tab_order at the end
-
-    # Kill any existing Tableau processes so we start clean (no file-recovery dialogs).
-    import subprocess
-    subprocess.run(["taskkill", "/F", "/IM", "tableau.exe"], capture_output=True)
-    time.sleep(1.5)
-
-    log.info("smart_capture: opening %s", open_path.name)
-    os.startfile(str(open_path))  # type: ignore[attr-defined]
-
-    # Wait for the actual Tableau Desktop workbook window — NOT the "Opening workbook..." loader.
-    # The real window title is "Tableau - <WorkbookName>"; loading dialogs start with "Opening".
-    hwnd = 0
-    win_title = ""
-    deadline = time.time() + wait_sec
-    while time.time() < deadline:
-        for w in _visible_windows(user32):
-            if not _is_tableau_window(w):
-                continue
-            t = w["title"].lower()
-            if target_stem not in t:
-                continue
-            if t.startswith("opening") or t.startswith("tableau - opening"):
-                continue  # skip "Opening workbook '...'" loader
-            # Verify the window has actual non-zero bounds (not a hidden/unrendered window)
-            r = wintypes.RECT()
-            user32.GetWindowRect(wintypes.HWND(w["hwnd"]), ctypes.byref(r))
-            if r.right - r.left < 100:
-                continue
-            hwnd = int(w["hwnd"])
-            win_title = str(w["title"])
-            break
-        if hwnd:
-            break
-        time.sleep(1.5)
-
-    if not hwnd:
-        err = (
-            f"Timed out waiting for Tableau Desktop to open '{source_path.name}' ({wait_sec}s). "
-            "Ensure Tableau Desktop is installed and .twbx files are associated with it."
-        )
-        return [{"error": err, "slide_number": a["slide_number"], "ok": False} for a in artifacts]
-
-    log.info("smart_capture: found Tableau window hwnd=%s title=%r", hwnd, win_title)
-
-    # Maximize, then force topmost so the browser can't cover it during capture
-    user32.ShowWindow(wintypes.HWND(hwnd), 3)  # SW_MAXIMIZE
-    time.sleep(2.0)
-    _force_hwnd_topmost(hwnd)
-    time.sleep(1.0)
-
-    # Dismiss any startup dialogs (File Recovery, license prompts, etc.) with Escape.
-    # We press it several times with pauses to handle stacked dialogs.
-    import pyautogui
-    log.info("smart_capture: dismissing any startup dialogs (Escape ×5)")
-    for _ in range(5):
-        _force_hwnd_topmost(hwnd)
-        time.sleep(0.2)
-        pyautogui.press("escape")
-        time.sleep(0.4)
-    time.sleep(1.0)
-
-    # Read window bounds after maximize
-    rect = wintypes.RECT()
-    user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect))
-    win_l, win_t = int(rect.left), int(rect.top)
-    win_r, win_b = int(rect.right), int(rect.bottom)
-    win_rect = (win_l, win_t, win_r, win_b)
-    log.info("smart_capture: window bounds L=%d T=%d R=%d B=%d", win_l, win_t, win_r, win_b)
-
-    # Content crop: skip Tableau's left data panel, top toolbar, and bottom tab strip
-    sidebar_w   = 330   # Tableau left panel (data pane) is ~330px wide when maximized
-    toolbar_h   = 120   # Top toolbar + menu bar
-    tab_strip_h = 50    # Bottom tab strip
-
-    # Title bar click: safe focus point that does not trigger dashboard navigation actions.
-    # Use win_t+25 to stay well away from the screen top (avoids Windows Snap triggers at y≈0).
-    title_click_x = win_l + 600
-    title_click_y = win_t + 25
-    log.info("smart_capture: title bar focus click target (%d, %d)", title_click_x, title_click_y)
-
-    def _grab() -> Image.Image:
-        """Capture Tableau content area. Re-reads window bounds each call so a window
-        move/restore after the initial bbox computation doesn't produce desktop screenshots."""
-        # Restore window if it got minimized
-        if user32.IsIconic(wintypes.HWND(hwnd)):
-            user32.ShowWindow(wintypes.HWND(hwnd), 3)  # SW_MAXIMIZE
-            time.sleep(1.0)
-        _force_hwnd_topmost(hwnd)
-        # Re-read current window position — title-bar click or OS snap may have moved it
-        _r = wintypes.RECT()
-        user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(_r))
-        _l2, _t2, _r2, _b2 = int(_r.left), int(_r.top), int(_r.right), int(_r.bottom)
-        _bbox = (_l2 + sidebar_w, _t2 + toolbar_h, _r2, _b2 - tab_strip_h)
-        time.sleep(0.25)  # Let DWM composite the window before grabbing
-        return ImageGrab.grab(bbox=_bbox)
-
-    # One-time focus: click the window title bar (safe — does not trigger sheet navigation).
-    # Tableau opens to the first sheet in the <windows> section (sorted_artifacts[0]).
-    # After this single click, we use ONLY keyboard for all navigation (no further clicks).
-    import pyautogui
-    _force_hwnd_topmost(hwnd)
-    _dismiss_blocking_dialogs(hwnd)
-    time.sleep(0.2)
-    _mouse_click_screen(title_click_x, title_click_y)
-    time.sleep(0.8)
-    # Verify Tableau is still foreground; if the click moved the window, re-read bounds
-    _r_check = wintypes.RECT()
-    user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(_r_check))
-    win_l2, win_t2, win_r2, win_b2 = int(_r_check.left), int(_r_check.top), int(_r_check.right), int(_r_check.bottom)
-    if (win_l2, win_t2, win_r2, win_b2) != (win_l, win_t, win_r, win_b):
-        log.warning("smart_capture: window moved after focus click: %d,%d→%d,%d (was %d,%d→%d,%d) — re-maximizing",
-                    win_l2, win_t2, win_r2, win_b2, win_l, win_t, win_r, win_b)
-        user32.ShowWindow(wintypes.HWND(hwnd), 3)  # SW_MAXIMIZE
-        time.sleep(1.0)
-        _force_hwnd_topmost(hwnd)
-        time.sleep(0.3)
-
-    results: list[dict] = []
-    current_tab_idx = 0  # Tableau opens to sorted_artifacts[0] (first sheet in <windows>)
-
-    for i, artifact in enumerate(sorted_artifacts):
-        sn   = artifact["slide_number"]
-        name = artifact["name"]
-        kind = artifact["kind"]
-        out_path = out_dir / f"artifact-{sn:03d}.png"
-
-        log.info("smart_capture: [%d/%d] navigating to '%s' (%s)", i + 1, len(sorted_artifacts), name, kind)
-        _force_hwnd_topmost(hwnd)
-        _dismiss_blocking_dialogs(hwnd)
-
-        nav_method = "none"
-
-        # ── Strategy 1: Tesseract OCR click on visible tab ───────────────────
-        ocr_pos = _find_tab_via_ocr(name, win_rect)
-        if ocr_pos:
-            _mouse_click_screen(*ocr_pos)
-            nav_method = "ocr"
-            current_tab_idx = i
-            log.info("smart_capture: OCR tab click for '%s' at %s", name, ocr_pos)
-
-        # ── Strategy 2: pure keyboard navigation (no intermediate clicks) ────
-        # Ctrl+PgDn/PgUp retains focus from the initial title bar click and
-        # works reliably across all 23 tabs without any canvas re-clicking.
-        if nav_method == "none":
-            steps = i - current_tab_idx
-            if steps != 0:
-                _force_hwnd_topmost(hwnd)
-                time.sleep(0.05)
-                if steps > 0:
-                    log.info("smart_capture: keyboard nav — Ctrl+PgDn ×%d for '%s'", steps, name)
-                    for _ in range(steps):
-                        pyautogui.hotkey("ctrl", "pagedown")
-                        time.sleep(0.15)
-                else:
-                    log.info("smart_capture: keyboard nav — Ctrl+PgUp ×%d for '%s'", -steps, name)
-                    for _ in range(-steps):
-                        pyautogui.hotkey("ctrl", "pageup")
-                        time.sleep(0.15)
-
-            current_tab_idx = i
-            nav_method = "keyboard"
-
-        # Give Tableau time to load chart data from the extract before grabbing.
-        # Without this wait, the blank white canvas (no chart rendered yet) stabilises
-        # in <1 s and gets saved as a blank screenshot. 5 s covers typical extract query
-        # times for worksheets with 400K-row datasets.
-        # Also send Escape to dismiss any tooltip/overlay that might cover the viz.
-        _force_hwnd_topmost(hwnd)
-        pyautogui.press("escape")
-        time.sleep(0.15)
-        pyautogui.press("escape")
-        time.sleep(5.0)
-
-        # Capture with stability wait + quality check + optional vision verify
-        capture_meta = _smart_capture_one(
-            _grab, out_path, name,
-            max_render_wait=max_render_wait,
-            quality_threshold=quality_threshold,
-            max_retries=max_retries,
-            use_vision=use_vision,
-        )
-
-        results.append({
-            "slide_number": sn,
-            "name":         name,
-            "kind":         kind,
-            "path":         str(out_path),
-            "nav_method":   nav_method,
-            **capture_meta,
-        })
-
-        q   = capture_meta.get("quality_score", 0)
-        vok = capture_meta.get("vision", {}).get("ok", "n/a")
-        log.info("smart_capture: '%s' quality=%.1f vision=%s nav=%s", name, q, vok, nav_method)
-
-    _restore_hwnd_notopmost(hwnd)
-
-    # Clean up the temp unhidden workbook
-    try:
-        open_path.unlink(missing_ok=True)
-    except Exception:
-        pass
-
-    return results
-
-
-@app.post("/api/docs/{doc_id}/tableau/smart-capture-all")
-def smart_capture_all_tableau_sheets(
-    doc_id: str,
-    wait_sec: int = 60,
-    max_render_wait: float = 10.0,
-    use_vision: bool = True,
-    quality_threshold: float = 14.0,
-    max_retries: int = 3,
-):
-    """Smart batch Tableau capture with stability detection, quality checks, and vision verification."""
-    d = _require(doc_id)
-    if d.get("source_format") != "tableau":
-        raise HTTPException(400, "Document is not a Tableau workbook")
-    if sys.platform != "win32":
-        raise HTTPException(400, "Requires Windows + Tableau Desktop")
-    source_path = Path(d["source_path"])
-    if not source_path.exists():
-        raise HTTPException(404, f"Source workbook missing: {source_path}")
-
-    doc = d["doc"]
-    artifacts: list[dict] = []
-    for slide in doc.slides:
-        props = slide.custom_properties or {}
-        kind  = props.get("tableau_kind")
-        if kind not in {"worksheet", "dashboard"}:
-            continue
-        info = props.get("tableau", {}) or {}
-        name = info.get("name") or info.get("title") or f"Sheet {slide.slide_number}"
-        artifacts.append({"slide_number": slide.slide_number, "name": name, "kind": kind})
-
-    if not artifacts:
-        raise HTTPException(400, "No worksheet or dashboard artifacts found")
-
-    out_dir = _CACHE_DIR / doc_id / "tableau-artifacts"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    results = _smart_capture_all_tableau(
-        source_path, artifacts, out_dir,
-        wait_sec=max(10, min(wait_sec, 300)),
-        max_render_wait=max(2.0, min(max_render_wait, 60.0)),
-        use_vision=use_vision,
-        quality_threshold=quality_threshold,
-        max_retries=max(1, min(max_retries, 5)),
-    )
-
-    artifact_captures = d.setdefault("tableau_artifact_captures", {})
-    captured_count = 0
-    for r in results:
-        sn   = r.get("slide_number")
-        path = r.get("path")
-        if sn and path and Path(path).exists():
-            artifact_captures[sn] = path
-            captured_count += 1
-
-    _record_event(
-        d["source_path"], d["name"], "tableau", d["slide_count"],
-        "tableau_smart_capture_all",
-        f"Smart-captured {captured_count}/{len(artifacts)} sheets with quality verification",
-        {"doc_id": doc_id, "captured": captured_count, "total": len(artifacts),
-         "use_vision": use_vision},
-        "ok",
-    )
-    _update_history_snapshot(doc_id)
-    return {"captured": captured_count, "total": len(artifacts), "results": results}
-
-
-def _capture_all_tableau_sheets(
-    source_path: Path,
-    artifacts: list[dict],
-    out_dir: Path,
-    wait_sec: int = 60,
-    render_wait: float = 2.0,
-) -> list[dict]:
-    """Open Tableau Desktop once, cycle through every tab with Ctrl+PgDn, screenshot each."""
-    import ctypes
-    from ctypes import wintypes
-
-    user32 = ctypes.windll.user32
-    target_stem = source_path.stem.lower()
-
-    # Open the workbook via shell association
-    os.startfile(str(source_path))  # type: ignore[attr-defined]
-
-    # Wait for a Tableau Desktop window (verified by process name, not just title)
-    hwnd = 0
-    title = ""
-    deadline = time.time() + wait_sec
-    while time.time() < deadline:
-        candidates = [
-            w for w in _visible_windows(user32)
-            if _is_tableau_window(w) and target_stem in w["title"].lower()
-        ]
-        if candidates:
-            hwnd = int(candidates[0]["hwnd"])
-            title = str(candidates[0]["title"])
-            break
-        time.sleep(1.0)
-
-    if not hwnd:
-        err = (
-            f"Timed out waiting for Tableau Desktop to open '{source_path.name}' ({wait_sec}s). "
-            "Ensure Tableau Desktop is installed and .twbx files are associated with it."
-        )
-        return [{"error": err, "slide_number": a["slide_number"]} for a in artifacts]
-
-    # Maximize for consistent layout
-    SW_MAXIMIZE = 3
-    user32.ShowWindow(wintypes.HWND(hwnd), SW_MAXIMIZE)
-    user32.SetForegroundWindow(wintypes.HWND(hwnd))
-    time.sleep(render_wait)
-
-    # Navigate to the first sheet by name
-    first_name = artifacts[0]["name"]
-    _navigate_to_tableau_sheet(user32, hwnd, first_name)
-    time.sleep(render_wait)
-
-    # Compute content crop from maximized window bounds
-    rect = wintypes.RECT()
-    user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect))
-    win_l, win_t, win_r, win_b = int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)
-
-    # Tableau layout (maximized): left data panel ~240px, top toolbar ~90px, bottom tabs ~34px
-    sidebar_w = 240
-    toolbar_h = 90
-    tab_strip_h = 34
-    content_l = win_l + sidebar_w
-    content_t = win_t + toolbar_h
-    content_r = win_r
-    content_b = win_b - tab_strip_h
-
-    results = []
-    for i, artifact in enumerate(artifacts):
-        sn = artifact["slide_number"]
-        name = artifact["name"]
-        kind = artifact["kind"]
-
-        if i > 0:
-            _send_ctrl_pgdn(user32, hwnd)
-            time.sleep(render_wait)
-
-        out_path = out_dir / f"artifact-{sn:03d}.png"
-        try:
-            img = ImageGrab.grab(bbox=(content_l, content_t, content_r, content_b))
-            img.save(out_path)
-            results.append({"slide_number": sn, "name": name, "kind": kind, "path": str(out_path), "ok": True})
-        except Exception as exc:
-            results.append({"slide_number": sn, "name": name, "kind": kind, "error": str(exc), "ok": False})
-
-    return results
-
-
-def _capture_tableau_artifact_window(
-    source_path: Path,
-    artifact_name: str,
-    artifact_kind: str,
-    out_path: Path,
-    wait_sec: int = 60,
-) -> dict[str, Any]:
-    """Open Tableau Desktop, navigate to a specific worksheet/dashboard tab, and screenshot it."""
-    import ctypes
-    from ctypes import wintypes
-
-    user32 = ctypes.windll.user32
-    target_stem = source_path.stem.lower()
-
-    # Open the workbook
-    os.startfile(str(source_path))  # type: ignore[attr-defined]
-
-    # Wait for a real Tableau Desktop window (verified by process exe name)
-    hwnd = 0
-    title = ""
-    deadline = time.time() + wait_sec
-    while time.time() < deadline:
-        candidates = [
-            w for w in _visible_windows(user32)
-            if _is_tableau_window(w) and target_stem in w["title"].lower()
-        ]
-        if candidates:
-            hwnd = int(candidates[0]["hwnd"])
-            title = str(candidates[0]["title"])
-            break
-        time.sleep(1)
-
-    if not hwnd:
-        raise HTTPException(
-            504,
-            f"Timed out waiting for Tableau Desktop to open '{source_path.name}'. "
-            "Ensure Tableau Desktop is installed and .twbx files are associated with it.",
-        )
-
-    user32.SetForegroundWindow(wintypes.HWND(hwnd))
-    time.sleep(2.0)  # Allow full render
-
-    # Try to navigate to the specific sheet tab by name
-    _navigate_to_tableau_sheet(user32, hwnd, artifact_name)
-    time.sleep(1.0)  # Allow tab switch to render
-
-    # Get window bounds
-    rect = wintypes.RECT()
-    if not user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect)):
-        raise HTTPException(500, "Could not read Tableau window bounds")
-    width = int(rect.right - rect.left)
-    height = int(rect.bottom - rect.top)
-
-    # Estimate Tableau's content area: skip left panel (~240px) and top toolbar (~90px)
-    # The sheet tabs are at the bottom (~30px). Adjust based on window size.
-    sidebar_w = min(250, width // 6)
-    toolbar_h = min(90, height // 10)
-    tab_strip_h = 30
-    content_bbox = (
-        int(rect.left) + sidebar_w,
-        int(rect.top) + toolbar_h,
-        int(rect.right),
-        int(rect.bottom) - tab_strip_h,
-    )
-
-    image = ImageGrab.grab(bbox=content_bbox)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    image.save(out_path)
-
-    return {
-        "path": str(out_path),
-        "title": title,
-        "artifact_name": artifact_name,
-        "artifact_kind": artifact_kind,
-        "window_width": width,
-        "window_height": height,
-        "content_bbox": list(content_bbox),
-        "source": str(source_path),
-        "mode": "tableau_desktop_artifact_capture",
-    }
-
-
-def _navigate_to_tableau_sheet(user32: Any, hwnd: int, sheet_name: str) -> bool:
-    """Try to navigate Tableau Desktop to a named sheet tab via child-window enumeration."""
-    import ctypes
-    from ctypes import wintypes
-
-    found_hwnd = 0
-    enum_proc_type = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
-
-    def callback(child_hwnd: Any, _lparam: Any) -> bool:
-        nonlocal found_hwnd
-        length = user32.GetWindowTextLengthW(child_hwnd)
-        if length <= 0:
-            return True
-        buf = ctypes.create_unicode_buffer(length + 1)
-        user32.GetWindowTextW(child_hwnd, buf, length + 1)
-        text = buf.value.strip()
-        if text.lower() == sheet_name.lower():
-            found_hwnd = int(child_hwnd)
-            return False  # stop enumeration
-        return True
-
-    user32.EnumChildWindows(wintypes.HWND(hwnd), enum_proc_type(callback), 0)
-
-    if found_hwnd:
-        WM_LBUTTONDOWN = 0x0201
-        WM_LBUTTONUP = 0x0202
-        user32.SendMessageW(wintypes.HWND(found_hwnd), WM_LBUTTONDOWN, 0, 0)
-        user32.SendMessageW(wintypes.HWND(found_hwnd), WM_LBUTTONUP, 0, 0)
-        return True
-
-    # Fallback: Tableau sheet tabs may not appear as standard child windows.
-    # Try Ctrl+Tab cycling to find the sheet by looking at window title changes.
-    return False
-
-
-def _capture_tableau_desktop_window(source_path: Path, out_path: Path, wait_sec: int = 45) -> dict[str, Any]:
-    import ctypes
-    from ctypes import wintypes
-
-    user32 = ctypes.windll.user32
-    target = source_path.stem.lower()
-
-    # Shell/file association is the reliable path for Tableau Desktop here;
-    # direct tableau.exe <file> launches Book1 on this machine.
-    os.startfile(str(source_path))  # type: ignore[attr-defined]
-
-    hwnd = 0
-    title = ""
-    deadline = time.time() + wait_sec
-    while time.time() < deadline:
-        candidates = [
-            w for w in _visible_windows(user32)
-            if _is_tableau_window(w) and target in w["title"].lower()
-        ]
-        if candidates:
-            hwnd = int(candidates[0]["hwnd"])
-            title = str(candidates[0]["title"])
-            break
-        time.sleep(1)
-
-    if not hwnd:
-        raise HTTPException(
-            504,
-            f"Timed out waiting for Tableau Desktop to open '{source_path.name}'. "
-            "Ensure Tableau Desktop is installed and .twbx files are associated with it.",
-        )
-
-    user32.SetForegroundWindow(wintypes.HWND(hwnd))
-    time.sleep(2)
-
-    rect = wintypes.RECT()
-    if not user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect)):
-        raise HTTPException(500, "Could not read Tableau window bounds")
-    width = int(rect.right - rect.left)
-    height = int(rect.bottom - rect.top)
-    if width <= 0 or height <= 0:
-        raise HTTPException(500, f"Invalid Tableau window bounds: {width}x{height}")
-
-    image = ImageGrab.grab(bbox=(int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)))
-    image.save(out_path)
-    return {
-        "path": str(out_path),
-        "title": title,
-        "width": width,
-        "height": height,
-        "left": int(rect.left),
-        "top": int(rect.top),
-        "source": str(source_path),
-        "mode": "tableau_desktop_window_capture",
-    }
-
-
-def _get_hwnd_exe(hwnd: Any) -> str:
-    """Return the lowercase exe filename for the process that owns hwnd, or ''."""
-    import ctypes
-    from ctypes import wintypes
-    kernel32 = ctypes.windll.kernel32
-    pid = wintypes.DWORD(0)
-    ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-    if not pid.value:
-        return ""
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    hproc = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
-    if not hproc:
-        return ""
-    try:
-        buf = ctypes.create_unicode_buffer(512)
-        size = wintypes.DWORD(512)
-        kernel32.QueryFullProcessImageNameW(hproc, 0, buf, ctypes.byref(size))
-        return Path(buf.value).name.lower() if buf.value else ""
-    finally:
-        kernel32.CloseHandle(hproc)
-
-
-def _visible_windows(user32: Any) -> list[dict[str, Any]]:
-    import ctypes
-    from ctypes import wintypes
-
-    windows: list[dict[str, Any]] = []
-    enum_proc_type = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
-
-    def callback(hwnd: Any, _lparam: Any) -> bool:
-        if not user32.IsWindowVisible(hwnd):
-            return True
-        length = user32.GetWindowTextLengthW(hwnd)
-        if length <= 0:
-            return True
-        buffer = ctypes.create_unicode_buffer(length + 1)
-        user32.GetWindowTextW(hwnd, buffer, length + 1)
-        title = buffer.value.strip()
-        if title:
-            windows.append({"hwnd": int(hwnd), "title": title, "exe": _get_hwnd_exe(hwnd)})
-        return True
-
-    user32.EnumWindows(enum_proc_type(callback), 0)
-    return windows
-
-
-_TABLEAU_EXE_NAMES = {"tableau.exe", "tableaupublic.exe", "tableaudesktop.exe"}
-
-
-def _is_tableau_window(w: dict[str, Any]) -> bool:
-    """True only if the window belongs to a real Tableau Desktop process."""
-    return w.get("exe", "") in _TABLEAU_EXE_NAMES
-
-
-def _send_ctrl_pgdn(user32: Any, hwnd: int, canvas_xy: tuple[int, int] | None = None) -> None:
-    """Send Ctrl+PgDn to navigate to the next Tableau tab."""
-    import pyautogui
-    _force_hwnd_topmost(hwnd)
-    time.sleep(0.05)
-    pyautogui.hotkey("ctrl", "pagedown")
-
-
-@app.post("/api/docs/{doc_id}/rebuild")
-def rebuild(doc_id: str):
-    """Rebuild PercyDocument → PPTX, render rebuilt slides."""
-    import traceback as _tb
-    d = _require(doc_id)
-    if d.get("source_format") != "pptx":
-        raise HTTPException(400, "Rebuild is only supported for PPTX documents")
-    log.info("rebuild: doc_id=%s  name=%s", doc_id, d["name"])
-    _REBUILD_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = _REBUILD_DIR / f"{d['name']}_{doc_id}.pptx"
-
-    t0 = time.perf_counter()
-    try:
-        result = _rebuild_pptx(d["doc"], out_path)
-    except Exception as exc:
-        tb = _tb.format_exc()
-        log.error("rebuild: EXCEPTION for doc_id=%s\n%s", doc_id, tb)
-        raise HTTPException(500, detail=f"{type(exc).__name__}: {exc}\n\n{tb}")
-    d["rebuilt_path"] = str(out_path)
-    d["diagnostics"]  = result.get("diagnostics", [])
-    diagnostic_summary = _diagnostic_summary(d["diagnostics"])
-    log.info("rebuild: done in %.1fs  diagnostics=%d  path=%s",
-             time.perf_counter() - t0, len(d["diagnostics"]), out_path.name)
-
-    rebuilt_dir = _CACHE_DIR / doc_id / "rebuilt"
-    d["rebuilt_paths"] = []  # cleared while new render runs
-    # COM render is slow (~60s/deck) — start in background, return immediately
-    _render_originals_bg(doc_id, out_path, rebuilt_dir, "rebuilt_paths")
-    log.info("rebuild: COM render started in background for doc_id=%s", doc_id)
-    _record_event(
-        d["source_path"], d["name"], d.get("source_format", "pptx"), d["slide_count"],
-        "rebuild",
-        f"Rebuild completed with {len(d['diagnostics'])} diagnostics",
-        {
-            "doc_id": doc_id,
-            "rebuilt_path": str(out_path),
-            "elapsed_sec": round(time.perf_counter() - t0, 1),
-            "diagnostic_summary": diagnostic_summary,
-        },
-        "warn" if d["diagnostics"] else "ok",
-    )
-    _update_history_snapshot(doc_id)
-
-    return {
-        "rebuilt_path":         str(out_path),
-        "has_rebuilt_renders":  False,   # not ready yet; UI polls
-        "diagnostic_count":     len(d["diagnostics"]),
-        "diagnostic_summary":   diagnostic_summary,
-    }
-
 
 @app.get("/api/docs/{doc_id}/diagnostics")
 def get_diagnostics(doc_id: str):
     diags = _require(doc_id)["diagnostics"]
     log.info("get_diagnostics: doc_id=%s  count=%d", doc_id, len(diags))
     return {"diagnostics": diags}
-
-
-def _serve_slide(paths: list[str], n: int, label: str) -> FileResponse:
-    if not paths:
-        raise HTTPException(404, f"{label} renders not available")
-    if n < 1 or n > len(paths):
-        raise HTTPException(404, f"Slide {n} out of range (1–{len(paths)})")
-    p = Path(paths[n - 1])
-    if not p.exists():
-        raise HTTPException(404, f"{label} PNG missing from disk: {p}")
-    return FileResponse(str(p), media_type="image/png",
-                        headers={"Cache-Control": "max-age=60"})
-
-
-@app.get("/api/docs/{doc_id}/slides/{n}/bridge.png")
-def bridge_slide(doc_id: str, n: int):
-    return _serve_slide(_require(doc_id)["bridge_paths"], n, "Bridge")
-
-
-@app.get("/api/docs/{doc_id}/slides/{n}/original.png")
-def original_slide(doc_id: str, n: int):
-    return _serve_slide(_require(doc_id)["orig_paths"], n, "Original")
-
-
-@app.get("/api/docs/{doc_id}/slides/{n}/rebuilt.png")
-def rebuilt_slide(doc_id: str, n: int):
-    d = _require(doc_id)
-    if not d["rebuilt_path"]:
-        raise HTTPException(400, "Not yet rebuilt — call POST /rebuild first")
-    return _serve_slide(d["rebuilt_paths"], n, "Rebuilt")
-
-
-@app.get("/api/docs/{doc_id}/render-status")
-def render_status(doc_id: str):
-    """Fast poll endpoint: returns current render availability without logging."""
-    d = _require(doc_id)
-    return {
-        "has_originals":        bool(d["orig_paths"]),
-        "has_bridge":           bool(d["bridge_paths"]),
-        "has_rebuild":          bool(d["rebuilt_path"]),
-        "has_rebuilt_renders":  bool(d["rebuilt_paths"]),
-        "pixel_scores":         d.get("pixel_scores", {}),
-    }
-
-
-@app.post("/api/docs/{doc_id}/rerender")
-def rerender_bridge(doc_id: str):
-    """Re-render bridge slides using the in-memory doc (picks up renderer changes)."""
-    d = _require(doc_id)
-    bridge_dir = _CACHE_DIR / doc_id / "bridge"
-    log.info("rerender: doc_id=%s", doc_id)
-    t0 = time.perf_counter()
-    paths = _render_bridge(d["doc"], bridge_dir)
-    d["bridge_paths"] = paths
-    elapsed = time.perf_counter() - t0
-    log.info("rerender: wrote %d PNGs in %.1fs", len(paths), elapsed)
-    _record_event(
-        d["source_path"], d["name"], d.get("source_format", "pptx"), d["slide_count"],
-        "rerender",
-        f"Bridge re-rendered: {len(paths)} slides",
-        {"doc_id": doc_id, "bridge_slides": len(paths), "elapsed_sec": round(elapsed, 1)},
-        "ok" if paths else "warn",
-    )
-    _update_history_snapshot(doc_id)
-    return {"bridge_slides": len(paths)}
 
 
 @app.post("/api/docs/{doc_id}/save-to-cloud")
@@ -2867,90 +1443,6 @@ def _schedule_cloud_autosave(doc_id: str) -> None:
         timer.start()
 
 
-@app.post("/api/docs/{doc_id}/slides/{n}/render")
-def render_single_slide(doc_id: str, n: int):
-    """Re-render one bridge slide PNG from the current in-memory Bridge model.
-
-    Called by Studio after any text/position/fill edit so the canvas
-    shows updated content without a full Rebuild.
-    """
-    from percy.diagnostics.render_png import _register_embedded_fonts  # type: ignore[attr-defined]
-
-    d     = _require(doc_id)
-    doc   = d["doc"]
-    slide = next((s for s in doc.slides if s.slide_number == n), None)
-    if slide is None:
-        raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
-
-    bridge_dir = _CACHE_DIR / doc_id / "bridge"
-    bridge_dir.mkdir(parents=True, exist_ok=True)
-    dest = bridge_dir / f"slide-{n:03d}.png"
-
-    theme          = getattr(doc, "theme_colors", None) or None
-    embedded_fonts = getattr(doc, "embedded_fonts", None)
-    if embedded_fonts:
-        _register_embedded_fonts(embedded_fonts)
-
-    renderer = SlideRenderer(theme=theme)
-    renderer.set_document(doc)
-    try:
-        fig = renderer.render_slide(slide)
-        fig.savefig(str(dest), dpi=96, bbox_inches="tight", pad_inches=0)
-        fig.clf()
-    except Exception as exc:
-        import traceback
-        raise HTTPException(500, detail=f"Render failed: {exc}\n{traceback.format_exc()}")
-
-    # Update bridge_paths so the PNG endpoint serves the fresh file
-    if 1 <= n <= len(d.get("bridge_paths", [])):
-        d["bridge_paths"][n - 1] = str(dest)
-
-    log.info("render_single_slide: slide %d of %s → %s", n, doc_id, dest.name)
-    return {"ok": True, "slide": n, "path": str(dest)}
-
-
-@app.post("/api/docs/{doc_id}/rerender-all")
-def rerender_all_slides(doc_id: str):
-    """Re-render every slide PNG for the current in-memory Bridge model.
-
-    Returns a count of slides rendered and any per-slide errors.
-    """
-    from percy.diagnostics.render_png import _register_embedded_fonts  # type: ignore[attr-defined]
-
-    d = _require(doc_id)
-    doc = d["doc"]
-
-    bridge_dir = _CACHE_DIR / doc_id / "bridge"
-    bridge_dir.mkdir(parents=True, exist_ok=True)
-
-    theme = getattr(doc, "theme_colors", None) or None
-    embedded_fonts = getattr(doc, "embedded_fonts", None)
-    if embedded_fonts:
-        _register_embedded_fonts(embedded_fonts)
-
-    renderer = SlideRenderer(theme=theme)
-    renderer.set_document(doc)
-
-    rendered = 0
-    errors: list[dict] = []
-    bridge_paths: list[str] = list(d.get("bridge_paths", []))
-
-    for slide in doc.slides:
-        n = slide.slide_number
-        dest = bridge_dir / f"slide-{n:03d}.png"
-        try:
-            fig = renderer.render_slide(slide)
-            fig.savefig(str(dest), dpi=96, bbox_inches="tight", pad_inches=0)
-            fig.clf()
-            if 1 <= n <= len(bridge_paths):
-                bridge_paths[n - 1] = str(dest)
-            rendered += 1
-        except Exception as exc:
-            errors.append({"slide": n, "error": str(exc)})
-
-    d["bridge_paths"] = bridge_paths
-    log.info("rerender_all_slides: %d slides rendered for %s (%d errors)", rendered, doc_id, len(errors))
-    return {"ok": True, "rendered": rendered, "errors": errors}
 
 
 class ReplaceColorRequest(BaseModel):
@@ -2959,22 +1451,30 @@ class ReplaceColorRequest(BaseModel):
     tolerance: int = 10  # 0-255 per-channel tolerance
 
 
-def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
-    h = hex_color.lstrip("#")
-    if len(h) == 6:
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int] | None:
+    """Parse "#RRGGBB" / "#RGB" → (r, g, b). Returns None on bad input.
+    Used by the replace-color and contrast-ratio paths — consolidated from two
+    legacy copies (one used to raise; this signature is the merged form)."""
+    h = hex_color.lstrip("#") if hex_color else ""
+    if len(h) == 3:
+        h = h[0]*2 + h[1]*2 + h[2]*2
+    if len(h) != 6:
+        return None
+    try:
         return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    raise ValueError(f"Bad hex color: {hex_color!r}")
+    except ValueError:
+        return None
 
 
 def _colors_match(c1: str | None, target_rgb: tuple[int, int, int], tol: int) -> bool:
     if not c1:
         return False
-    try:
-        r1, g1, b1 = _hex_to_rgb(c1)
-        r2, g2, b2 = target_rgb
-        return abs(r1 - r2) <= tol and abs(g1 - g2) <= tol and abs(b1 - b2) <= tol
-    except ValueError:
+    rgb1 = _hex_to_rgb(c1)
+    if rgb1 is None:
         return False
+    r1, g1, b1 = rgb1
+    r2, g2, b2 = target_rgb
+    return abs(r1 - r2) <= tol and abs(g1 - g2) <= tol and abs(b1 - b2) <= tol
 
 
 def _apply_color_replacement(el: Any, old_rgb: tuple[int, int, int], new_hex: str, tol: int) -> int:
@@ -3028,9 +1528,8 @@ def replace_color(doc_id: str, req: ReplaceColorRequest):
     """Swap all uses of old_color (within tolerance) with new_color across the entire deck."""
     d = _require(doc_id)
     _snapshot_doc(doc_id)
-    try:
-        old_rgb = _hex_to_rgb(req.old_color)
-    except ValueError:
+    old_rgb = _hex_to_rgb(req.old_color)
+    if old_rgb is None:
         raise HTTPException(400, f"Invalid old_color: {req.old_color!r}")
 
     total = 0
@@ -3045,384 +1544,6 @@ def replace_color(doc_id: str, req: ReplaceColorRequest):
     log.info("replace-color: %s→%s in %s: %d replacements on slides %s",
              req.old_color, req.new_color, doc_id, total, affected_slides)
     return {"replaced": total, "affected_slides": affected_slides}
-
-
-@app.get("/api/docs/{doc_id}/export")
-def export_pptx(doc_id: str):
-    """Rebuild current Bridge model → stream rebuilt PPTX as a file download.
-
-    This is the primary 'Save' action from Percy Studio.
-    Runs rebuild_pptx() synchronously (may take 5–15s for large decks).
-    """
-    import traceback as _tb
-
-    d = _require(doc_id)
-    if d.get("source_format") != "pptx":
-        raise HTTPException(400, "Export is only supported for PPTX documents")
-
-    _REBUILD_DIR.mkdir(parents=True, exist_ok=True)
-    stem     = Path(d["name"]).stem
-    out_path = _REBUILD_DIR / f"{stem}_{doc_id}_studio.pptx"
-
-    t0 = time.perf_counter()
-    try:
-        _rebuild_pptx(d["doc"], out_path)
-    except Exception as exc:
-        raise HTTPException(500, detail=f"Rebuild failed: {exc}\n{_tb.format_exc()}")
-
-    log.info("export_pptx: rebuilt %s in %.1fs", out_path.name, time.perf_counter() - t0)
-    return FileResponse(
-        str(out_path),
-        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        filename=f"{stem}_percy.pptx",
-        headers={"Cache-Control": "no-store"},
-    )
-
-
-@app.get("/api/docs/{doc_id}/export-pdf")
-def export_pdf(doc_id: str):
-    """Stitch all rendered slide PNGs into a PDF and stream as a file download."""
-    import io as _io
-    d = _require(doc_id)
-    doc = d["doc"]
-    bridge_dir = _CACHE_DIR / doc_id / "bridge"
-
-    def _find_png(n: int) -> Path | None:
-        for name in [f"slide-{n:03d}.png", f"slide_{n:04d}.png"]:
-            p = bridge_dir / name
-            if p.exists():
-                return p
-        return None
-
-    # Collect PNG paths in slide order
-    png_paths: list[Path] = []
-    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
-        p = _find_png(slide.slide_number)
-        if p:
-            png_paths.append(p)
-
-    if not png_paths:
-        # Try rendering on-demand
-        try:
-            from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
-            bridge_dir.mkdir(parents=True, exist_ok=True)
-            _rbs(doc, bridge_dir)
-            for slide in sorted(doc.slides, key=lambda s: s.slide_number):
-                p = _find_png(slide.slide_number)
-                if p:
-                    png_paths.append(p)
-        except Exception as exc:
-            raise HTTPException(500, f"Could not render slides: {exc}")
-
-    if not png_paths:
-        raise HTTPException(404, "No rendered slides found — open the deck in Studio first to generate thumbnails")
-
-    # Build PDF in-memory using Pillow
-    try:
-        images = [Image.open(str(p)).convert("RGB") for p in png_paths]
-        pdf_buf = _io.BytesIO()
-        images[0].save(
-            pdf_buf, format="PDF", save_all=True,
-            append_images=images[1:],
-            resolution=150,
-        )
-        pdf_bytes = pdf_buf.getvalue()
-    except Exception as exc:
-        raise HTTPException(500, f"PDF generation failed: {exc}")
-
-    stem = Path(d["name"]).stem
-    from fastapi.responses import Response as _Response
-    return _Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{stem}_percy.pdf"',
-            "Cache-Control": "no-store",
-        },
-    )
-
-
-@app.get("/api/docs/{doc_id}/export-png-zip")
-def export_png_zip(doc_id: str):
-    """Zip all rendered slide PNGs and stream as a .zip download."""
-    import io as _io
-    import zipfile as _zip
-    d = _require(doc_id)
-    doc = d["doc"]
-    bridge_dir = _CACHE_DIR / doc_id / "bridge"
-
-    def _find_slide_png(n: int) -> Path | None:
-        for name in [f"slide-{n:03d}.png", f"slide_{n:04d}.png"]:
-            p = bridge_dir / name
-            if p.exists():
-                return p
-        return None
-
-    png_paths: list[tuple[int, Path]] = []
-    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
-        p = _find_slide_png(slide.slide_number)
-        if p:
-            png_paths.append((slide.slide_number, p))
-
-    if not png_paths:
-        try:
-            from percy.diagnostics.render_png import render_bridge_slides as _rbs  # type: ignore[attr-defined]
-            bridge_dir.mkdir(parents=True, exist_ok=True)
-            _rbs(doc, bridge_dir)
-            for slide in sorted(doc.slides, key=lambda s: s.slide_number):
-                p = _find_slide_png(slide.slide_number)
-                if p:
-                    png_paths.append((slide.slide_number, p))
-        except Exception as exc:
-            raise HTTPException(500, f"Could not render slides: {exc}")
-
-    if not png_paths:
-        raise HTTPException(404, "No rendered slides found — open the deck in Studio first")
-
-    stem = Path(d["name"]).stem
-    buf = _io.BytesIO()
-    with _zip.ZipFile(buf, "w", compression=_zip.ZIP_DEFLATED) as zf:
-        for n, p in png_paths:
-            zf.write(p, arcname=f"{stem}_slide{n:02d}.png")
-
-    from fastapi.responses import Response as _Response
-    return _Response(
-        content=buf.getvalue(),
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f'attachment; filename="{stem}_slides.zip"',
-            "Cache-Control": "no-store",
-        },
-    )
-
-
-@app.get("/api/docs/{doc_id}/export-html")
-def export_html_slideshow(doc_id: str):
-    """Export all slides as a self-contained HTML slideshow (base64-embedded PNGs)."""
-    import base64 as _b64
-    import io as _io
-
-    d   = _require(doc_id)
-    doc = d["doc"]
-    bridge_dir = _CACHE_DIR / doc_id / "bridge"
-
-    slides_data: list[tuple[int, str, str]] = []  # (n, title, b64_png)
-
-    def _get_png_path(n: int) -> Path | None:
-        for name in [f"slide-{n:03d}.png", f"slide_{n:04d}.png"]:
-            p = bridge_dir / name
-            if p.exists():
-                return p
-        return None
-
-    def _slide_title(slide: Any) -> str:
-        for el in slide.elements:
-            tf = getattr(el, "text_frame", None) or getattr(el, "body", None)
-            if tf:
-                paras = getattr(tf, "paragraphs", []) or []
-                if paras:
-                    txt = "".join(r.text for r in (getattr(paras[0], "runs", []) or []))
-                    if txt.strip():
-                        return txt.strip()[:60]
-        return f"Slide {slide.slide_number}"
-
-    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
-        n = slide.slide_number
-        p = _get_png_path(n)
-        if p and p.exists():
-            b64 = _b64.b64encode(p.read_bytes()).decode("ascii")
-            slides_data.append((n, _slide_title(slide), b64))
-
-    if not slides_data:
-        raise HTTPException(404, "No rendered slides found — open the deck in Studio and render first")
-
-    stem = Path(d.get("name", "presentation")).stem
-
-    # Build HTML — include per-slide transition metadata
-    slide_transitions_map: dict[int, str] = {}
-    for slide in doc.slides:
-        cp = getattr(slide, "custom_properties", None) or {}
-        t = cp.get("transition", "none")
-        if t and t != "none":
-            slide_transitions_map[slide.slide_number] = t
-
-    # Gather notes and sections for each slide
-    notes_map: dict[int, str] = {}
-    sections_map: dict[int, str] = {}
-    for slide in doc.slides:
-        cp = getattr(slide, "custom_properties", None) or {}
-        note = cp.get("notes_text", "").strip()
-        if note:
-            notes_map[slide.slide_number] = note
-        sec = cp.get("section_name", "").strip()
-        if sec:
-            sections_map[slide.slide_number] = sec
-
-    # Build HTML
-    slides_js = ",\n".join(
-        f'{{n:{n}, title:{json.dumps(t)}, src:"data:image/png;base64,{b64}", transition:{json.dumps(slide_transitions_map.get(n, "fade"))}, notes:{json.dumps(notes_map.get(n, ""))}, section:{json.dumps(sections_map.get(n, ""))}}}'
-        for n, t, b64 in slides_data
-    )
-
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{stem}</title>
-<style>
-  *{{ box-sizing:border-box; margin:0; padding:0 }}
-  body{{ background:#111; color:#eee; font-family:system-ui,sans-serif; height:100vh; overflow:hidden }}
-  #stage{{ width:100vw; height:100vh; display:flex; align-items:center; justify-content:center; position:relative }}
-  #slide-img{{ max-width:100%; max-height:100%; object-fit:contain; display:block; user-select:none;
-               transition: opacity 0.18s ease, transform 0.18s ease }}
-  #controls{{ position:fixed; bottom:16px; left:50%; transform:translateX(-50%);
-              display:flex; gap:8px; align-items:center; background:rgba(0,0,0,0.6);
-              padding:6px 12px; border-radius:999px; backdrop-filter:blur(4px) }}
-  button{{ background:rgba(255,255,255,0.1); border:none; color:#eee; padding:4px 12px;
-           border-radius:4px; cursor:pointer; font-size:13px }}
-  button:hover{{ background:rgba(255,255,255,0.2) }}
-  button:disabled{{ opacity:0.3; cursor:default }}
-  #counter{{ font-size:12px; font-variant-numeric:tabular-nums; min-width:60px; text-align:center }}
-  #title{{ position:fixed; top:12px; left:50%; transform:translateX(-50%);
-           font-size:13px; color:rgba(255,255,255,0.5); max-width:60vw; truncate:ellipsis;
-           white-space:nowrap; overflow:hidden; text-overflow:ellipsis }}
-  #dots{{ display:flex; gap:5px; align-items:center }}
-  .dot{{ width:6px; height:6px; border-radius:50%; background:rgba(255,255,255,0.25); cursor:pointer; transition:background .15s }}
-  .dot.active{{ background:#fff }}
-  #section-badge{{ position:fixed; top:12px; right:16px; font-size:11px; font-weight:600;
-    letter-spacing:.06em; text-transform:uppercase; color:rgba(167,139,250,0.85);
-    background:rgba(0,0,0,0.5); padding:3px 8px; border-radius:999px;
-    backdrop-filter:blur(4px); display:none }}
-  #notes-panel{{ position:fixed; bottom:64px; left:50%; transform:translateX(-50%);
-    width:min(680px,90vw); max-height:35vh; overflow-y:auto;
-    background:rgba(15,15,25,0.92); border:1px solid rgba(255,255,255,0.12);
-    border-radius:10px; padding:14px 18px; font-size:14px; line-height:1.6;
-    color:#d1d5db; backdrop-filter:blur(8px); display:none; white-space:pre-wrap }}
-  #notes-btn{{ font-size:11px; padding:3px 9px; opacity:0.7 }}
-  #notes-btn.active{{ opacity:1; background:rgba(139,92,246,0.35) }}
-</style>
-</head>
-<body>
-<div id="stage"><img id="slide-img" alt=""></div>
-<div id="title"></div>
-<div id="section-badge"></div>
-<div id="notes-panel"></div>
-<div id="controls">
-  <button id="prev" onclick="go(cur-1)">&#8249;</button>
-  <div id="dots"></div>
-  <span id="counter"></span>
-  <button id="next" onclick="go(cur+1)">&#8250;</button>
-  <button id="notes-btn" onclick="toggleNotes()" title="Toggle notes (N)">&#128203;</button>
-</div>
-<script>
-const slides = [{slides_js}];
-let cur = 0;
-let notesVisible = false;
-const img = document.getElementById('slide-img');
-const ctr = document.getElementById('counter');
-const ttl = document.getElementById('title');
-const dotsEl = document.getElementById('dots');
-const notesPanel = document.getElementById('notes-panel');
-const notesBtn = document.getElementById('notes-btn');
-const sectionBadge = document.getElementById('section-badge');
-
-if (slides.length <= 30) {{
-  slides.forEach((s,i) => {{
-    const d = document.createElement('div');
-    d.className = 'dot'; d.onclick = () => go(i);
-    dotsEl.appendChild(d);
-  }});
-}}
-
-function toggleNotes() {{
-  notesVisible = !notesVisible;
-  notesPanel.style.display = notesVisible && slides[cur].notes ? 'block' : 'none';
-  notesBtn.classList.toggle('active', notesVisible);
-}}
-
-function updateSectionBadge(n) {{
-  const sec = slides[n].section;
-  if (sec) {{
-    sectionBadge.textContent = '§ ' + sec;
-    sectionBadge.style.display = 'block';
-  }} else {{
-    sectionBadge.style.display = 'none';
-  }}
-}}
-
-let transitioning = false;
-function go(n) {{
-  const target = Math.max(0, Math.min(slides.length-1, n));
-  if (target === cur || transitioning) return;
-  const dir = target > cur ? 1 : -1;
-  const t = slides[target].transition || 'fade';
-  transitioning = true;
-  if (t === 'fade') {{ img.style.opacity = '0'; }}
-  else if (t === 'slide') {{ img.style.transform = `translateX(${{dir * -8}}%)`; img.style.opacity = '0'; }}
-  else if (t === 'zoom') {{ img.style.transform = 'scale(0.93)'; img.style.opacity = '0'; }}
-  else {{ img.style.opacity = '0'; }}
-  setTimeout(() => {{
-    cur = target;
-    img.src = slides[cur].src;
-    ctr.textContent = (cur+1) + ' / ' + slides.length;
-    ttl.textContent = slides[cur].title;
-    document.getElementById('prev').disabled = cur === 0;
-    document.getElementById('next').disabled = cur === slides.length-1;
-    document.querySelectorAll('.dot').forEach((d,i) => d.classList.toggle('active', i===cur));
-    notesPanel.textContent = slides[cur].notes || '';
-    if (notesVisible) {{
-      notesPanel.style.display = slides[cur].notes ? 'block' : 'none';
-    }}
-    updateSectionBadge(cur);
-    img.style.transition = 'none';
-    if (t === 'slide') {{ img.style.transform = `translateX(${{dir * 8}}%)`; }}
-    else {{ img.style.transform = 'none'; }}
-    img.style.opacity = '0';
-    requestAnimationFrame(() => {{
-      requestAnimationFrame(() => {{
-        img.style.transition = 'opacity 0.18s ease, transform 0.18s ease';
-        img.style.opacity = '1';
-        img.style.transform = 'none';
-        setTimeout(() => {{ transitioning = false; }}, 200);
-      }});
-    }});
-  }}, 180);
-}}
-
-document.addEventListener('keydown', e => {{
-  if (e.key==='ArrowRight'||e.key==='PageDown'||e.key===' ') {{ e.preventDefault(); go(cur+1); }}
-  if (e.key==='ArrowLeft'||e.key==='PageUp')  {{ e.preventDefault(); go(cur-1); }}
-  if (e.key==='Home') go(0);
-  if (e.key==='End')  go(slides.length-1);
-  if (e.key==='n'||e.key==='N') toggleNotes();
-}});
-
-// init first slide without transition
-img.src = slides[0].src;
-ctr.textContent = '1 / ' + slides.length;
-ttl.textContent = slides[0].title;
-notesPanel.textContent = slides[0].notes || '';
-updateSectionBadge(0);
-document.getElementById('prev').disabled = true;
-if (slides.length > 1 && slides.length <= 30) {{
-  document.querySelectorAll('.dot')[0].classList.add('active');
-}}
-document.getElementById('next').disabled = slides.length <= 1;
-requestAnimationFrame(() => {{ img.style.opacity = '1'; }});
-</script>
-</body>
-</html>"""
-
-    from fastapi.responses import Response as _HtmlResp
-    return _HtmlResp(
-        content=html,
-        media_type="text/html",
-        headers={
-            "Content-Disposition": f'attachment; filename="{stem}.html"',
-            "Cache-Control": "no-store",
-        },
-    )
 
 
 @app.post("/api/docs/{doc_id}/grades")
@@ -3629,247 +1750,6 @@ def _get_slide_dims(doc: Any, slide: Any) -> tuple[float, float]:
     return float(w), float(h)
 
 
-# ── Slide management endpoints ────────────────────────────────────────────────
-
-@app.post("/api/docs/{doc_id}/slides")
-def add_slide(doc_id: str, after_n: int = 0):
-    """Insert a blank slide after slide *after_n* (0 = append at end)."""
-    from percy.bridge.elements import BridgeSlide
-    _snapshot_doc(doc_id)
-    d = _require(doc_id)
-    doc = d["doc"]
-    w, h = _get_slide_dims(doc, doc.slides[0]) if doc.slides else (13.333, 7.5)
-    new_slide = BridgeSlide(slide_number=0, elements=[], width=w, height=h)
-    if after_n <= 0 or after_n >= len(doc.slides):
-        doc.slides.append(new_slide)
-        pos = len(doc.slides)
-    else:
-        doc.slides.insert(after_n, new_slide)
-        pos = after_n + 1
-    # renumber
-    for i, s in enumerate(doc.slides):
-        s.slide_number = i + 1
-    d["slide_count"] = len(doc.slides)
-    log.info("studio: added blank slide at position %d in %s", pos, doc_id)
-    return {"slide_count": len(doc.slides), "new_slide_n": pos}
-
-
-@app.delete("/api/docs/{doc_id}/slides/{n}")
-def delete_slide(doc_id: str, n: int):
-    """Delete slide *n*. Cannot delete the last slide."""
-    _snapshot_doc(doc_id)
-    d = _require(doc_id)
-    doc = d["doc"]
-    if len(doc.slides) <= 1:
-        raise HTTPException(400, "Cannot delete the only slide")
-    idx = next((i for i, s in enumerate(doc.slides) if s.slide_number == n), None)
-    if idx is None:
-        raise HTTPException(404, f"Slide {n} not found")
-    doc.slides.pop(idx)
-    for i, s in enumerate(doc.slides):
-        s.slide_number = i + 1
-    d["slide_count"] = len(doc.slides)
-    log.info("studio: deleted slide %d from %s", n, doc_id)
-    return {"slide_count": len(doc.slides)}
-
-
-@app.post("/api/docs/{doc_id}/slides/{n}/duplicate")
-def duplicate_slide(doc_id: str, n: int):
-    """Deep-copy slide *n* and insert the copy directly after it."""
-    import copy as _copy
-    _snapshot_doc(doc_id)
-    d = _require(doc_id)
-    doc = d["doc"]
-    src = next((s for s in doc.slides if s.slide_number == n), None)
-    if src is None:
-        raise HTTPException(404, f"Slide {n} not found")
-    dup = _copy.deepcopy(src)
-    idx = doc.slides.index(src)
-    doc.slides.insert(idx + 1, dup)
-    for i, s in enumerate(doc.slides):
-        s.slide_number = i + 1
-    new_n = dup.slide_number
-    log.info("studio: duplicated slide %d → %d in %s", n, new_n, doc_id)
-    return {"slide_count": len(doc.slides), "new_slide_n": new_n}
-
-
-class BulkSlideRequest(BaseModel):
-    slide_numbers: List[int]
-
-
-@app.post("/api/docs/{doc_id}/slides/bulk-delete")
-def bulk_delete_slides(doc_id: str, req: BulkSlideRequest):
-    """Delete multiple slides at once by their slide numbers (sorted descending)."""
-    import copy as _copy
-    _snapshot_doc(doc_id)
-    d = _require(doc_id)
-    doc = d["doc"]
-    to_delete = sorted(set(req.slide_numbers), reverse=True)
-    for n in to_delete:
-        slide = next((s for s in doc.slides if s.slide_number == n), None)
-        if slide:
-            doc.slides.remove(slide)
-    for i, s in enumerate(doc.slides):
-        s.slide_number = i + 1
-    if not doc.slides:
-        raise HTTPException(400, "Cannot delete all slides")
-    return {"slide_count": len(doc.slides)}
-
-
-@app.post("/api/docs/{doc_id}/slides/bulk-duplicate")
-def bulk_duplicate_slides(doc_id: str, req: BulkSlideRequest):
-    """Duplicate multiple slides, inserting copies after each original (in order)."""
-    import copy as _copy
-    _snapshot_doc(doc_id)
-    d = _require(doc_id)
-    doc = d["doc"]
-    new_slides = []
-    offset = 0
-    for n in sorted(set(req.slide_numbers)):
-        actual_n = n + offset
-        src = next((s for s in doc.slides if s.slide_number == actual_n), None)
-        if src is None:
-            continue
-        dup = _copy.deepcopy(src)
-        idx = doc.slides.index(src)
-        doc.slides.insert(idx + 1, dup)
-        offset += 1
-        for i, s in enumerate(doc.slides):
-            s.slide_number = i + 1
-        new_slides.append(dup.slide_number)
-    return {"slide_count": len(doc.slides), "new_slide_numbers": new_slides}
-
-
-class ReorderSlidesRequest(BaseModel):
-    order: List[int]  # new order as list of current slide numbers
-
-
-@app.post("/api/docs/{doc_id}/slides/reorder")
-def reorder_slides(doc_id: str, req: ReorderSlidesRequest):
-    """Reorder slides to the given order. order is a list of current slide numbers in new position order."""
-    _snapshot_doc(doc_id)
-    d = _require(doc_id)
-    doc = d["doc"]
-    by_n = {s.slide_number: s for s in doc.slides}
-    if set(req.order) != set(by_n.keys()):
-        raise HTTPException(400, "order must contain exactly all current slide numbers")
-    doc.slides = [by_n[n] for n in req.order]
-    for i, s in enumerate(doc.slides):
-        s.slide_number = i + 1
-    return {"slide_count": len(doc.slides)}
-
-
-@app.patch("/api/docs/{doc_id}/slides/{n}/move")
-def move_slide(doc_id: str, n: int, to_n: int):
-    """Move slide *n* to position *to_n* (1-based)."""
-    _snapshot_doc(doc_id)
-    d = _require(doc_id)
-    doc = d["doc"]
-    if not (1 <= to_n <= len(doc.slides)):
-        raise HTTPException(400, f"to_n={to_n} out of range 1..{len(doc.slides)}")
-    idx = next((i for i, s in enumerate(doc.slides) if s.slide_number == n), None)
-    if idx is None:
-        raise HTTPException(404, f"Slide {n} not found")
-    slide = doc.slides.pop(idx)
-    doc.slides.insert(to_n - 1, slide)
-    for i, s in enumerate(doc.slides):
-        s.slide_number = i + 1
-    log.info("studio: moved slide %d → position %d in %s", n, to_n, doc_id)
-    return {"slide_count": len(doc.slides)}
-
-
-@app.patch("/api/docs/{doc_id}/slides/{n}/background")
-def set_slide_background(doc_id: str, n: int, color: str | None = None):
-    """Set slide background color (hex '#RRGGBB') or clear it (color=null)."""
-    _snapshot_doc(doc_id)
-    d = _require(doc_id)
-    doc = d["doc"]
-    slide = next((s for s in doc.slides if s.slide_number == n), None)
-    if slide is None:
-        raise HTTPException(404, f"Slide {n} not found")
-    slide.background_color = color
-    slide.background_gradient_stops = []
-    log.info("studio: set slide %d background to %s in %s", n, color, doc_id)
-    return {"background_color": slide.background_color}
-
-
-@app.get("/api/docs/{doc_id}/slide-hidden")
-def get_hidden_slides(doc_id: str):
-    """Return all slides that are currently hidden (will be skipped in presentation mode)."""
-    d = _require(doc_id)
-    hidden = [s.slide_number for s in d["doc"].slides if (s.custom_properties or {}).get("hidden")]
-    return {"hidden": hidden}
-
-
-@app.patch("/api/docs/{doc_id}/slides/{n}/hidden")
-def set_slide_hidden(doc_id: str, n: int, hidden: bool = True):
-    """Hide or show a slide in presentation mode."""
-    d = _require(doc_id)
-    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
-    if slide is None:
-        raise HTTPException(404, f"Slide {n} not found")
-    if slide.custom_properties is None:
-        slide.custom_properties = {}
-    if hidden:
-        slide.custom_properties["hidden"] = True
-    else:
-        slide.custom_properties.pop("hidden", None)
-    return {"slide_n": n, "hidden": hidden}
-
-
-@app.get("/api/docs/{doc_id}/slide-pins")
-def get_slide_pins(doc_id: str):
-    """Return all slides that are currently pinned."""
-    d = _require(doc_id)
-    pinned = [s.slide_number for s in d["doc"].slides if (s.custom_properties or {}).get("pinned")]
-    return {"pinned": pinned}
-
-
-@app.patch("/api/docs/{doc_id}/slides/{n}/pin")
-def pin_slide(doc_id: str, n: int, pinned: bool = True):
-    """Pin or unpin a slide to protect it from accidental deletion or reorder."""
-    d = _require(doc_id)
-    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
-    if slide is None:
-        raise HTTPException(404, f"Slide {n} not found")
-    if slide.custom_properties is None:
-        slide.custom_properties = {}
-    if pinned:
-        slide.custom_properties["pinned"] = True
-    else:
-        slide.custom_properties.pop("pinned", None)
-    return {"slide_n": n, "pinned": pinned}
-
-
-@app.get("/api/docs/{doc_id}/slide-ratings")
-def get_slide_ratings(doc_id: str):
-    """Return star ratings (1-5) for all slides that have one set."""
-    d = _require(doc_id)
-    ratings: dict[int, int] = {}
-    for slide in d["doc"].slides:
-        cp = slide.custom_properties or {}
-        r = cp.get("slide_rating")
-        if r is not None:
-            ratings[slide.slide_number] = int(r)
-    return {"ratings": ratings}
-
-
-@app.patch("/api/docs/{doc_id}/slides/{n}/rating")
-def set_slide_rating(doc_id: str, n: int, rating: int | None = None):
-    """Set or clear a 1-5 star rating for a slide."""
-    if rating is not None and not (1 <= rating <= 5):
-        raise HTTPException(400, "rating must be 1-5 or null")
-    d = _require(doc_id)
-    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
-    if slide is None:
-        raise HTTPException(404, f"Slide {n} not found")
-    if slide.custom_properties is None:
-        slide.custom_properties = {}
-    if rating is None:
-        slide.custom_properties.pop("slide_rating", None)
-    else:
-        slide.custom_properties["slide_rating"] = rating
-    return {"slide_n": n, "rating": rating}
 
 
 class GradientStopSpec(BaseModel):
@@ -4021,134 +1901,7 @@ def set_all_slides_background(doc_id: str, color: str | None = None):
     return {"background_color": color, "slides_updated": len(d["doc"].slides)}
 
 
-@app.get("/api/docs/{doc_id}/slides/{n}/notes")
-def get_slide_notes(doc_id: str, n: int):
-    """Return speaker notes text for a slide."""
-    d = _require(doc_id)
-    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
-    if slide is None:
-        raise HTTPException(404, f"Slide {n} not found")
-    cp = getattr(slide, "custom_properties", None) or {}
-    return {"notes_text": cp.get("notes_text", "")}
-
-
-class SlideNotesUpdate(BaseModel):
-    notes_text: str
-
-
-@app.patch("/api/docs/{doc_id}/slides/{n}/notes")
-def update_slide_notes(doc_id: str, n: int, req: SlideNotesUpdate):
-    """Set (or clear) speaker notes text for a slide."""
-    _snapshot_doc(doc_id)
-    d = _require(doc_id)
-    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
-    if slide is None:
-        raise HTTPException(404, f"Slide {n} not found")
-    cp = getattr(slide, "custom_properties", None)
-    if cp is None:
-        slide.custom_properties = {}
-        cp = slide.custom_properties
-    cp["notes_text"] = req.notes_text
-    log.info("studio: updated notes for slide %d of %s", n, doc_id)
-    return {"notes_text": req.notes_text}
-
-
-class SlideLabelUpdate(BaseModel):
-    label: str
-
-
-@app.get("/api/docs/{doc_id}/slide-labels")
-def get_slide_labels(doc_id: str):
-    """Return all slide labels and tag colors keyed by slide number."""
-    d = _require(doc_id)
-    labels: dict[str, str] = {}
-    tags: dict[str, str]   = {}
-    for slide in d["doc"].slides:
-        cp = getattr(slide, "custom_properties", None) or {}
-        lbl = cp.get("label", "").strip()
-        tag = cp.get("tag_color", "").strip()
-        if lbl: labels[str(slide.slide_number)] = lbl
-        if tag: tags[str(slide.slide_number)]   = tag
-    return {"labels": labels, "tags": tags}
-
-
-@app.patch("/api/docs/{doc_id}/slides/{n}/label")
-def set_slide_label(doc_id: str, n: int, req: SlideLabelUpdate):
-    """Set a display label for slide *n*."""
-    d = _require(doc_id)
-    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
-    if slide is None:
-        raise HTTPException(404, f"Slide {n} not found")
-    if not hasattr(slide, "custom_properties") or slide.custom_properties is None:
-        slide.custom_properties = {}
-    slide.custom_properties["label"] = req.label
-    log.info("studio: set label for slide %d of %s: %r", n, doc_id, req.label)
-    return {"slide_n": n, "label": req.label}
-
-
-class SlideTagUpdate(BaseModel):
-    color: str | None = None   # hex color string or null to clear
-
-
-@app.patch("/api/docs/{doc_id}/slides/{n}/tag")
-def set_slide_tag(doc_id: str, n: int, req: SlideTagUpdate):
-    """Set or clear a tag color for slide *n*."""
-    d = _require(doc_id)
-    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
-    if slide is None:
-        raise HTTPException(404, f"Slide {n} not found")
-    if not hasattr(slide, "custom_properties") or slide.custom_properties is None:
-        slide.custom_properties = {}
-    if req.color:
-        slide.custom_properties["tag_color"] = req.color
-    else:
-        slide.custom_properties.pop("tag_color", None)
-    return {"slide_n": n, "tag_color": req.color}
-
-
-# ── Slide transition metadata ──────────────────────────────────────────────────
-
 VALID_TRANSITIONS = {"none", "fade", "slide", "zoom", "flip", "push", "wipe", "dissolve"}
-
-
-class SlideTransitionUpdate(BaseModel):
-    transition: str = "none"   # must be one of VALID_TRANSITIONS
-    duration_ms: int = 500     # animation duration in milliseconds
-
-
-@app.patch("/api/docs/{doc_id}/slides/{n}/transition")
-def set_slide_transition(doc_id: str, n: int, req: SlideTransitionUpdate):
-    """Set the transition animation for slide n."""
-    if req.transition not in VALID_TRANSITIONS:
-        raise HTTPException(400, f"Unknown transition {req.transition!r}. Valid: {sorted(VALID_TRANSITIONS)}")
-    d = _require(doc_id)
-    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
-    if slide is None:
-        raise HTTPException(404, f"Slide {n} not found")
-    if not hasattr(slide, "custom_properties") or slide.custom_properties is None:
-        slide.custom_properties = {}
-    slide.custom_properties["transition"] = req.transition
-    slide.custom_properties["transition_duration_ms"] = req.duration_ms
-    return {"slide_n": n, "transition": req.transition, "duration_ms": req.duration_ms}
-
-
-class SlideSectionUpdate(BaseModel):
-    section_name: str = ""   # empty string removes the section header
-
-@app.patch("/api/docs/{doc_id}/slides/{n}/section")
-def set_slide_section(doc_id: str, n: int, req: SlideSectionUpdate):
-    """Set or clear a section name on a slide (shown as a divider in the slide strip)."""
-    d = _require(doc_id)
-    slide = next((s for s in d["doc"].slides if s.slide_number == n), None)
-    if slide is None:
-        raise HTTPException(404, f"Slide {n} not found")
-    if not hasattr(slide, "custom_properties") or slide.custom_properties is None:
-        slide.custom_properties = {}
-    if req.section_name.strip():
-        slide.custom_properties["section_name"] = req.section_name.strip()
-    else:
-        slide.custom_properties.pop("section_name", None)
-    return {"slide_n": n, "section_name": req.section_name.strip()}
 
 
 @app.post("/api/docs/{doc_id}/slides/{n}/merge-elements")
@@ -4898,91 +2651,6 @@ def set_transitions_bulk(doc_id: str, req: BulkTransitionRequest):
     return {"updated": updated, "transition": req.transition, "duration_ms": req.duration_ms}
 
 
-@app.get("/api/docs/{doc_id}/slides/{n}/export-slide")
-def export_single_slide(doc_id: str, n: int):
-    """Export a single slide as its own PPTX file by rebuilding only that slide."""
-    import traceback as _tb
-    import copy as _copy
-    d = _require(doc_id)
-    if d.get("source_format") != "pptx":
-        raise HTTPException(400, "Slide export is only supported for PPTX documents")
-    if n < 1 or n > len(d["doc"].slides):
-        raise HTTPException(404, f"Slide {n} not found")
-
-    _REBUILD_DIR.mkdir(parents=True, exist_ok=True)
-    stem     = Path(d["name"]).stem
-    out_path = _REBUILD_DIR / f"{stem}_{doc_id}_slide{n}.pptx"
-
-    try:
-        # Build a single-slide document subset and rebuild it
-        single_doc = _copy.deepcopy(d["doc"])
-        target_slide = next((s for s in single_doc.slides if s.slide_number == n), None)
-        if target_slide is None:
-            raise HTTPException(404, f"Slide {n} not found in document")
-        single_doc.slides = [target_slide]
-        target_slide.slide_number = 1
-        _rebuild_pptx(single_doc, out_path)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(500, detail=f"Slide export failed: {exc}\n{_tb.format_exc()}")
-
-    return FileResponse(
-        str(out_path),
-        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        filename=f"{stem}_slide{n}.pptx",
-        headers={"Cache-Control": "no-store"},
-    )
-
-
-@app.get("/api/docs/{doc_id}/export-subset")
-def export_subset_slides(doc_id: str, slides: str):
-    """Export a comma-separated list of slide numbers as a PPTX subset.
-
-    ?slides=1,3,5,7  →  exports only those slides in order.
-    """
-    import traceback as _tb
-    import copy as _copy
-    d = _require(doc_id)
-    if d.get("source_format") != "pptx":
-        raise HTTPException(400, "Subset export is only supported for PPTX documents")
-    try:
-        slide_numbers = sorted(set(int(s.strip()) for s in slides.split(",")))
-    except ValueError:
-        raise HTTPException(400, "slides must be a comma-separated list of integers")
-
-    all_ns = {s.slide_number for s in d["doc"].slides}
-    missing = [n for n in slide_numbers if n not in all_ns]
-    if missing:
-        raise HTTPException(404, f"Slides not found: {missing}")
-
-    _REBUILD_DIR.mkdir(parents=True, exist_ok=True)
-    stem     = Path(d["name"]).stem
-    slide_str = "_".join(str(n) for n in slide_numbers[:5])
-    if len(slide_numbers) > 5:
-        slide_str += f"_and{len(slide_numbers) - 5}more"
-    out_path = _REBUILD_DIR / f"{stem}_{doc_id}_subset_{slide_str}.pptx"
-
-    try:
-        subset_doc = _copy.deepcopy(d["doc"])
-        subset_doc.slides = [s for s in subset_doc.slides if s.slide_number in set(slide_numbers)]
-        subset_doc.slides.sort(key=lambda s: slide_numbers.index(s.slide_number))
-        for i, s in enumerate(subset_doc.slides):
-            s.slide_number = i + 1
-        _rebuild_pptx(subset_doc, out_path)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(500, detail=f"Subset export failed: {exc}\n{_tb.format_exc()}")
-
-    return FileResponse(
-        str(out_path),
-        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        filename=f"{stem}_subset.pptx",
-        headers={"Cache-Control": "no-store"},
-    )
-
-
 @app.get("/api/docs/{doc_id}/notes-export")
 def export_all_notes(doc_id: str):
     """Export all slides' speaker notes as a plain-text download."""
@@ -5003,120 +2671,6 @@ def export_all_notes(doc_id: str):
     return PlainTextResponse(
         content=content,
         headers={"Content-Disposition": f'attachment; filename="{stem}_notes.txt"'},
-    )
-
-
-@app.get("/api/docs/{doc_id}/export-script")
-def export_speaker_script(doc_id: str, wpm: int = 120):
-    """Export a formatted speaker script with slide titles, notes, and reading-time estimates.
-
-    ?wpm=120  (optional, words per minute for time estimate)
-    """
-    from fastapi.responses import PlainTextResponse
-    d = _require(doc_id)
-    doc = d["doc"]
-    stem = Path(d.get("name", "script")).stem
-    lines: list[str] = [
-        f"SPEAKER SCRIPT — {stem.upper()}",
-        "=" * 60,
-        f"Generated: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M')}",
-        f"Words per minute: {wpm}",
-        "=" * 60,
-        "",
-    ]
-    total_words = 0
-    total_secs = 0
-    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
-        cp = slide.custom_properties or {}
-        section = cp.get("section_name", "").strip()
-        notes   = cp.get("notes_text", "").strip()
-        hidden  = cp.get("hidden", False)
-        # Gather title text
-        title = ""
-        for el in slide.elements:
-            ident = getattr(el, "identification", None)
-            name  = (getattr(ident, "shape_name", "") or "").lower()
-            plain = _element_plain_text(el).strip()
-            if plain and "title" in name:
-                title = plain
-                break
-        words = len(notes.split()) if notes else 0
-        secs  = int(words / max(wpm, 1) * 60) if words else 0
-        total_words += words
-        total_secs  += secs
-        header = f"SLIDE {slide.slide_number}"
-        if section:
-            header += f"  [§ {section}]"
-        if hidden:
-            header += "  [HIDDEN]"
-        lines.append(header)
-        if title:
-            lines.append(f"  Title: {title}")
-        if words:
-            m, s = divmod(secs, 60)
-            lines.append(f"  Est. time: {m}:{s:02d} ({words} words)")
-        lines.append("-" * 40)
-        if notes:
-            lines.append(notes)
-        else:
-            lines.append("(no notes)")
-        lines.append("")
-    m, s = divmod(total_secs, 60)
-    h = m // 60; m = m % 60
-    summary = f"TOTAL: {h}h {m:02d}m {s:02d}s | {total_words} words" if h else f"TOTAL: {m:02d}m {s:02d}s | {total_words} words"
-    lines.insert(4, summary)
-    return PlainTextResponse(
-        content="\n".join(lines),
-        headers={"Content-Disposition": f'attachment; filename="{stem}_script.txt"'},
-    )
-
-
-@app.get("/api/docs/{doc_id}/export-markdown")
-def export_markdown(doc_id: str):
-    """Export the entire presentation as a Markdown document (titles, body text, notes)."""
-    from fastapi.responses import PlainTextResponse
-    d = _require(doc_id)
-    doc = d["doc"]
-    lines: list[str] = [f"# {Path(d.get('name', 'Presentation')).stem}", ""]
-    for slide in sorted(doc.slides, key=lambda s: s.slide_number):
-        cp = slide.custom_properties or {}
-        section = cp.get("section_name", "").strip()
-        notes   = cp.get("notes_text", "").strip()
-        hidden  = cp.get("hidden", False)
-        # Collect all text from slide elements
-        all_texts: list[str] = []
-        title_text: str | None = None
-        for el in slide.elements:
-            ident = getattr(el, "identification", None)
-            name  = (getattr(ident, "shape_name", "") or "").lower()
-            plain = _element_plain_text(el).strip()
-            if not plain:
-                continue
-            if "title" in name and title_text is None:
-                title_text = plain
-            else:
-                all_texts.append(plain)
-        if section:
-            lines.append(f"---")
-            lines.append(f"*Section: {section}*")
-            lines.append("")
-        hidden_tag = " *(hidden)*" if hidden else ""
-        heading = title_text or f"Slide {slide.slide_number}"
-        lines.append(f"## {slide.slide_number}. {heading}{hidden_tag}")
-        lines.append("")
-        for text in all_texts:
-            lines.append(text)
-            lines.append("")
-        if notes:
-            lines.append("> **Notes:**")
-            for line in notes.splitlines():
-                lines.append(f"> {line}" if line.strip() else ">")
-            lines.append("")
-    stem = Path(d.get("name", "presentation")).stem
-    content = "\n".join(lines)
-    return PlainTextResponse(
-        content=content,
-        headers={"Content-Disposition": f'attachment; filename="{stem}.md"'},
     )
 
 
@@ -5309,7 +2863,10 @@ async def import_slides(doc_id: str, file: UploadFile = File(...)):
     """Import all slides from an uploaded PPTX and append them to the document."""
     import copy as _copy
     import tempfile
-    from percy.diagnostics.onboard import onboard_pptx as _onboard_pptx
+    # Route through the central onboarding facade — gives us shared logging
+    # + future cross-cutting concerns (metrics, font registration) with the
+    # primary upload path and the SQS worker.
+    from percy.onboarding import onboard_document
     from percy.diagnostics.render_png import _register_embedded_fonts  # type: ignore[attr-defined]
 
     _snapshot_doc(doc_id)
@@ -5322,7 +2879,7 @@ async def import_slides(doc_id: str, file: UploadFile = File(...)):
         tmp.write(content)
         tmp.close()
 
-        src_doc = _onboard_pptx(Path(tmp.name))
+        src_doc = onboard_document(Path(tmp.name))
         first_new = len(doc.slides) + 1
         imported  = 0
         for src_slide in src_doc.slides:
@@ -6245,135 +3802,6 @@ def _snapshot_doc(doc_id: str) -> None:
     _schedule_cloud_autosave(doc_id)
 
 
-@app.get("/api/docs/{doc_id}/undo-state")
-def get_undo_state(doc_id: str):
-    """Return current undo and redo stack depths."""
-    d = _require(doc_id)
-    return {
-        "undo_depth": len(d.get("_undo_stack", [])),
-        "redo_depth": len(d.get("_redo_stack", [])),
-    }
-
-
-@app.post("/api/docs/{doc_id}/undo")
-def undo(doc_id: str):
-    """Restore previous Bridge model snapshot."""
-    import pickle as _pickle
-    d = _require(doc_id)
-    stack = d.get("_undo_stack", [])
-    if not stack:
-        raise HTTPException(400, "Nothing to undo")
-    redo_stack: list = d.setdefault("_redo_stack", [])
-    try:
-        redo_stack.append(_pickle.dumps(d["doc"]))
-    except Exception:
-        pass
-    d["doc"] = _pickle.loads(stack.pop())
-    d["modified_at"] = time.time()
-    _schedule_cloud_autosave(doc_id)
-    log.info("undo: %s — %d undo / %d redo remain", doc_id, len(stack), len(redo_stack))
-    return {"ok": True, "undo_depth": len(stack), "redo_depth": len(redo_stack)}
-
-
-@app.post("/api/docs/{doc_id}/redo")
-def redo_action(doc_id: str):
-    """Re-apply the last undone operation."""
-    import pickle as _pickle
-    d = _require(doc_id)
-    redo_stack = d.get("_redo_stack", [])
-    if not redo_stack:
-        raise HTTPException(400, "Nothing to redo")
-    stack: list = d.setdefault("_undo_stack", [])
-    try:
-        stack.append(_pickle.dumps(d["doc"]))
-    except Exception:
-        pass
-    d["doc"] = _pickle.loads(redo_stack.pop())
-    d["modified_at"] = time.time()
-    _schedule_cloud_autosave(doc_id)
-    log.info("redo: %s — %d undo / %d redo remain", doc_id, len(stack), len(redo_stack))
-    return {"ok": True, "undo_depth": len(stack), "redo_depth": len(redo_stack)}
-
-
-# ── Named snapshots ───────────────────────────────────────────────────────────
-
-_MAX_NAMED_SNAPSHOTS = 20
-
-
-class NamedSnapshotRequest(BaseModel):
-    name: str
-
-
-@app.post("/api/docs/{doc_id}/snapshots")
-def create_snapshot(doc_id: str, req: NamedSnapshotRequest):
-    """Save a named checkpoint of the current document state."""
-    import pickle as _pickle
-    d = _require(doc_id)
-    if d.get("doc") is None:
-        raise HTTPException(400, "No document loaded")
-    name = req.name.strip()
-    if not name:
-        raise HTTPException(400, "Snapshot name required")
-    snap_list: list = d.setdefault("_named_snapshots", [])
-    try:
-        blob = _pickle.dumps(d["doc"])
-    except Exception as exc:
-        raise HTTPException(500, f"Could not serialize document: {exc}")
-    snap_list.append({
-        "id": f"snap_{int(time.time() * 1000)}",
-        "name": name,
-        "created_at": time.time(),
-        "slide_count": len(d["doc"].slides),
-        "blob": blob,
-    })
-    if len(snap_list) > _MAX_NAMED_SNAPSHOTS:
-        snap_list.pop(0)
-    log.info("snapshot created: %s '%s'", doc_id, name)
-    return {"ok": True, "id": snap_list[-1]["id"], "total": len(snap_list)}
-
-
-@app.get("/api/docs/{doc_id}/snapshots")
-def list_snapshots(doc_id: str):
-    """List all named snapshots for this document."""
-    d = _require(doc_id)
-    snap_list: list = d.get("_named_snapshots", [])
-    return {
-        "snapshots": [
-            {"id": s["id"], "name": s["name"], "created_at": s["created_at"], "slide_count": s["slide_count"]}
-            for s in snap_list
-        ]
-    }
-
-
-@app.post("/api/docs/{doc_id}/snapshots/{snap_id}/restore")
-def restore_snapshot(doc_id: str, snap_id: str):
-    """Restore the document to a named snapshot (current state pushed to undo stack)."""
-    import pickle as _pickle
-    d = _require(doc_id)
-    snap_list: list = d.get("_named_snapshots", [])
-    snap = next((s for s in snap_list if s["id"] == snap_id), None)
-    if snap is None:
-        raise HTTPException(404, "Snapshot not found")
-    _snapshot_doc(doc_id)
-    try:
-        d["doc"] = _pickle.loads(snap["blob"])
-    except Exception as exc:
-        raise HTTPException(500, f"Could not restore snapshot: {exc}")
-    d["modified_at"] = time.time()
-    log.info("snapshot restored: %s '%s'", doc_id, snap["name"])
-    return {"ok": True, "name": snap["name"], "slide_count": len(d["doc"].slides)}
-
-
-@app.delete("/api/docs/{doc_id}/snapshots/{snap_id}")
-def delete_snapshot(doc_id: str, snap_id: str):
-    """Delete a named snapshot."""
-    d = _require(doc_id)
-    snap_list: list = d.get("_named_snapshots", [])
-    before = len(snap_list)
-    d["_named_snapshots"] = [s for s in snap_list if s["id"] != snap_id]
-    if len(d["_named_snapshots"]) == before:
-        raise HTTPException(404, "Snapshot not found")
-    return {"ok": True}
 
 
 # ── Voiceover / narration script ──────────────────────────────────────────────
@@ -7612,15 +5040,29 @@ def adapt_for_audience(doc_id: str, req: AudienceAdaptRequest):
 
 # ── Text content helpers ──────────────────────────────────────────────────────
 
-def _color_to_str(c: Any) -> str | None:
+def _color_to_str(c: Any, *, ignore_alpha: bool = False) -> str | None:
+    """Render a ColorSpec to "#RRGGBB". Thin wrapper around ``ColorSpec.resolve()``.
+
+    Applies lum_mod/tint/shade and (by default) alpha by pre-blending against
+    white — matches matplotlib's white-canvas composite.
+
+    Pass ``ignore_alpha=True`` when the caller will apply the color's alpha
+    separately as CSS opacity (so the same alpha doesn't double-fade — see
+    snowflake slide 2's photo + tint overlay). Maps to ``skip_alpha=True`` on
+    ``ColorSpec.resolve()``.
+    """
     if c is None:
         return None
-    # Use resolve() so lum_mod, tint, shade, and alpha modifiers are applied.
-    # alpha blends against white — matches matplotlib's white-canvas composite.
     resolve = getattr(c, "resolve", None)
     if resolve is not None and callable(resolve):
         try:
-            return resolve() or None
+            return resolve(skip_alpha=ignore_alpha) or None
+        except TypeError:
+            # Legacy resolve() without skip_alpha kwarg — fall back.
+            try:
+                return resolve() or None
+            except Exception:
+                pass
         except Exception:
             pass
     v = getattr(c, "value", None)
@@ -7698,10 +5140,19 @@ def _serialize_element_text_content(el: Any, el_type: str) -> dict:
         cat = el.category_axis
         val = el.value_axis
         leg = el.legend
+        # PowerPoint auto-title fallback: when chart has no explicit title text
+        # but auto_title_deleted=False AND there's exactly one series with a
+        # name, PowerPoint shows that series name as the title (e.g. snowflake
+        # slide 13 pie/donut charts show "Sales"). Mirror that here.
+        _title_text = t.title
+        if (not _title_text) and not getattr(t, "auto_title_deleted", True):
+            _series = getattr(el, "series", []) or []
+            if len(_series) == 1 and _series[0].name:
+                _title_text = _series[0].name
         return {
             "kind":  "chart",
             "title": {
-                "text":       t.title,
+                "text":       _title_text,
                 "font_size":  t.title_font_size,
                 "font_bold":  t.title_font_bold,
                 "font_italic":t.title_font_italic,
@@ -7922,29 +5373,6 @@ def _find_element(doc_id: str, n: int, element_id: str):
     return found
 
 
-@app.get("/api/docs/{doc_id}/slides/{n}/render.png")
-def render_slide_png(doc_id: str, n: int, dpi: int = 150):
-    """Render slide N via SlideRenderer (matplotlib) and return as PNG.
-    Used by the roundtrip fidelity test suite to generate Bridge-model reference images."""
-    d = _require(doc_id)
-    doc = d["doc"]
-    slide = next((s for s in doc.slides if s.slide_number == n), None)
-    if slide is None:
-        raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
-    theme = getattr(doc, "theme_colors", None) or None
-    try:
-        renderer = SlideRenderer(dpi=dpi, theme=theme)
-        renderer.set_document(doc)
-        fig = renderer.render_slide(slide)
-        import io as _io
-        buf = _io.BytesIO()
-        fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", pad_inches=0)
-        fig.clf()
-        buf.seek(0)
-        return Response(content=buf.read(), media_type="image/png")
-    except Exception as e:
-        log.warning("render_slide_png failed for %s slide %d: %s", doc_id, n, e)
-        raise HTTPException(500, f"Render failed: {e}")
 
 
 @app.get("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/freeform-data")
@@ -9437,6 +6865,17 @@ def _ser_style(el: Any) -> dict:
 
     # fill
     fill = getattr(el, "fill", None)
+    if fill is None:
+        # BridgeText uses `fill_and_border` (flat has_fill/fill_color) instead
+        # of the shape `fill` object. Adapt so text-box backgrounds (e.g. the
+        # visa "POS Payment Methods Trends" navy header bar — a text box with
+        # solid fill, not a separate shape) round-trip to Studio.
+        fb = getattr(el, "fill_and_border", None)
+        if fb is not None and getattr(fb, "has_fill", False):
+            _fc = getattr(fb, "fill_color", None)
+            if _fc is not None:
+                fill_type  = "solid"
+                fill_color = _color_to_str(_fc)
     if fill:
         fill_type_raw = getattr(fill, "fill_type", "none") or "none"
         # Normalize: OOXML stores "solidFill"/"SOLID"/"gradFill"/"GRADIENT"/etc.
@@ -9444,7 +6883,11 @@ def _ser_style(el: Any) -> dict:
         if _ft in ("solid", "solidfill"):
             fill_type = "solid"
             fg = getattr(fill, "color", None) or getattr(fill, "fill_color", None)
-            fill_color = _color_to_str(fg)
+            # When the color carries its own <a:alpha>, we route that to CSS
+            # opacity below — extract the un-pre-blended hex here so the two
+            # don't compound. Without this, snowflake slide 2's #10547E (alpha=
+            # 73725) shows up as #4F81A0 *and* opacity 0.737, double-fading.
+            fill_color = _color_to_str(fg, ignore_alpha=True)
         elif _ft in ("gradient", "gradfill"):
             fill_type = "gradient"
             stops = getattr(fill, "gradient_stops", []) or []
@@ -9462,6 +6905,13 @@ def _ser_style(el: Any) -> dict:
     # line — ShapeLine uses .color/.width/.dash_style; FreeformLine uses .line_color/.line_width/.line_dash
     line_visible = True
     line = getattr(el, "line", None)
+    if line is None:
+        # BridgeText carries its outline on fill_and_border (has_border /
+        # border_color / border_width) — adapt so text-box borders round-trip.
+        fb = getattr(el, "fill_and_border", None)
+        if fb is not None and getattr(fb, "has_border", False):
+            line_color = _color_to_str(getattr(fb, "border_color", None))
+            line_width = getattr(fb, "border_width", None) or None
     if line:
         lc = getattr(line, "color", None) or getattr(line, "line_color", None)
         line_color = _color_to_str(lc)
@@ -9476,9 +6926,20 @@ def _ser_style(el: Any) -> dict:
         head_size = getattr(line, "head_size", None)
         tail_size = getattr(line, "tail_size", None)
 
-    # opacity — stored as fill.transparency (0.0 = fully opaque, 1.0 = fully transparent)
+    # opacity — stored as fill.transparency (0.0 = fully opaque, 1.0 = fully transparent).
+    # Also honor per-color <a:alpha val="…"/> (0–100000 = 0–100% opaque) — PowerPoint
+    # puts tint-overlay alpha on the color itself rather than the parent fill, e.g.
+    # snowflake slide 2's #10547E with alpha=73725 over a background photo.
     fill_transp = getattr(fill, "transparency", None) if fill else None
     opacity = (1.0 - float(fill_transp)) if fill_transp is not None else 1.0
+    if fill is not None:
+        fg = getattr(fill, "color", None) or getattr(fill, "fill_color", None)
+        ca = getattr(fg, "alpha", None) if fg is not None else None
+        if ca is not None:
+            try:
+                opacity *= max(0.0, min(1.0, float(ca) / 100000.0))
+            except (TypeError, ValueError):
+                pass
 
     # shadow — compute offset_x/offset_y from distance (pt) and direction (degrees)
     shadow_on = shadow_color = shadow_blur = shadow_offset_x = shadow_offset_y = None
@@ -9514,7 +6975,7 @@ def _ser_style(el: Any) -> dict:
     # image crop + effects
     crop_left = crop_right = crop_top = crop_bottom = None
     brightness = contrast = transparency = None
-    recolor_preset = mask_shape = None
+    recolor_preset = mask_shape = mask_shape_adj_pct = None
     reflection_on = False
     reflection_transparency = reflection_distance = reflection_size = None
     if el_type == "BridgeImage":
@@ -9535,6 +6996,51 @@ def _ser_style(el: Any) -> dict:
             reflection_transparency = getattr(fx, "reflection_transparency", None)
             reflection_distance     = getattr(fx, "reflection_distance", None)
             reflection_size         = getattr(fx, "reflection_size", None)
+        # PPTX prstGeom on a picture (incl. inherited from the layout placeholder
+        # via the existing _image_shape_geometry resolver) defines the visible
+        # mask shape PowerPoint applies — e.g. visa slide 1's photo inherits a
+        # rounded-rect from its layout pic placeholder. Map common presets to
+        # our maskShapes registry. User-set mask_shape wins.
+        if not mask_shape:
+            _prst = getattr(el, "shape_geometry", None)
+            _adj  = getattr(el, "shape_geometry_adj", None) or {}
+            _PRST_TO_MASK = {
+                "roundRect":      "rounded_rect",
+                "round1Rect":     "rounded_rect",
+                "round2SameRect": "rounded_rect",
+                "round2DiagRect": "rounded_rect",
+                "snipRoundRect":  "rounded_rect",
+                "ellipse":        "ellipse",
+                "triangle":       "triangle",
+                "rtTriangle":     "rtriangle",
+                "diamond":        "diamond",
+                "pentagon":       "pentagon",
+                "hexagon":        "hexagon",
+                "octagon":        "octagon",
+                "parallelogram":  "parallelogram",
+                "trapezoid":      "trapezoid",
+                "star5":          "star5",
+                "star8":          "star8",
+                "heart":          "heart",
+                "cloud":          "cloud",
+                "moon":           "moon",
+                "rightArrow":     "arrow_right",
+                "leftArrow":      "arrow_left",
+                "upArrow":        "arrow_up",
+                "downArrow":      "arrow_down",
+                "leftRightArrow": "arrow_lr",
+                "chevron":        "chevron",
+            }
+            mapped = _PRST_TO_MASK.get(_prst) if _prst else None
+            if mapped:
+                mask_shape = mapped
+                if mapped == "rounded_rect":
+                    raw = _adj.get("adj") if isinstance(_adj, dict) else None
+                    if isinstance(raw, str) and raw.startswith("val "):
+                        try:
+                            mask_shape_adj_pct = round(int(raw[4:]) / 1000.0, 2)
+                        except ValueError:
+                            pass
 
     return {
         "fill_type":        fill_type,
@@ -9570,6 +7076,7 @@ def _ser_style(el: Any) -> dict:
         "transparency":            transparency,
         "recolor_preset":          recolor_preset,
         "mask_shape":              mask_shape,
+        "mask_shape_adj_pct":      mask_shape_adj_pct,
         "reflection_on":           reflection_on,
         "reflection_transparency": reflection_transparency,
         "reflection_distance":     reflection_distance,
@@ -9735,54 +7242,6 @@ def get_element_raw_image(doc_id: str, n: int, element_id: str, v: int = 0):
                     headers={"Cache-Control": "max-age=3600", "X-Image-Format": fmt})
 
 
-@app.get("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/element-png")
-def render_element_png(doc_id: str, n: int, element_id: str, v: int = 0):
-    """Render a single Bridge element to a transparent PNG for the Studio canvas."""
-    from percy.diagnostics.render_png import _register_embedded_fonts  # type: ignore[attr-defined]
-    import io as _io
-
-    d   = _require(doc_id)
-    doc = d["doc"]
-    slide = next((s for s in doc.slides if s.slide_number == n), None)
-    if slide is None:
-        raise HTTPException(404, f"Slide {n} not found in doc {doc_id!r}")
-
-    el_index = None
-    el       = None
-    for i, e in enumerate(slide.elements):
-        if _element_id(e, i) == element_id:
-            el, el_index = e, i
-            break
-    if el is None:
-        raise HTTPException(404, f"Element {element_id!r} not found on slide {n}")
-
-    theme          = getattr(doc, "theme_colors", None) or None
-    embedded_fonts = getattr(doc, "embedded_fonts", None)
-    if embedded_fonts:
-        _register_embedded_fonts(embedded_fonts)
-
-    renderer = SlideRenderer(theme=theme)
-    renderer.set_document(doc)
-    # propagate slide default text color so text-heavy shapes render correctly
-    renderer._default_text_color = getattr(slide, "default_text_color", None)
-
-    try:
-        fig = renderer.render_element(el, padding=0)
-        buf = _io.BytesIO()
-        # save at exact figsize (no tight-crop) so the PNG proportions match
-        # the element's bounding box; transparent so it composites over white canvas
-        fig.savefig(buf, format="png", dpi=96, transparent=True)
-        fig.clf()
-        buf.seek(0)
-    except Exception as exc:
-        import traceback
-        raise HTTPException(500, detail=f"Element render failed: {exc}\n{traceback.format_exc()}")
-
-    return Response(
-        content=buf.read(),
-        media_type="image/png",
-        headers={"Cache-Control": "no-store"},
-    )
 
 
 @app.get("/api/docs/{doc_id}/slides/{n}/elements/{element_id}/raw-image")
@@ -9835,7 +7294,10 @@ def serve_raw_image(doc_id: str, n: int, element_id: str, v: int = 0):
 # ── Chart data endpoints (typed editor for BridgeChart) ──────────────────────
 
 def _resolve_color(c: Any, theme: dict[str, str] | None) -> str | None:
-    """Return resolved #RRGGBB hex for a ColorSpec, or None if no value set."""
+    """Return resolved #RRGGBB hex for a ColorSpec, or None if no value set.
+
+    Thin wrapper around ``ColorSpec.resolve()`` — the canonical implementation.
+    """
     if c is None:
         return None
     val = getattr(c, "value", None)
@@ -9934,13 +7396,21 @@ def _ser_chart_axis(ax: Any, theme: dict[str, str] | None) -> dict[str, Any]:
 def _ser_chart_data(el: Any, theme: dict[str, str] | None) -> dict[str, Any]:
     """Serialize a BridgeChart into a typed JSON payload for the chart editor."""
     cats = el.categories.categories or el.categories.categories_raw or []
+    # PowerPoint auto-title fallback: when title is empty AND auto_title_deleted
+    # is False AND there's exactly one series with a name, PowerPoint renders
+    # the series name as the chart title (snowflake slide 13 pie/donut: "Sales").
+    _title_text = el.title.title
+    if (not _title_text) and not getattr(el.title, "auto_title_deleted", True):
+        _series_list = list(getattr(el, "series", []) or [])
+        if len(_series_list) == 1 and _series_list[0].name:
+            _title_text = _series_list[0].name
     return {
         "chart_type": el.chart_type or "COLUMN_CLUSTERED",
         "categories": [str(c) if c is not None else "" for c in cats],
         "categories_are_numeric": bool(el.categories.categories_are_numeric),
         "series": [_ser_chart_series(s, theme, i) for i, s in enumerate(el.series)],
         "title": {
-            "text":       el.title.title,
+            "text":       _title_text,
             "font_size":  el.title.title_font_size,
             "font_name":  el.title.title_font_name,
             "font_bold":  el.title.title_font_bold,
@@ -13713,8 +11183,8 @@ def text_map(doc_id: str):
 
     return {
         "slides": slide_data,
-        "slide_width_in": 13.333,
-        "slide_height_in": 7.5,
+        "slide_width_in": SLIDE_WIDTH_IN,
+        "slide_height_in": SLIDE_HEIGHT_IN,
     }
 
 
@@ -15012,18 +12482,6 @@ def extract_citations(doc_id: str):
 
 
 # ── Contrast Checker ──────────────────────────────────────────────────────────
-
-def _hex_to_rgb(hex_color: str) -> tuple[int, int, int] | None:
-    """Convert hex color string to RGB tuple."""
-    h = hex_color.lstrip("#")
-    if len(h) not in (3, 6):
-        return None
-    if len(h) == 3:
-        h = h[0]*2 + h[1]*2 + h[2]*2
-    try:
-        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    except ValueError:
-        return None
 
 def _relative_luminance(r: int, g: int, b: int) -> float:
     """WCAG relative luminance."""
@@ -18114,85 +15572,6 @@ async def sentence_variety(doc_id: str):
 
 
 # ── Deck Export Checklist ─────────────────────────────────────────────────────
-
-@app.get("/api/docs/{doc_id}/export-checklist")
-async def export_checklist(doc_id: str):
-    """Run a pre-export checklist: missing notes, placeholders, overflow risk, empty slides, etc."""
-    d   = _require(doc_id)
-    doc = d["doc"]
-
-    items: list[dict] = []
-
-    # Slides without speaker notes
-    no_notes = [s.slide_number for s in doc.slides if not any(
-        p.text.strip() for sh in s.shapes if sh.text_frame for p in sh.text_frame.paragraphs
-        if getattr(sh, "is_notes", False)
-    )]
-    items.append({
-        "check": "Speaker notes present",
-        "status": "pass" if not no_notes else "warn",
-        "detail": "All slides have notes" if not no_notes else f"{len(no_notes)} slides missing notes",
-    })
-
-    # Placeholder text
-    placeholder_re = re.compile(r"\[.*?\]|TODO|TBD|FIXME|Lorem ipsum", re.I)
-    ph_slides = set()
-    for s in doc.slides:
-        for sh in s.shapes:
-            if sh.text_frame:
-                for para in sh.text_frame.paragraphs:
-                    if placeholder_re.search(para.text):
-                        ph_slides.add(s.slide_number)
-    items.append({
-        "check": "No placeholder text",
-        "status": "pass" if not ph_slides else "fail",
-        "detail": "No placeholders found" if not ph_slides else f"Slides {sorted(ph_slides)} have placeholder text",
-    })
-
-    # Empty slides
-    empty = [s.slide_number for s in doc.slides if not any(
-        sh.text_frame and any(p.text.strip() for p in sh.text_frame.paragraphs)
-        for sh in s.shapes
-    )]
-    items.append({
-        "check": "No empty slides",
-        "status": "pass" if not empty else "warn",
-        "detail": "No empty slides" if not empty else f"Slides {empty} appear empty",
-    })
-
-    # Duplicate slide titles
-    titles: dict[str, list[int]] = {}
-    for s in doc.slides:
-        title = ""
-        for sh in s.shapes:
-            if sh.text_frame and sh.text_frame.paragraphs:
-                t = sh.text_frame.paragraphs[0].text.strip()
-                if t:
-                    title = t
-                    break
-        if title:
-            titles.setdefault(title, []).append(s.slide_number)
-    dups = {t: ns for t, ns in titles.items() if len(ns) > 1}
-    items.append({
-        "check": "No duplicate titles",
-        "status": "pass" if not dups else "warn",
-        "detail": "All titles unique" if not dups else f"{len(dups)} duplicate title(s) found",
-    })
-
-    # Slide count sanity
-    count = len(doc.slides)
-    items.append({
-        "check": "Slide count",
-        "status": "pass" if 5 <= count <= 80 else "warn",
-        "detail": f"{count} slides" + ("" if 5 <= count <= 80 else (" — very few slides" if count < 5 else " — very long deck")),
-    })
-
-    fails = sum(1 for i in items if i["status"] == "fail")
-    warns = sum(1 for i in items if i["status"] == "warn")
-    overall = "ready" if fails == 0 and warns == 0 else ("issues" if fails > 0 else "warnings")
-
-    return {"overall": overall, "fails": fails, "warns": warns, "items": items}
-
 
 # ── Slide Image Descriptions ──────────────────────────────────────────────────
 

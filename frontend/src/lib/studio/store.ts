@@ -7,6 +7,7 @@ import type {
   StudioElement,
   TableData,
 } from "../studioTypes"
+import { SLIDE_WIDTH_IN, SLIDE_HEIGHT_IN } from "../studioTypes"
 import {
   fetchChartData,
   fetchElementStyle,
@@ -60,8 +61,8 @@ const EMPTY_STATE: StudioSessionState = {
   docId: null,
   slideN: 1,
   hydratedSlideN: 0,
-  slideWidthIn: 13.333,
-  slideHeightIn: 7.5,
+  slideWidthIn: SLIDE_WIDTH_IN,
+  slideHeightIn: SLIDE_HEIGHT_IN,
   backgroundColor: null,
   elements: [],
   payloads: {},

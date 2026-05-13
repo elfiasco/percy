@@ -8,6 +8,7 @@ import { tableToTiptap, tiptapToTable } from "../../../lib/bridge/tableTiptapAda
 import { bridgeTableExtensions } from "../../../lib/bridge/extensions/bridgeTableKit"
 import { setActiveTiptapEditor } from "../../../lib/bridge/activeEditor"
 import { registerRenderer, type NativeRendererProps } from "./RendererRegistry"
+import { RendererShell } from "./RendererShell"
 import TextBubbleMenu from "../TextBubbleMenu"
 
 /**
@@ -49,8 +50,22 @@ function TiptapTableRendererImpl({
     if (payload.style) setStyle(payload.style)
   }, [payload.error, payload.text, payload.style])
 
-  if (error)    return <div style={ERR_STYLE}>! table load failed</div>
-  if (!content) return <div style={{ width: "100%", height: "100%" }} data-percy-loading="table" />
+  if (error || !content) {
+    return (
+      <RendererShell
+        loading={!error && !content}
+        error={error}
+        kind="table"
+        onRetry={() => {
+          setError(null)
+          void studioStore.loadTextPayload(docId, slideN, element.id, /*force*/ true)
+          void studioStore.loadStylePayload(docId, slideN, element.id, /*force*/ true)
+        }}
+      >
+        {null}
+      </RendererShell>
+    )
+  }
 
   const containerStyle: React.CSSProperties = {
     width:     "100%",
@@ -75,12 +90,6 @@ function TiptapTableRendererImpl({
       containerStyle={containerStyle}
     />
   )
-}
-
-const ERR_STYLE: React.CSSProperties = {
-  width: "100%", height: "100%",
-  display: "flex", alignItems: "center", justifyContent: "center",
-  background: "#fff5f5", color: "#b91c1c", fontSize: 9, fontFamily: "monospace",
 }
 
 // ── TSV/CSV paste parser ─────────────────────────────────────────────────────

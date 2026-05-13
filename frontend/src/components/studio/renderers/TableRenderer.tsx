@@ -1,7 +1,9 @@
 import type { TableCellEditor, CellBorderSide } from "../../../lib/studioTypes"
 import { useStudioTablePayload } from "../../../lib/studio/payloadHooks"
+import { studioStore } from "../../../lib/studio/store"
 import type { NativeRendererProps } from "./RendererRegistry"
 import { registerRenderer } from "./RendererRegistry"
+import { RendererShell } from "./RendererShell"
 
 function borderStr(b: CellBorderSide | null): string {
   if (!b || !b.visible) return "none"
@@ -64,20 +66,18 @@ function CellTd({ cell, fontSize }: { cell: TableCellEditor; fontSize: number | 
 function TableRendererImpl({ element, docId, slideN, renderKey }: NativeRendererProps) {
   const { data, error } = useStudioTablePayload(docId, slideN, element.id, renderKey)
 
-  if (error) {
+  if (error || !data) {
     return (
-      <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center",
-                    background: "#fff5f5", color: "#b91c1c", fontSize: 10, fontFamily: "monospace" }}>
-        Table load failed
-      </div>
-    )
-  }
-  if (!data) {
-    return (
-      <div data-percy-loading="table" style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center",
-                    background: "transparent", color: "#9ca3af", fontSize: 10, fontFamily: "monospace" }}>
-        Loading table…
-      </div>
+      <RendererShell
+        loading={!error && !data}
+        error={error}
+        kind="table"
+        onRetry={() => {
+          void studioStore.loadTablePayload(docId, slideN, element.id, /*force*/ true)
+        }}
+      >
+        {null}
+      </RendererShell>
     )
   }
 

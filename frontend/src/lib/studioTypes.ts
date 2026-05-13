@@ -1,3 +1,11 @@
+// Default PowerPoint widescreen slide dimensions (16:9). Always prefer the
+// document-supplied values (StudioSession.slideWidthIn / slideHeightIn) when
+// available — these constants are the fallback used for synthesized content
+// before a doc is loaded, and for template previews. Mirrors
+// `percy.bridge.constants.SLIDE_WIDTH_IN/HEIGHT_IN` on the Python side.
+export const SLIDE_WIDTH_IN  = 13.333
+export const SLIDE_HEIGHT_IN = 7.5
+
 export interface StudioElement {
   id: string
   index: number
