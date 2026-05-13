@@ -148,13 +148,21 @@ def _phase1_select(
     llm_call: Callable[[str, str], str],
 ) -> SlideStrategy:
     """One LLM call to pick template vs custom."""
+    # Catalog shape: every metadata field a Phase-B6 enriched template
+    # carries lands here so the strategy LLM can match by use_when /
+    # avoid_when, not just by name. Templates without the new metadata
+    # fall through to the legacy `description`-only view via the
+    # `or` fallbacks.
     catalog_lines = []
     for t in slide_template_catalog:
         tags = ", ".join((t.get("tags") or [])[:4])
         catalog_lines.append({
             "id": t.get("id"),
             "name": t.get("name"),
-            "description": (t.get("description") or "")[:200],
+            "short_description": (t.get("short_description") or t.get("description") or "")[:200],
+            "long_description":  (t.get("long_description") or "")[:400],
+            "use_when":          (t.get("use_when") or "")[:200],
+            "avoid_when":        (t.get("avoid_when") or "")[:200],
             "tags": tags,
             "kinds": sorted({e.get("kind") for e in (t.get("layout") or [])}),
         })
@@ -326,7 +334,10 @@ def _phase2_template(
         "chosen_template": {
             "id": chosen_template.get("id"),
             "name": chosen_template.get("name"),
-            "description": chosen_template.get("description"),
+            "short_description": chosen_template.get("short_description") or chosen_template.get("description"),
+            "long_description":  chosen_template.get("long_description") or "",
+            "use_when":          chosen_template.get("use_when") or "",
+            "avoid_when":        chosen_template.get("avoid_when") or "",
             "inputs_schema": chosen_template.get("inputs_schema") or {},
             "sample_inputs": chosen_template.get("sample_inputs") or {},
         },

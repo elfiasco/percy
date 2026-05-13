@@ -563,8 +563,23 @@ class NameCandidates:
 
 @dataclass(slots=True)
 class TemplateDescription:
-    """Phase B6 output."""
-    description: str = ""
+    """Phase B6 output. Multiple description fields so downstream passes
+    (E1 dedup, agent Phase-1 strategy, agent Phase-2 input filling) can
+    read templates without re-seeing source slides.
+
+      short_description — ≤140 chars, for browsing template cards
+      long_description  — 2-4 sentences, full context for an LLM
+      use_when          — one short clause listing concrete fits
+      avoid_when        — one short clause listing concrete misfits
+
+    All four are LLM-authored in Phase B6 as a single batched call to
+    keep cost down (one call returns the whole metadata bundle).
+    """
+    description: str = ""              # legacy alias for short_description
+    short_description: str = ""
+    long_description: str = ""
+    use_when: str = ""
+    avoid_when: str = ""
 
 
 @dataclass(slots=True)
@@ -1460,34 +1475,64 @@ def phase_b_05_name(
 
 
 _B6_DESCRIPTION_SYSTEM = """\
-Write a one-sentence description for a designer browsing template
-cards. ≤ 140 characters. Plain language. Describe what the template
-DOES, not what it LOOKS like. Skip filler ("This template is...").
+Produce metadata for this template so downstream LLM passes can
+reason about it without re-seeing the source slides. FOUR fields:
+
+  short_description  — ≤ 140 chars. Browse-the-card-style summary.
+                        Describes what the template DOES, not what
+                        it looks like. Skip filler ("This template
+                        is...").
+
+  long_description   — 2-4 sentences. Full context: what the slide
+                        is for, what content goes in it, what
+                        problem it solves for a presenter, the
+                        emotional / persuasive job it does in a
+                        deck. Written for an LLM agent that's
+                        deciding whether to pick this template for
+                        a specific slot. Be concrete.
+
+  use_when           — One short clause listing 2-3 concrete fits.
+                        E.g. "the slide's one job is a single
+                        headline number; you have a kicker label
+                        and a one-line supporting context."
+
+  avoid_when         — One short clause listing 2-3 concrete misfits.
+                        E.g. "comparing two or more metrics side by
+                        side; explaining a process or methodology."
 
 Respond with one JSON object, no prose, no fences:
 
 {
-  "description": "<one sentence ≤ 140 chars>"
+  "short_description": "...",
+  "long_description": "...",
+  "use_when": "...",
+  "avoid_when": "..."
 }
 """
 
 
 def phase_b_06_description(
-    *, name: NameCandidates, intent: SemanticIntent,
+    *, name: NameCandidates, intent: SemanticIntent, slot: SlotAssignment,
     variables: list[VariableSpec],
     llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
 ) -> TemplateDescription:
     user = json.dumps({
-        "name": name.chosen, "intent": intent.intent,
+        "name": name.chosen, "intent": intent.intent, "slot": slot.slot,
         "varying_inputs": [v.input_name for v in variables if v.varies][:8],
     }, ensure_ascii=False)
+    def _parse(d: dict) -> TemplateDescription:
+        short = str(d.get("short_description") or "")[:200]
+        return TemplateDescription(
+            description=short,            # legacy alias
+            short_description=short,
+            long_description=str(d.get("long_description") or "")[:1200],
+            use_when=str(d.get("use_when") or "")[:300],
+            avoid_when=str(d.get("avoid_when") or "")[:300],
+        )
     return _call_llm_typed(
         system=_B6_DESCRIPTION_SYSTEM, user=user,
         llm_call=llm_call, provenance=provenance,
-        phase="B6.description",
-        parse=lambda d: TemplateDescription(
-            description=str(d.get("description") or "")[:200],
-        ),
+        phase="B6.description", parse=_parse,
     )
 
 
@@ -1577,7 +1622,7 @@ def phase_b_enrich_cluster(
         name = NameCandidates(candidates=["Slide Layout"], chosen="Slide Layout")
     try:
         description = phase_b_06_description(
-            name=name, intent=intent, variables=variables,
+            name=name, intent=intent, slot=slot, variables=variables,
             llm_call=llm_call, provenance=provenance,
         )
     except Exception:
@@ -2469,7 +2514,11 @@ def enriched_cluster_to_template(ec: EnrichedCluster) -> dict:
 
     return {
         "name": ec.name.chosen,
-        "description": ec.description.description,
+        "description": ec.description.short_description or ec.description.description,
+        "short_description": ec.description.short_description or ec.description.description,
+        "long_description": ec.description.long_description,
+        "use_when": ec.description.use_when,
+        "avoid_when": ec.description.avoid_when,
         "tags": list(ec.tags.tags) or [ec.slot.slot],
         "inputs_schema": inputs_schema,
         "layout": layout,
@@ -2492,16 +2541,28 @@ def enriched_cluster_to_template(ec: EnrichedCluster) -> dict:
 
 
 _E1_DEDUP_SYSTEM = """\
-You see a list of templates with name, description, slot taxonomy,
-and tags. Identify groups of 2+ templates that are NEAR-DUPLICATES
-— same intent, slightly different layouts — and should merge into
-ONE parametric template with a new input explaining the variance
-(usually `accent_color`, `direction`, or a small enum).
+You see a list of templates with name + short/long descriptions +
+use_when + avoid_when + slot + tags. Identify groups of 2+ templates
+that are NEAR-DUPLICATES — same intent, same structural layout,
+differing only in COSMETIC details (accent color, accent direction,
+small enum choices that could become a single input).
 
-Bias toward NOT merging. Two templates with the same slot but
-genuinely different layouts (e.g. one with image, one without)
-should stay separate. Only merge when the variance is purely
-cosmetic.
+STRONG BIAS toward NOT merging. Different intents stay separate.
+Different structural layouts stay separate. Different element counts
+stay separate. A brand can legitimately have multiple templates that
+share the same slot category (e.g. two cover designs, two divider
+designs, three chart layouts) — these are NOT merge candidates unless
+the only difference between them is a single cosmetic variable like
+accent color.
+
+Examples of CORRECT merges:
+  * "Sage Cover" + "Cobalt Cover" — same layout, only accent differs
+  * "Left-Image Comparison" + "Right-Image Comparison" — direction flip
+
+Examples of WRONG merges:
+  * "Cover Photo" + "Cover Text-Only" — structurally different
+  * "Hero Metric" + "KPI Grid" — different intents (one vs three KPIs)
+  * "3-Column Compare" + "2-Column Compare" — different column counts
 
 Respond with one JSON object, no prose, no fences:
 
@@ -2515,6 +2576,9 @@ Respond with one JSON object, no prose, no fences:
     }
   ]
 }
+
+If no clean cosmetic-only merge candidates exist, return
+{"merge_groups": []}.
 """
 
 
@@ -2525,13 +2589,16 @@ def phase_e_01_dedup(
     compact = [
         {"id": f"tpl_{i}",
          "name": t.get("name", ""),
-         "description": t.get("description", "")[:160],
+         "short_description": (t.get("short_description") or t.get("description") or "")[:200],
+         "long_description": (t.get("long_description") or "")[:600],
+         "use_when": (t.get("use_when") or "")[:200],
+         "avoid_when": (t.get("avoid_when") or "")[:200],
          "slot": (t.get("provenance") or {}).get("slot", ""),
          "tags": t.get("tags", []),
          "element_count": len(t.get("layout") or [])}
         for i, t in enumerate(templates)
     ]
-    user = json.dumps({"templates": compact}, ensure_ascii=False, default=str)[:12000]
+    user = json.dumps({"templates": compact}, ensure_ascii=False, default=str)[:18000]
     def _parse(d: dict) -> list[MergeGroup]:
         groups: list[MergeGroup] = []
         for g in (d.get("merge_groups") or [])[:8]:
@@ -3181,8 +3248,11 @@ def induce_templates_v3(
              len(raw_chart_styles), len(raw_table_styles))
 
     # ── Phase B — semantic enrichment per cluster ──
+    # Be inclusive: push for more candidates here, ween down at Phase
+    # E (dedup) + Phase G (coherence). Better to over-generate then
+    # consolidate than to under-generate and miss real templates.
     enriched: list[EnrichedCluster] = []
-    max_clusters_to_enrich = 20   # cap LLM cost on huge decks
+    max_clusters_to_enrich = 60   # was 20 — push for more
     for cluster in clusters[:max_clusters_to_enrich]:
         if cluster.size < 1: continue
         ec = phase_b_enrich_cluster(
