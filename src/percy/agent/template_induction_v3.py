@@ -47,6 +47,207 @@ from typing import Any, Callable, Iterable
 log = logging.getLogger(__name__)
 
 
+# ── Standard inputs schema ────────────────────────────────────────────────
+#
+# Every template induced by v3 exposes inputs following these naming
+# conventions. Same names across every template means:
+#   * The Phase-1 slide agent has a stable surface to reason about.
+#   * Cross-template style/data copy/paste works without translation.
+#   * Template authoring tools can offer the same inspector everywhere.
+#
+# These constants drive both the variable-naming step (Phase B4 maps
+# each element role to its canonical input set) AND the chart/table
+# template synthesis (Phase C3, F1).
+
+
+# Per-element common inputs (every element gets these, all optional):
+STANDARD_GEOMETRY_INPUTS = (
+    "left",          # inches OR percent of slide width, depending on `position_mode`
+    "top",
+    "width",
+    "height",
+    "rotation",      # degrees, 0 default
+    "anchor",        # "top_left" | "center"  — interpretation of left/top
+)
+
+# Per-text-element inputs (added when role is one of: title, subtitle,
+# kicker, hero_number, body, caption, footer, source_citation):
+STANDARD_TEXT_INPUTS = (
+    "text",          # primary content
+    "font_size",     # pt
+    "font_color",    # hex
+    "font_bold",
+    "font_italic",
+    "text_align",    # "left" | "center" | "right"
+)
+
+# Per-shape-element extra inputs:
+STANDARD_SHAPE_INPUTS = (
+    "fill_color",
+    "border_color",
+    "border_width",
+)
+
+# Per-chart-element inputs — ALL chart-kind templates expose these:
+STANDARD_CHART_INPUTS = (
+    "categories",        # list[str]
+    "series",            # list[{name, values, color?}]
+    "title",             # str
+    "subtitle",          # str (optional)
+    "y_axis_min",        # number | null
+    "y_axis_max",        # number | null
+    "data_label_format", # str — e.g. "$#,##0", "#%", "0.0"
+    "legend_visible",    # bool
+    "legend_position",   # "top" | "bottom" | "left" | "right"
+    # Type-specific extras handled by base templates (hole_size for donut, etc.)
+)
+
+# Per-table-element inputs — ALL table-kind templates expose these:
+STANDARD_TABLE_INPUTS = (
+    "data",              # list[list[str]]
+    "first_row_header",  # bool
+    "first_col_header",  # bool
+    "banded_rows",       # bool
+    "column_widths",     # list[float] | null (inches per col)
+    "row_heights",       # list[float] | null
+)
+
+
+# ── Slide dimension contracts ─────────────────────────────────────────────
+#
+# Templates declare:
+#   * the dimensions they were authored for (intended_width_in, height_in)
+#   * which target aspect ratios they're compatible with
+#   * how to adapt when applied to a differently-shaped slide
+#
+# Three transform strategies:
+#
+#   PROPORTIONAL_SCALE — multiply every position + size by
+#       (target_w/source_w, target_h/source_h). Safe for most layouts;
+#       can stretch type oddly on extreme aspect changes.
+#
+#   PRESERVE_ASPECT_FIT — scale uniformly to fit the smaller dim, then
+#       center the result. Keeps proportions perfect; leaves bands of
+#       background on the off-axis. Good for hero/cover layouts.
+#
+#   REFLOW_VERTICAL — for landscape→portrait conversion, re-stack
+#       horizontally-arranged regions vertically. Requires the template
+#       to mark grouped regions with `flow_group` ids.
+#
+#   MANUAL_ONLY — refuse to adapt. The template is single-dim and the
+#       caller must use a differently-authored portrait variant.
+
+
+ASPECT_LANDSCAPE_16_9   = "landscape_16_9"
+ASPECT_LANDSCAPE_4_3    = "landscape_4_3"
+ASPECT_PORTRAIT_9_16    = "portrait_9_16"
+ASPECT_PORTRAIT_4_5     = "portrait_4_5"
+ASPECT_SQUARE           = "square"
+
+ALL_ASPECTS = (
+    ASPECT_LANDSCAPE_16_9, ASPECT_LANDSCAPE_4_3,
+    ASPECT_PORTRAIT_9_16, ASPECT_PORTRAIT_4_5, ASPECT_SQUARE,
+)
+
+
+@dataclass(slots=True)
+class SlideDimensionsContract:
+    """Per-template declaration of how the template handles different
+    slide dimensions. Lives on the saved template's `provenance` blob
+    so apply_template can transform positions when the target slide
+    differs from the authored slide."""
+    intended_width_in:  float = 13.333
+    intended_height_in: float = 7.5
+    intended_aspect:    str   = ASPECT_LANDSCAPE_16_9
+    compatible_aspects: list[str] = field(default_factory=lambda: [ASPECT_LANDSCAPE_16_9])
+    transform_strategy: str   = "proportional_scale"   # one of the strategies above
+    # For REFLOW_VERTICAL: each element's flow_group id (None = standalone)
+    flow_groups: dict[str, str] = field(default_factory=dict)
+
+
+def classify_aspect(width_in: float, height_in: float) -> str:
+    """Programmatic aspect classifier — used at apply time to decide
+    which transform strategy to invoke."""
+    if width_in <= 0 or height_in <= 0:
+        return ASPECT_LANDSCAPE_16_9
+    ratio = width_in / height_in
+    if abs(ratio - 1.0) < 0.05:           return ASPECT_SQUARE
+    if abs(ratio - 16/9) < 0.05:          return ASPECT_LANDSCAPE_16_9
+    if abs(ratio - 4/3)  < 0.05:          return ASPECT_LANDSCAPE_4_3
+    if abs(ratio - 9/16) < 0.05:          return ASPECT_PORTRAIT_9_16
+    if abs(ratio - 4/5)  < 0.05:          return ASPECT_PORTRAIT_4_5
+    return ASPECT_LANDSCAPE_16_9 if ratio > 1.0 else ASPECT_PORTRAIT_9_16
+
+
+def transform_position(
+    pos_in: dict[str, float],
+    *,
+    source_w: float, source_h: float,
+    target_w: float, target_h: float,
+    strategy: str = "proportional_scale",
+) -> dict[str, float]:
+    """Convert a position from one slide's coordinate system to another.
+
+    Programmatic — no LLM. The Phase D render loop uses this to check
+    that a template's authored positions still make sense at common
+    target dimensions (4:3 + 16:9 + 9:16).
+    """
+    left = pos_in.get("left_in", 0)
+    top  = pos_in.get("top_in", 0)
+    w    = pos_in.get("width_in", 0)
+    h    = pos_in.get("height_in", 0)
+
+    if strategy == "proportional_scale":
+        sx, sy = target_w / source_w, target_h / source_h
+        return {
+            "left_in":   round(left * sx, 4),
+            "top_in":    round(top  * sy, 4),
+            "width_in":  round(w    * sx, 4),
+            "height_in": round(h    * sy, 4),
+        }
+
+    if strategy == "preserve_aspect_fit":
+        # Scale uniformly to fit the smaller dim, center the result.
+        s = min(target_w / source_w, target_h / source_h)
+        new_w = w * s
+        new_h = h * s
+        # Offset to center the source canvas in the target
+        offset_x = (target_w - source_w * s) / 2
+        offset_y = (target_h - source_h * s) / 2
+        return {
+            "left_in":   round(left * s + offset_x, 4),
+            "top_in":    round(top  * s + offset_y, 4),
+            "width_in":  round(new_w, 4),
+            "height_in": round(new_h, 4),
+        }
+
+    if strategy == "manual_only":
+        return {"left_in": left, "top_in": top, "width_in": w, "height_in": h}
+
+    # REFLOW_VERTICAL falls back to proportional for v1 — proper reflow
+    # needs flow_group awareness at the caller level.
+    return transform_position(
+        pos_in, source_w=source_w, source_h=source_h,
+        target_w=target_w, target_h=target_h, strategy="proportional_scale",
+    )
+
+
+def compute_position_percentages(
+    pos_in: dict[str, float], slide_width: float, slide_height: float,
+) -> dict[str, float]:
+    """Programmatic — derive percent-of-slide positions alongside the
+    absolute inches. Used by the apply pipeline as the fallback when a
+    template lacks an explicit transform strategy."""
+    if slide_width <= 0 or slide_height <= 0:
+        return {"left_pct": 0, "top_pct": 0, "width_pct": 0, "height_pct": 0}
+    return {
+        "left_pct":   round(100 * pos_in.get("left_in", 0)  / slide_width,  3),
+        "top_pct":    round(100 * pos_in.get("top_in", 0)   / slide_height, 3),
+        "width_pct":  round(100 * pos_in.get("width_in", 0) / slide_width,  3),
+        "height_pct": round(100 * pos_in.get("height_in", 0)/ slide_height, 3),
+    }
+
+
 # ── Brand metadata ────────────────────────────────────────────────────────
 
 

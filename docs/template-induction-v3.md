@@ -31,6 +31,129 @@ runs once per brand at onboard time.
 
 ---
 
+## Standard inputs schema
+
+Every v3-induced template exposes inputs following a **fixed naming
+convention**. Same names across every template means: the slide
+agent has a stable surface to reason about, cross-template copy/paste
+works without translation, and template authoring tools offer the
+same inspector everywhere.
+
+### Per-element common inputs (every element gets these)
+
+| Input | Type | Default | Notes |
+|---|---|---|---|
+| `<alias>_left` | number | from prototype | inches OR percent based on `position_mode` |
+| `<alias>_top` | number | from prototype | |
+| `<alias>_width` | number | from prototype | |
+| `<alias>_height` | number | from prototype | |
+| `<alias>_rotation` | number | 0 | degrees |
+| `<alias>_anchor` | string | `top_left` | `top_left` or `center` |
+
+### Text-element extras (role ∈ {title, subtitle, kicker, hero_number, body, caption, footer, source_citation})
+
+| Input | Type | Default |
+|---|---|---|
+| `<alias>_text` | string | prototype content (or genericized) |
+| `<alias>_font_size` | number (pt) | from prototype |
+| `<alias>_font_color` | string (hex) | from prototype |
+| `<alias>_font_bold` | bool | from prototype |
+| `<alias>_font_italic` | bool | from prototype |
+| `<alias>_text_align` | string | `left` |
+
+### Shape-element extras
+
+| Input | Type | Default |
+|---|---|---|
+| `<alias>_fill_color` | string (hex) | from prototype |
+| `<alias>_border_color` | string (hex) | from prototype |
+| `<alias>_border_width` | number (pt) | from prototype |
+
+### Chart-element inputs (ALL chart-kind templates expose these)
+
+| Input | Type | Notes |
+|---|---|---|
+| `<alias>_categories` | list[str] | x-axis labels |
+| `<alias>_series` | list[{name, values, color?}] | series data |
+| `<alias>_title` | string | |
+| `<alias>_subtitle` | string | optional |
+| `<alias>_y_axis_min` | number\|null | |
+| `<alias>_y_axis_max` | number\|null | |
+| `<alias>_data_label_format` | string | e.g. `$#,##0`, `#%`, `0.0` |
+| `<alias>_legend_visible` | bool | |
+| `<alias>_legend_position` | string | `top`/`bottom`/`left`/`right` |
+
+**Type-specific extras** (handled by base templates, not common):
+`hole_size` (donut), `bar_width_ratio` (bar/column),
+`is_horizontal` (bar), `vary_colors` (pie).
+
+### Table-element inputs (ALL table-kind templates expose these)
+
+| Input | Type | Notes |
+|---|---|---|
+| `<alias>_data` | list[list[str]] | row-major cells |
+| `<alias>_first_row_header` | bool | |
+| `<alias>_first_col_header` | bool | |
+| `<alias>_banded_rows` | bool | zebra striping |
+| `<alias>_column_widths` | list[float]\|null | inches per col |
+| `<alias>_row_heights` | list[float]\|null | inches per row |
+
+---
+
+## Slide-dimension contract
+
+Every template carries a `SlideDimensionsContract` so the apply
+pipeline can adapt to slides of different aspect ratios:
+
+```python
+@dataclass
+class SlideDimensionsContract:
+    intended_width_in:  float                # what the template was authored for
+    intended_height_in: float
+    intended_aspect:    str                  # e.g. "landscape_16_9"
+    compatible_aspects: list[str]            # which targets this template handles
+    transform_strategy: str                  # how to adapt to off-aspect targets
+    flow_groups: dict[str, str]              # for reflow_vertical
+```
+
+### Five canonical aspects
+
+```
+landscape_16_9   13.333 × 7.5 in    (default, Percy + most PowerPoint)
+landscape_4_3    10    × 7.5 in    (older PowerPoint, Keynote default)
+portrait_9_16    7.5   × 13.333 in (mobile)
+portrait_4_5     6     × 7.5 in   (Instagram portrait)
+square           7.5   × 7.5 in   (social)
+```
+
+### Four transform strategies
+
+| Strategy | Behavior | Best for |
+|---|---|---|
+| `proportional_scale` | Multiply positions + sizes by (target_w/src_w, target_h/src_h) | Most layouts. Stretches type slightly on extreme aspect changes. |
+| `preserve_aspect_fit` | Uniform scale to fit smaller dim, center result | Hero/cover slides. Leaves background bands on the off-axis. |
+| `reflow_vertical` | Re-stack horizontally-arranged regions vertically | Landscape → portrait. Requires `flow_groups` on the template. |
+| `manual_only` | Refuse to adapt | Single-dim templates; caller must use a portrait variant. |
+
+All four are pure-Python and live in `template_induction_v3.py`:
+`classify_aspect()`, `transform_position()`, `compute_position_percentages()`.
+
+### How this lands at induction time
+
+- Phase A's element fingerprints capture position in inches (faithful
+  to source).
+- Phase B-D never use absolute inches when reasoning about layouts —
+  they think in roles + relative positions + percentages.
+- Phase E asks the LLM **"which compatible aspects should this
+  template declare?"** based on the layout's structure (a 3-column
+  KPI grid is incompatible with portrait without reflow; a hero
+  metric works in every aspect).
+- The saved template's `provenance.dimensions` carries the contract;
+  `apply_template` reads it + computes the right transform when
+  applying to a slide whose dims differ from `intended_*`.
+
+---
+
 ## Pipeline overview
 
 ```
