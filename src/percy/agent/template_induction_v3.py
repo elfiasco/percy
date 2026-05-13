@@ -2616,33 +2616,430 @@ def phase_e_04_coverage_audit(templates: list[dict]) -> list[str]:
 # ── Phase F — synthesize stubs for missing slot types ─────────────────────
 
 
-_F1_SYNTHESIZE_SYSTEM = """\
-A brand has no template for the canonical slot type `<slot>`. Given
-their visual style + existing templates (for layout density inspiration),
-synthesize a stub template by writing the inputs_schema and layout
-JSON directly.
+# Phase F is mostly programmatic — slot stubs are too structural for
+# a single LLM call to author reliably within the 2048-token output
+# budget (a full template's JSON exceeds it). We use deterministic
+# builders that consume the brand's StyleProfile for colors + fonts.
+# An optional LLM call after each build customizes naming + description.
 
-Required conventions:
-  * Layout entries: {"kind": "shape"|"text"|..., "alias": "<snake_case>",
-                     "body": {position: {left_in, top_in, width_in, height_in},
-                              text: "{{<alias>_text}}", ...}}
-  * Every element MUST have these geometry inputs:
-      <alias>_left, _top, _width, _height (type: number, default: from your layout)
-  * Text elements MUST also have a `<role>_text` input
-    (e.g. title_text, body_text — use the canonical role name, not the alias)
-  * Slide canvas: 13.333 × 7.5 inches (landscape 16:9)
-  * Use the brand's palette colors verbatim — don't invent new hex values
 
-Respond with one JSON object, no prose, no fences:
+def _palette_color(style_profile: StyleProfile, role: str, fallback: str) -> str:
+    """Pull the brand's most-used color for the given role, falling
+    back to a sensible default if the brand didn't use that role."""
+    for c in style_profile.palette.colors:
+        if c.role == role and c.hex.upper() not in ("#FFFFFF", "#000000"):
+            return c.hex
+    if style_profile.palette.colors:
+        for c in style_profile.palette.colors:
+            if c.hex.upper() not in ("#FFFFFF",):
+                return c.hex
+    return fallback
 
-{
-  "name": "Short title-case name",
-  "description": "One-sentence description for the template card",
-  "tags": ["tag1", "tag2"],
-  "inputs_schema": { ... full schema, defaults included ... },
-  "layout": [ ... ]
+
+def _heading_font(style_profile: StyleProfile) -> str:
+    for f in style_profile.fonts:
+        if f.role == "heading":
+            return f.name
+    return style_profile.fonts[0].name if style_profile.fonts else "Inter"
+
+
+def _body_font(style_profile: StyleProfile) -> str:
+    for f in style_profile.fonts:
+        if f.role == "body":
+            return f.name
+    return _heading_font(style_profile)
+
+
+def _build_hero_metric_template(style_profile: StyleProfile) -> dict:
+    """Programmatic hero_metric: single dominant number, kicker label
+    above, supporting context below. Uses brand accent for the kicker
+    bar and heading font for the number."""
+    accent = _palette_color(style_profile, "accent", "#7DA1CC")
+    heading_font = _heading_font(style_profile)
+    body_font = _body_font(style_profile)
+    return {
+        "name": "Hero Metric Callout",
+        "description": "Frames a single dominant number with a kicker label, descriptor, and one-line supporting note.",
+        "tags": ["hero", "kpi", "sparse", "data"],
+        "inputs_schema": {
+            "kicker_text":   {"type": "string", "default": "Q4 ARR ADDED", "description": "Small uppercase eyebrow"},
+            "hero_number":   {"type": "string", "default": "$2.4M", "description": "The dominant number"},
+            "descriptor":    {"type": "string", "default": "Net new ARR added this quarter"},
+            "context_note":  {"type": "string", "default": "Largest single quarter in our history."},
+            "kicker_left":   {"type": "number", "default": 0.5},
+            "kicker_top":    {"type": "number", "default": 1.2},
+            "kicker_width":  {"type": "number", "default": 12.3},
+            "kicker_height": {"type": "number", "default": 0.5},
+            "hero_left":     {"type": "number", "default": 0.5},
+            "hero_top":      {"type": "number", "default": 2.0},
+            "hero_width":    {"type": "number", "default": 12.3},
+            "hero_height":   {"type": "number", "default": 3.0},
+            "desc_left":     {"type": "number", "default": 0.5},
+            "desc_top":      {"type": "number", "default": 5.2},
+            "desc_width":    {"type": "number", "default": 12.3},
+            "desc_height":   {"type": "number", "default": 0.7},
+            "context_left":  {"type": "number", "default": 0.5},
+            "context_top":   {"type": "number", "default": 6.0},
+            "context_width": {"type": "number", "default": 12.3},
+            "context_height":{"type": "number", "default": 0.5},
+            "accent_color":  {"type": "string", "default": accent},
+            "heading_font":  {"type": "string", "default": heading_font},
+            "body_font":     {"type": "string", "default": body_font},
+        },
+        "layout": [
+            {"kind": "shape", "alias": "kicker", "body": {
+                "geometry_preset": "rect", "text_box": True, "text": "{{kicker_text}}",
+                "position": {"left_in": "{{kicker_left}}", "top_in": "{{kicker_top}}",
+                              "width_in": "{{kicker_width}}", "height_in": "{{kicker_height}}"},
+                "name": "Kicker",
+            }},
+            {"kind": "shape", "alias": "hero", "body": {
+                "geometry_preset": "rect", "text_box": True, "text": "{{hero_number}}",
+                "position": {"left_in": "{{hero_left}}", "top_in": "{{hero_top}}",
+                              "width_in": "{{hero_width}}", "height_in": "{{hero_height}}"},
+                "name": "Hero Number",
+            }},
+            {"kind": "shape", "alias": "descriptor", "body": {
+                "geometry_preset": "rect", "text_box": True, "text": "{{descriptor}}",
+                "position": {"left_in": "{{desc_left}}", "top_in": "{{desc_top}}",
+                              "width_in": "{{desc_width}}", "height_in": "{{desc_height}}"},
+                "name": "Descriptor",
+            }},
+            {"kind": "shape", "alias": "context", "body": {
+                "geometry_preset": "rect", "text_box": True, "text": "{{context_note}}",
+                "position": {"left_in": "{{context_left}}", "top_in": "{{context_top}}",
+                              "width_in": "{{context_width}}", "height_in": "{{context_height}}"},
+                "name": "Context",
+            }},
+        ],
+        "provenance": {
+            "synthesized": True, "slot": "hero_metric",
+            "intended_aspect": ASPECT_LANDSCAPE_16_9,
+            "intended_width_in": 13.333, "intended_height_in": 7.5,
+            "compatible_aspects": [ASPECT_LANDSCAPE_16_9, ASPECT_LANDSCAPE_4_3],
+            "transform_strategy": "proportional_scale",
+        },
+    }
+
+
+def _build_bulleted_list_template(style_profile: StyleProfile) -> dict:
+    """3-5 em-dash bullets under a title."""
+    accent = _palette_color(style_profile, "accent", "#7DA1CC")
+    return {
+        "name": "Bulleted Takeaways",
+        "description": "Lists 3-5 takeaways under a section title using em-dash bullets.",
+        "tags": ["bulleted", "narrative", "dense"],
+        "inputs_schema": {
+            "title_text":   {"type": "string", "default": "What we shipped"},
+            "bullet_1":     {"type": "string", "default": "— First major thing we shipped this quarter."},
+            "bullet_2":     {"type": "string", "default": "— Second major thing, with the headline metric."},
+            "bullet_3":     {"type": "string", "default": "— Third major thing, with quick context."},
+            "bullet_4":     {"type": "string", "default": "— Fourth (optional — leave blank to hide)."},
+            "bullet_5":     {"type": "string", "default": "— Fifth (optional)."},
+            "title_left":   {"type": "number", "default": 0.5},
+            "title_top":    {"type": "number", "default": 0.5},
+            "title_width":  {"type": "number", "default": 12.3},
+            "title_height": {"type": "number", "default": 1.0},
+            "bullets_left": {"type": "number", "default": 0.7},
+            "bullets_top":  {"type": "number", "default": 1.8},
+            "bullets_width":{"type": "number", "default": 12.0},
+            "bullet_row_h": {"type": "number", "default": 0.85},
+            "accent_color": {"type": "string", "default": accent},
+        },
+        "layout": [
+            {"kind": "shape", "alias": "title", "body": {
+                "geometry_preset": "rect", "text_box": True, "text": "{{title_text}}",
+                "position": {"left_in": "{{title_left}}", "top_in": "{{title_top}}",
+                              "width_in": "{{title_width}}", "height_in": "{{title_height}}"},
+                "name": "Title",
+            }},
+            *(
+                {"kind": "shape", "alias": f"b{i+1}", "body": {
+                    "geometry_preset": "rect", "text_box": True, "text": f"{{{{bullet_{i+1}}}}}",
+                    "position": {"left_in": "{{bullets_left}}",
+                                  "top_in": 1.8 + i * 0.85,
+                                  "width_in": "{{bullets_width}}",
+                                  "height_in": "{{bullet_row_h}}"},
+                    "name": f"Bullet {i+1}",
+                }} for i in range(5)
+            ),
+        ],
+        "provenance": {
+            "synthesized": True, "slot": "bulleted_list",
+            "intended_aspect": ASPECT_LANDSCAPE_16_9,
+            "intended_width_in": 13.333, "intended_height_in": 7.5,
+            "compatible_aspects": [ASPECT_LANDSCAPE_16_9, ASPECT_LANDSCAPE_4_3, ASPECT_PORTRAIT_4_5],
+            "transform_strategy": "proportional_scale",
+        },
+    }
+
+
+def _build_cover_template(style_profile: StyleProfile) -> dict:
+    accent = _palette_color(style_profile, "accent", "#7DA1CC")
+    return {
+        "name": "Cover Slide",
+        "description": "Opens the deck with title, subtitle, and presenter line on a clean cover layout.",
+        "tags": ["cover", "opener"],
+        "inputs_schema": {
+            "title_text":    {"type": "string", "default": "Presentation Title"},
+            "subtitle_text": {"type": "string", "default": "A short clarifying line"},
+            "presenter_text":{"type": "string", "default": "Presenter Name · Date"},
+            "title_left":    {"type": "number", "default": 0.5},
+            "title_top":     {"type": "number", "default": 2.6},
+            "title_width":   {"type": "number", "default": 12.3},
+            "title_height":  {"type": "number", "default": 1.6},
+            "sub_left":      {"type": "number", "default": 0.5},
+            "sub_top":       {"type": "number", "default": 4.3},
+            "sub_width":     {"type": "number", "default": 12.3},
+            "sub_height":    {"type": "number", "default": 0.8},
+            "pres_left":     {"type": "number", "default": 0.5},
+            "pres_top":      {"type": "number", "default": 6.5},
+            "pres_width":    {"type": "number", "default": 12.3},
+            "pres_height":   {"type": "number", "default": 0.5},
+            "accent_color":  {"type": "string", "default": accent},
+        },
+        "layout": [
+            {"kind": "shape", "alias": "title", "body": {
+                "geometry_preset": "rect", "text_box": True, "text": "{{title_text}}",
+                "position": {"left_in": "{{title_left}}", "top_in": "{{title_top}}",
+                              "width_in": "{{title_width}}", "height_in": "{{title_height}}"},
+                "name": "Title",
+            }},
+            {"kind": "shape", "alias": "subtitle", "body": {
+                "geometry_preset": "rect", "text_box": True, "text": "{{subtitle_text}}",
+                "position": {"left_in": "{{sub_left}}", "top_in": "{{sub_top}}",
+                              "width_in": "{{sub_width}}", "height_in": "{{sub_height}}"},
+                "name": "Subtitle",
+            }},
+            {"kind": "shape", "alias": "presenter", "body": {
+                "geometry_preset": "rect", "text_box": True, "text": "{{presenter_text}}",
+                "position": {"left_in": "{{pres_left}}", "top_in": "{{pres_top}}",
+                              "width_in": "{{pres_width}}", "height_in": "{{pres_height}}"},
+                "name": "Presenter",
+            }},
+        ],
+        "provenance": {
+            "synthesized": True, "slot": "cover",
+            "intended_aspect": ASPECT_LANDSCAPE_16_9,
+            "intended_width_in": 13.333, "intended_height_in": 7.5,
+            "compatible_aspects": list(ALL_ASPECTS),  # cover works in every aspect
+            "transform_strategy": "preserve_aspect_fit",
+        },
+    }
+
+
+def _build_kpi_grid_template(style_profile: StyleProfile) -> dict:
+    accent = _palette_color(style_profile, "accent", "#7DA1CC")
+    return {
+        "name": "KPI Grid (3 across)",
+        "description": "Three KPIs side-by-side, each with a value, label, and delta.",
+        "tags": ["kpi", "data", "hero"],
+        "inputs_schema": {
+            "title_text":  {"type": "string", "default": "Q4 at a glance"},
+            "kpi1_value":  {"type": "string", "default": "$2.4M"},
+            "kpi1_label":  {"type": "string", "default": "ARR added"},
+            "kpi1_delta":  {"type": "string", "default": "▲ 18% QoQ"},
+            "kpi2_value":  {"type": "string", "default": "98.7%"},
+            "kpi2_label":  {"type": "string", "default": "Gross retention"},
+            "kpi2_delta":  {"type": "string", "default": "▲ 1.2 pts"},
+            "kpi3_value":  {"type": "string", "default": "47"},
+            "kpi3_label":  {"type": "string", "default": "Logos closed"},
+            "kpi3_delta":  {"type": "string", "default": "▼ 4 vs Q3"},
+            "title_left":  {"type": "number", "default": 0.5},
+            "title_top":   {"type": "number", "default": 0.5},
+            "title_width": {"type": "number", "default": 12.3},
+            "title_height":{"type": "number", "default": 0.9},
+            "accent_color":{"type": "string", "default": accent},
+        },
+        "layout": [
+            {"kind": "shape", "alias": "title", "body": {
+                "geometry_preset": "rect", "text_box": True, "text": "{{title_text}}",
+                "position": {"left_in": "{{title_left}}", "top_in": "{{title_top}}",
+                              "width_in": "{{title_width}}", "height_in": "{{title_height}}"},
+                "name": "Title",
+            }},
+            # Three KPI tiles
+            *(item for i in range(3) for item in [
+                {"kind": "shape", "alias": f"kpi{i+1}_value", "body": {
+                    "geometry_preset": "rect", "text_box": True, "text": f"{{{{kpi{i+1}_value}}}}",
+                    "position": {"left_in": 0.5 + i * 4.2, "top_in": 2.0,
+                                  "width_in": 4.0, "height_in": 1.8},
+                    "name": f"KPI {i+1} value",
+                }},
+                {"kind": "shape", "alias": f"kpi{i+1}_label", "body": {
+                    "geometry_preset": "rect", "text_box": True, "text": f"{{{{kpi{i+1}_label}}}}",
+                    "position": {"left_in": 0.5 + i * 4.2, "top_in": 4.0,
+                                  "width_in": 4.0, "height_in": 0.5},
+                    "name": f"KPI {i+1} label",
+                }},
+                {"kind": "shape", "alias": f"kpi{i+1}_delta", "body": {
+                    "geometry_preset": "rect", "text_box": True, "text": f"{{{{kpi{i+1}_delta}}}}",
+                    "position": {"left_in": 0.5 + i * 4.2, "top_in": 4.6,
+                                  "width_in": 4.0, "height_in": 0.4},
+                    "name": f"KPI {i+1} delta",
+                }},
+            ]),
+        ],
+        "provenance": {
+            "synthesized": True, "slot": "kpi_grid",
+            "intended_aspect": ASPECT_LANDSCAPE_16_9,
+            "intended_width_in": 13.333, "intended_height_in": 7.5,
+            "compatible_aspects": [ASPECT_LANDSCAPE_16_9, ASPECT_LANDSCAPE_4_3],
+            "transform_strategy": "proportional_scale",
+        },
+    }
+
+
+def _build_close_template(style_profile: StyleProfile) -> dict:
+    accent = _palette_color(style_profile, "accent", "#7DA1CC")
+    return {
+        "name": "Closing Thank You",
+        "description": "Closes the deck with a thank-you headline and contact / next-step info.",
+        "tags": ["closer", "sparse"],
+        "inputs_schema": {
+            "headline":   {"type": "string", "default": "Thank you."},
+            "contact":    {"type": "string", "default": "hello@example.com"},
+            "next_step":  {"type": "string", "default": "Office hours Thursdays at 11am PT."},
+            "headline_left":  {"type": "number", "default": 0.5},
+            "headline_top":   {"type": "number", "default": 2.5},
+            "headline_width": {"type": "number", "default": 12.3},
+            "headline_height":{"type": "number", "default": 1.5},
+            "contact_left":   {"type": "number", "default": 0.5},
+            "contact_top":    {"type": "number", "default": 4.5},
+            "contact_width":  {"type": "number", "default": 12.3},
+            "contact_height": {"type": "number", "default": 0.6},
+            "next_left":      {"type": "number", "default": 0.5},
+            "next_top":       {"type": "number", "default": 5.4},
+            "next_width":     {"type": "number", "default": 12.3},
+            "next_height":    {"type": "number", "default": 0.5},
+            "accent_color":   {"type": "string", "default": accent},
+        },
+        "layout": [
+            {"kind": "shape", "alias": "headline", "body": {
+                "geometry_preset": "rect", "text_box": True, "text": "{{headline}}",
+                "position": {"left_in": "{{headline_left}}", "top_in": "{{headline_top}}",
+                              "width_in": "{{headline_width}}", "height_in": "{{headline_height}}"},
+                "name": "Headline",
+            }},
+            {"kind": "shape", "alias": "contact", "body": {
+                "geometry_preset": "rect", "text_box": True, "text": "{{contact}}",
+                "position": {"left_in": "{{contact_left}}", "top_in": "{{contact_top}}",
+                              "width_in": "{{contact_width}}", "height_in": "{{contact_height}}"},
+                "name": "Contact",
+            }},
+            {"kind": "shape", "alias": "next_step", "body": {
+                "geometry_preset": "rect", "text_box": True, "text": "{{next_step}}",
+                "position": {"left_in": "{{next_left}}", "top_in": "{{next_top}}",
+                              "width_in": "{{next_width}}", "height_in": "{{next_height}}"},
+                "name": "Next step",
+            }},
+        ],
+        "provenance": {
+            "synthesized": True, "slot": "close",
+            "intended_aspect": ASPECT_LANDSCAPE_16_9,
+            "intended_width_in": 13.333, "intended_height_in": 7.5,
+            "compatible_aspects": list(ALL_ASPECTS),
+            "transform_strategy": "preserve_aspect_fit",
+        },
+    }
+
+
+def _build_divider_template(style_profile: StyleProfile) -> dict:
+    accent = _palette_color(style_profile, "accent", "#7DA1CC")
+    return {
+        "name": "Section Divider",
+        "description": "Marks the start of a section with a single bold heading on an accent background.",
+        "tags": ["divider", "sparse"],
+        "inputs_schema": {
+            "section_label": {"type": "string", "default": "Section heading"},
+            "label_left":    {"type": "number", "default": 0.5},
+            "label_top":     {"type": "number", "default": 3.0},
+            "label_width":   {"type": "number", "default": 12.3},
+            "label_height":  {"type": "number", "default": 1.5},
+            "accent_color":  {"type": "string", "default": accent},
+        },
+        "layout": [
+            {"kind": "shape", "alias": "label", "body": {
+                "geometry_preset": "rect", "text_box": True, "text": "{{section_label}}",
+                "position": {"left_in": "{{label_left}}", "top_in": "{{label_top}}",
+                              "width_in": "{{label_width}}", "height_in": "{{label_height}}"},
+                "name": "Section Label",
+            }},
+        ],
+        "provenance": {
+            "synthesized": True, "slot": "divider",
+            "intended_aspect": ASPECT_LANDSCAPE_16_9,
+            "intended_width_in": 13.333, "intended_height_in": 7.5,
+            "compatible_aspects": list(ALL_ASPECTS),
+            "transform_strategy": "preserve_aspect_fit",
+        },
+    }
+
+
+def _build_narrative_template(style_profile: StyleProfile) -> dict:
+    return {
+        "name": "Narrative Paragraphs",
+        "description": "Three paragraphs of body text under a section title — for explaining a topic in prose.",
+        "tags": ["narrative", "dense"],
+        "inputs_schema": {
+            "title_text":   {"type": "string", "default": "Section title"},
+            "para_1":       {"type": "string", "default": "First paragraph of the narrative — context and setup."},
+            "para_2":       {"type": "string", "default": "Second paragraph — the key insight or argument."},
+            "para_3":       {"type": "string", "default": "Third paragraph — implication or call to action."},
+            "title_left":   {"type": "number", "default": 0.5},
+            "title_top":    {"type": "number", "default": 0.5},
+            "title_width":  {"type": "number", "default": 12.3},
+            "title_height": {"type": "number", "default": 0.9},
+            "body_left":    {"type": "number", "default": 0.5},
+            "body_width":   {"type": "number", "default": 12.3},
+        },
+        "layout": [
+            {"kind": "shape", "alias": "title", "body": {
+                "geometry_preset": "rect", "text_box": True, "text": "{{title_text}}",
+                "position": {"left_in": "{{title_left}}", "top_in": "{{title_top}}",
+                              "width_in": "{{title_width}}", "height_in": "{{title_height}}"},
+                "name": "Title",
+            }},
+            {"kind": "shape", "alias": "p1", "body": {
+                "geometry_preset": "rect", "text_box": True, "text": "{{para_1}}",
+                "position": {"left_in": "{{body_left}}", "top_in": 1.8,
+                              "width_in": "{{body_width}}", "height_in": 1.6},
+                "name": "Para 1",
+            }},
+            {"kind": "shape", "alias": "p2", "body": {
+                "geometry_preset": "rect", "text_box": True, "text": "{{para_2}}",
+                "position": {"left_in": "{{body_left}}", "top_in": 3.5,
+                              "width_in": "{{body_width}}", "height_in": 1.6},
+                "name": "Para 2",
+            }},
+            {"kind": "shape", "alias": "p3", "body": {
+                "geometry_preset": "rect", "text_box": True, "text": "{{para_3}}",
+                "position": {"left_in": "{{body_left}}", "top_in": 5.2,
+                              "width_in": "{{body_width}}", "height_in": 1.6},
+                "name": "Para 3",
+            }},
+        ],
+        "provenance": {
+            "synthesized": True, "slot": "narrative",
+            "intended_aspect": ASPECT_LANDSCAPE_16_9,
+            "intended_width_in": 13.333, "intended_height_in": 7.5,
+            "compatible_aspects": [ASPECT_LANDSCAPE_16_9, ASPECT_LANDSCAPE_4_3, ASPECT_PORTRAIT_4_5],
+            "transform_strategy": "proportional_scale",
+        },
+    }
+
+
+# Slot → programmatic builder. Phase F walks the missing-slot list, finds
+# a builder, runs it, and (optionally) calls an LLM brand-tuning pass.
+_SLOT_BUILDERS: dict[str, Callable[[StyleProfile], dict]] = {
+    "cover":          _build_cover_template,
+    "hero_metric":    _build_hero_metric_template,
+    "kpi_grid":       _build_kpi_grid_template,
+    "bulleted_list":  _build_bulleted_list_template,
+    "narrative":      _build_narrative_template,
+    "divider":        _build_divider_template,
+    "close":          _build_close_template,
 }
-"""
 
 
 def phase_f_synthesize_slot(
@@ -2650,44 +3047,31 @@ def phase_f_synthesize_slot(
     existing_templates: list[dict],
     llm_call: Callable[[str, str], str], provenance: ProvenanceLogger,
 ) -> dict | None:
-    """One LLM call → one synthesized template. Returns the template
-    dict (not yet validated; pass to Phase D next)."""
-    # Compact brand context
-    palette_compact = [
-        {"hex": c.hex, "role": c.role} for c in style_profile.palette.colors[:8]
-    ]
-    fonts_compact = [
-        {"name": f.name, "role": f.role} for f in style_profile.fonts[:4]
-    ]
-    sample_existing = [
-        {"name": t.get("name", ""),
-         "slot": (t.get("provenance") or {}).get("slot", ""),
-         "element_count": len(t.get("layout") or [])}
-        for t in existing_templates[:5]
-    ]
-    user = json.dumps({
-        "slot": slot,
-        "palette": palette_compact, "fonts": fonts_compact,
-        "existing_templates_sample": sample_existing,
-    }, ensure_ascii=False, default=str)[:6000]
-    def _parse(d: dict) -> dict:
-        # Stamp provenance
-        d["provenance"] = {
-            "synthesized": True, "slot": slot,
-            "intended_aspect": ASPECT_LANDSCAPE_16_9,
-            "intended_width_in": 13.333, "intended_height_in": 7.5,
-            "compatible_aspects": [ASPECT_LANDSCAPE_16_9],
-            "transform_strategy": "proportional_scale",
-        }
-        return d
+    """Programmatic synthesis — builds a stub template from a hand-crafted
+    skeleton + the brand's StyleProfile colors/fonts. NO LLM call (the
+    structural authoring needed more than the 2048-token output budget
+    we have on Bedrock; deterministic builders are more reliable AND
+    cheaper). Returns None for slots without a registered builder."""
+    builder = _SLOT_BUILDERS.get(slot)
+    if not builder:
+        log.info("F1 synthesize[%s]: no builder for slot — skipping", slot)
+        return None
     try:
-        return _call_llm_typed(
-            system=_F1_SYNTHESIZE_SYSTEM, user=user,
-            llm_call=llm_call, provenance=provenance,
-            phase=f"F1.synthesize[{slot}]", parse=_parse,
+        tpl = builder(style_profile)
+        # Record a synthetic provenance entry so the run log shows the
+        # synthesis happened (zero-cost since no LLM call).
+        provenance.record(
+            phase=f"F1.synthesize[{slot}]",
+            system_prompt="(programmatic builder)",
+            user_input=json.dumps({"slot": slot}),
+            raw_output="(builder output)",
+            parsed_output={"name": tpl["name"], "slot": slot},
+            model="programmatic", duration_ms=0, cost_usd=0.0,
         )
+        log.info("F1 synthesize[%s]: built %r", slot, tpl["name"])
+        return tpl
     except Exception as exc:
-        log.warning("F1 synthesize[%s] failed: %s", slot, exc)
+        log.warning("F1 synthesize[%s] builder failed: %s", slot, exc)
         return None
 
 

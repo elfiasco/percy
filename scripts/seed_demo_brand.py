@@ -28,11 +28,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 import tempfile
 import time
 from pathlib import Path
+
+# Surface v3's per-phase log lines so we can see Phase F outcomes etc.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+# Quiet the noisy HTTP libs — Bedrock SDK + httpx log every call at INFO.
+for noisy in ("httpx", "botocore", "boto3", "urllib3"):
+    logging.getLogger(noisy).setLevel(logging.WARNING)
 
 # Run against a throwaway sqlite by default so this doesn't pollute the
 # real studio DB. Caller can override with PERCY_AUTH_DB. Each invocation
@@ -226,18 +237,27 @@ def main() -> int:
         from percy.agent import template_induction_v2 as _accept_mod
     elif args.induction_mode == "v3":
         # v3 candidates are already full Template-shaped dicts; we save
-        # them directly via the agent_templates module.
+        # them directly via the agent_templates module. The Template
+        # dataclass has no `provenance` field, so we stash the v3
+        # provenance dict under sample_inputs['_provenance'] — that
+        # roundtrips cleanly through save_template/get_template (it's
+        # JSON-serialized as part of sample_inputs) and apply_template
+        # ignores keys that aren't referenced by `{{var}}` in the
+        # layout, so the carrier is harmless at apply time.
         from percy.agent import templates as _tpls_mod
         class _AcceptShim:
             @staticmethod
             def accept_candidate(c: dict, category: str) -> str:
+                sample_inputs = dict(c.get("sample_inputs") or {})
+                if c.get("provenance"):
+                    sample_inputs["_provenance"] = c["provenance"]
                 t = _tpls_mod.Template(
                     id="", name=c.get("name", "Unnamed"),
                     description=c.get("description", ""),
                     category=category,
                     tags=list(c.get("tags") or []),
                     inputs_schema=dict(c.get("inputs_schema") or {}),
-                    sample_inputs=dict(c.get("sample_inputs") or {}),
+                    sample_inputs=sample_inputs,
                     layout=list(c.get("layout") or []),
                     slide_script=c.get("slide_script"),
                     connects=dict(c.get("connects") or {}),
