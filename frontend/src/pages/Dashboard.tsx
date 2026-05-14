@@ -97,7 +97,7 @@ export default function Dashboard() {
     : "Good evening"
 
   return (
-    <div className="min-h-screen flex flex-col bg-ink text-paper">
+    <div className="min-h-screen flex flex-col bg-grid text-paper">
       <DashboardTopBar
         user={user}
         activeOrg={activeOrg}

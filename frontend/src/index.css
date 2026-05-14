@@ -72,21 +72,24 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
-  /* Subtle graph-paper grid — v4 signature. Very light in light mode,
-     slightly more present in dark. Drawn on body so it tiles behind
-     everything; cards/surfaces (bg-surface) sit above it. */
-  body {
-    background-image:
-      linear-gradient(rgb(var(--champagne) / 0.025) 1px, transparent 1px),
-      linear-gradient(90deg, rgb(var(--champagne) / 0.025) 1px, transparent 1px);
-    background-size: 40px 40px;
-    transition: background-color 220ms ease, color 220ms ease;
-  }
-  .theme-dark body {
-    background-image:
-      linear-gradient(rgb(var(--paper) / 0.025) 1px, transparent 1px),
-      linear-gradient(90deg, rgb(var(--paper) / 0.025) 1px, transparent 1px);
-  }
+  body { transition: background-color 220ms ease, color 220ms ease; }
+}
+
+/* Graph-paper grid — v4 signature. Applied via the .bg-grid utility,
+   not on <body>, because page-level containers usually paint a solid
+   bg-ink rectangle that would obscure body's pattern. Cobalt-tinted
+   lines on light mode; paper-tinted on dark. */
+.bg-grid {
+  background-color: rgb(var(--ink));
+  background-image:
+    linear-gradient(rgb(var(--champagne) / 0.10) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(var(--champagne) / 0.10) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+.theme-dark .bg-grid {
+  background-image:
+    linear-gradient(rgb(var(--paper) / 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(var(--paper) / 0.05) 1px, transparent 1px);
 }
 
 @layer components {
